@@ -6,7 +6,8 @@ export default defineConfig({ test: {
   coverage: {
     provider: 'v8',
     include: ['src/**/*.ts'],
-    exclude: ['src/index.ts'],
+    // Entrypoints are exercised as real subprocesses; V8's in-process report cannot collect their child-process coverage.
+    exclude: ['src/index.ts', 'src/stdio.ts'],
     reporter: ['text', 'json-summary', 'html'],
     thresholds: { lines: 80, functions: 80, branches: 65, statements: 80 }
   }

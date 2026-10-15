@@ -16,6 +16,11 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run check
       - uses: actions/upload-artifact@v4
+        with:
+          name: swarmboard-desktop-plugin
+          path: dist/swarmboard-desktop-*.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: browser-failure-evidence

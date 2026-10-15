@@ -12,16 +12,19 @@
     "start": "node dist/server/index.js",
     "build:ui": "node scripts/build-ui.mjs",
     "build": "npm run build:ui && tsc -p tsconfig.build.json",
+    "build:desktop": "npm run build:ui && node scripts/build-desktop.mjs",
+    "package:desktop": "npm run build:desktop && node scripts/package-desktop.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test:unit": "vitest run test/unit",
     "test:integration": "vitest run test/integration",
     "test:api": "vitest run test/api",
     "test:mcp": "vitest run test/mcp",
+    "test:desktop": "npm run package:desktop && vitest run test/mcp/desktop.test.ts",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test": "vitest run",
-    "check": "npm run lint && npm run typecheck && npm run build && npm run test:coverage && npm run test:e2e"
+    "check": "npm run lint && npm run typecheck && npm run build && npm run package:desktop && npm run test:coverage && npm run test:e2e"
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "2.0.3",

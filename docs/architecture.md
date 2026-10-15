@@ -6,15 +6,18 @@
 
 ```mermaid
 flowchart LR
-  A[官方客户端中的 Agent 会话] -->|MCP 工具| S[共享业务服务]
-  U[三面板界面] -->|MCP Apps 桥接或本地 HTTP| S
+  A[官方客户端中的 Agent 会话] -->|本地 stdio MCP| S[共享业务服务]
+  U[ChatGPT 原生侧边栏中的三面板界面] -->|MCP Apps 桥接| S
   S --> D[(SQLite)]
   A --> W[已有授权的工作区与资源]
 ```
 
 - `src/store.ts`：输入验证、状态变更、版本检查、归属检查、SQLite 事务及事件。
 - `src/app.ts`：本地 HTTP API、Streamable HTTP MCP 传输、同源和可选 Bearer 检查。
-- `src/mcp.ts`：工具、协作 prompt、`board_open` 和 UI 资源注册。
+- `src/mcp.ts`：工具、协作 prompt、`board_open` 和 UI 资源注册；声明官方 `global` / `thread` entrypoints。
+- `src/stdio.ts`：由桌面宿主启动的本地 stdio 服务，正常输出仅用于 MCP 协议。
+- `src/paths.ts`：在用户数据目录保存共享 SQLite，以模块相对路径寻找随包界面。
+- `scripts/build-desktop.mjs`：把 Node 服务及依赖打成单一 ESM 文件，白名单复制插件、界面和 skill。
 - `web/`：中文 React 三面板。嵌入时使用官方 MCP Apps `App` 桥接；独立浏览器连接同源 API。
 - `scripts/build-ui.mjs`：将代码和样式打包到一个 HTML；界面不依赖外部 CDN、图片或字体。
 
@@ -42,8 +45,16 @@ Swarmboard 自行实现任务、资源、追加事件与 MCP 接口。已有工�
 
 默认环回地址、单个可信空间。Agent ID 仅标识协作主体，不是独立认证证据。拥有服务访问权的客户端可以执行可信管理操作；不提供对抗性多租户隔离。
 
-可选 `BOARD_TOKEN` 用于服务访问认证，不属于模型凭据。普通浏览器 UI 不提供粘贴令牌入口；认证模式应由 MCP 客户端安全传递 Bearer。ChatGPT 私有测试可以连接受控、可达的 HTTPS MCP 入口，也可以使用官方 Secure MCP Tunnel 连接私有服务。隧道需要 Platform tunnel ID、运行密钥和相应工作区权限；不等于直接向云端提供 localhost。公开插件提交仍需公网 HTTPS 入口。仓库未创建部署、隧道、运行密钥或正式客户端注册，也未完成真实宿主连接。
+桌面插件通过根 `mcp.json` 的 stdio 配置启动，`${PLUGIN_ROOT}` 指向安装目录；服务和依赖随包分发，不要求先运行 HTTP 服务、公网部署或隧道。`board_open` 工具通过 OpenAI MCP Extensions 声明全局侧边栏和会话面板入口。MCP Apps HTML 仍然是 Web 技术界面，由桌面宿主嵌入；这不等于浏览器扩展，也不修改客户端 DOM。
 
-参考：[连接 ChatGPT](https://developers.openai.com/plugins/deploy/connect-chatgpt)、[Secure MCP Tunnels](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)。
+本地 stdio 供在本机运行、且支持本地插件的会话使用。桌面客户端可以显示云端会话，但这不意味着该会话能够调用本机 stdio 服务；客户端的执行环境和工具可用性必须实际确认。UI 的 15 秒刷新只更新人看到的快照，不代表 Agent 主动读取，也不触发会话执行或自动唤醒。
+
+默认数据库保存在用户数据目录，多个本地进程通过 SQLite 共享数据；插件更新不覆盖数据库。协作方必须使用同一数据库文件。包只包含固定白名单文件，不包含数据库、环境变量、运行记录或 `node_modules`。
+
+HTTP 服务保留作开发预览及其他 MCP 客户端接入。可选 `BOARD_TOKEN` 仅用于 HTTP 服务访问认证，不属于模型凭据；普通浏览器不提供令牌粘贴入口。桌面 stdio 不监听网络端口。
+
+本地 marketplace 是桌面开发安装路径；公开 GitHub 或 ZIP 不等于目录上架。官方本地 MCP 公开目录提交需要获批合作方组织 allowlist。真实宿主安装与自动化协议验证分别记录于 verification.md。
+
+参考：[原生扩展](https://developers.openai.com/plugins/build/extensions)、[本地 marketplace](https://developers.openai.com/plugins/build/plugins)、[桌面本地 MCP](https://developers.openai.com/plugins/deploy/desktop-only)。
 
 服务不读取订阅登录文件，不接管 OAuth，不调用模型 API，不创建模型 worker。Agent 的持续运行与唤醒由其原有客户端决定。声明不是系统锁，也不会强制阻止绕过协作约定的直接资源操作。

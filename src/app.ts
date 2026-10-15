@@ -1,16 +1,16 @@
 import express, { type ErrorRequestHandler, type Request } from 'express';
 import { timingSafeEqual } from 'node:crypto';
-import { resolve } from 'node:path';
 import type { Server } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { AppError, Store } from './store.js';
 import { createMcpServer } from './mcp.js';
+import { defaultDatabasePath, defaultWidgetPath } from './paths.js';
 
 export interface AppOptions { store?: Store; dbPath?: string; widgetPath?: string; boardToken?: string }
 export interface ServerOptions extends AppOptions { port?: number; host?: string }
 export function createApp(options: AppOptions = {}) {
-  const store = options.store ?? new Store(options.dbPath ?? process.env.SWARMBOARD_DB_PATH ?? 'data/swarmboard.sqlite');
-  const widgetPath = options.widgetPath ?? resolve('dist/widget.html');
+  const store = options.store ?? new Store(options.dbPath ?? defaultDatabasePath());
+  const widgetPath = options.widgetPath ?? defaultWidgetPath();
   const boardToken = options.boardToken ?? process.env.BOARD_TOKEN;
   const app = express();
   app.disable('x-powered-by');
@@ -71,7 +71,7 @@ export function createApp(options: AppOptions = {}) {
   return app;
 }
 export async function startServer(options:ServerOptions = {}) {
-  const store = options.store ?? new Store(options.dbPath ?? process.env.SWARMBOARD_DB_PATH ?? 'data/swarmboard.sqlite');
+  const store = options.store ?? new Store(options.dbPath ?? defaultDatabasePath());
   const app = createApp({...options,store});
   const host = options.host ?? '127.0.0.1'; const port = options.port ?? 4317;
   if (!['localhost','127.0.0.1','::1'].includes(host) && !(options.boardToken ?? process.env.BOARD_TOKEN)) {

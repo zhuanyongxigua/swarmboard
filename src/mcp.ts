@@ -4,11 +4,16 @@ import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from '@model
 import { z } from 'zod';
 import { AppError, Store, schemas } from './store.js';
 
+// Static metadata follows https://github.com/openai/mcp-extensions/blob/main/docs/spec.md.
+// Only the entrypoint/display-mode subset is needed; no extension RPC handlers are required.
+type EntrypointMetadata = { entrypoints: { type: 'global' | 'thread' }[] };
+type DisplayModeMetadata = { availableDisplayModes: ('inline' | 'fullscreen')[]; preferredDisplayMode: 'inline' | 'fullscreen' };
+
 export const BOARD_RESOURCE_URI = 'ui://swarmboard/board.html';
 export function createMcpServer(store: Store, widgetPath: string) {
   const server = new McpServer({name:'swarmboard',version:'0.1.0'});
   registerAppResource(server, 'swarmboard-ui', BOARD_RESOURCE_URI, {}, async () => ({
-    contents: [{uri:BOARD_RESOURCE_URI,mimeType:RESOURCE_MIME_TYPE,text:readFileSync(widgetPath,'utf8'),_meta:{ui:{prefersBorder:false,csp:{connectDomains:[],resourceDomains:[]}}}}],
+    contents: [{uri:BOARD_RESOURCE_URI,mimeType:RESOURCE_MIME_TYPE,text:readFileSync(widgetPath,'utf8'),_meta:{ui:{prefersBorder:false,csp:{connectDomains:[],resourceDomains:[]}},'openai/ui':{availableDisplayModes:['inline','fullscreen'],preferredDisplayMode:'fullscreen'} satisfies DisplayModeMetadata}}],
   }));
   function success(result: unknown) {
     const structuredContent: Record<string, unknown> = Array.isArray(result) ? {items:result} : result as Record<string,unknown>;
@@ -39,7 +44,7 @@ export function createMcpServer(store: Store, widgetPath: string) {
       try{return success(operation(input));}catch(error){return fail(error);}
     });
   }
-  registerAppTool(server,'board_open',{description:'Open the Swarmboard workspace with task, resource, and read-only shared context panels.',inputSchema:{},_meta:{ui:{resourceUri:BOARD_RESOURCE_URI}},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},async()=>success(store.board()));
+  registerAppTool(server,'board_open',{title:'Swarmboard',description:'Open the Swarmboard workspace with task, resource, and read-only shared context panels.',inputSchema:{},_meta:{ui:{resourceUri:BOARD_RESOURCE_URI},'openai/ui':{entrypoints:[{type:'global'},{type:'thread'}]} satisfies EntrypointMetadata},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},async()=>success(store.board()));
   server.registerPrompt('shared_worker',{description:'Agensh-inspired cooperation loop for an existing official agent session.',argsSchema:{agentId:z.string().optional(),target:z.string().optional()}},async({agentId,target})=>({messages:[{role:'user',content:{type:'text',text:`You are ${agentId ?? 'an agent; register with agent_register first'} in a trusted shared workspace. Target: ${target ?? 'read the board for team goals'}. Register your identity with agent_register before acting; if that identity already exists, resume it with agent_heartbeat. Follow gather -> claim -> act -> verify -> merge. Read relevant tasks, context and active resource-use declarations; choose useful work, claim with the latest version, announce scope and dependencies, and negotiate overlapping work with peers. Resource declarations are not exclusive reservations: describe your intended use and agree on sharing conditions. Work using your existing authorized harness and external workspace; this server does not execute code or host Git. Publish verified findings and failed approaches, link evidence in task descriptions and PATCH_SUMMARY entries, update task status, use task_release when abandoning an unfinished task so another agent can claim it, release your resource declarations with their latest versions when finished, and heartbeat while active. Read context incrementally, avoid empty polling, and report blockers honestly. Do not copy subscription credentials into this service.`}}]}));
   return server;
 }

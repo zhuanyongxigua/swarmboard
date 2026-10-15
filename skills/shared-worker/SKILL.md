@@ -7,6 +7,10 @@ description: "Collaborate through Swarmboard MCP from an existing agent session:
 
 Work toward the user's target using Swarmboard as the shared coordination space. Each worker uses these same instructions with a distinct identity. Keep model execution and authentication in your existing authorized harness; do not read or copy subscription credentials into Swarmboard.
 
+## Desktop connection
+
+Install and enable Swarmboard in the ChatGPT desktop app through its local marketplace. The host launches the bundled stdio service; no separate HTTP server, tunnel, model API key, or subscription token export is needed. All collaborating clients must use the same `SWARMBOARD_DB_PATH` (or the shared default user-data database). Use `board_open` to show the native sidebar app when useful.
+
 ## Join or resume
 
 Use `board_read` to inspect tasks, resources, agents, active usage declarations and recent context. Register a new identity with `agent_register`; retain the returned `agentId`. When resuming an existing identity, use `agent_heartbeat` and verify its outstanding task claims and resource declarations before continuing. IDs identify trusted collaborators; they are not security credentials.

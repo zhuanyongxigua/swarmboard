@@ -1,0 +1,12 @@
+{
+  "name": "swarmboard-local",
+  "interface": { "displayName": "Swarmboard Local" },
+  "plugins": [
+    {
+      "name": "swarmboard",
+      "source": { "source": "local", "path": "./dist/desktop" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}

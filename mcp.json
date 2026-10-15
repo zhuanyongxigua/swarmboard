@@ -2,8 +2,10 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
   "mcpServers": {
     "swarmboard": {
-      "type": "streamable-http",
-      "url": "http://127.0.0.1:4317/mcp"
+      "type": "stdio",
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/server/swarmboard.mjs"],
+      "cwd": "${PLUGIN_ROOT}"
     }
   }
 }

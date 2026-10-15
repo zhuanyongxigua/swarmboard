@@ -46,22 +46,40 @@ export class Store {
   constructor(dbPath = ':memory:') {
     if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
-    this.db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;');
-    const version = Number((this.db.prepare('PRAGMA user_version').get() as {user_version: number}).user_version);
-    if (version > 2) { this.db.close(); throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500); }
-    if (version === 0) this.transaction(() => this.db.exec(`
-      CREATE TABLE agents(id TEXT PRIMARY KEY, name TEXT NOT NULL, lastSeenAt TEXT NOT NULL);
-      CREATE TABLE tasks(id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, acceptanceCriteria TEXT NOT NULL, status TEXT NOT NULL, assignee TEXT REFERENCES agents(id), version INTEGER NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
-      CREATE TABLE resources(id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, description TEXT NOT NULL, capabilities TEXT NOT NULL, accessNotes TEXT NOT NULL, version INTEGER NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
-      CREATE TABLE usages(id TEXT PRIMARY KEY, resourceId TEXT NOT NULL REFERENCES resources(id), agentId TEXT NOT NULL REFERENCES agents(id), purpose TEXT NOT NULL, scope TEXT NOT NULL, sharing TEXT NOT NULL, taskId TEXT REFERENCES tasks(id), active INTEGER NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
-      CREATE TABLE entries(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, agentId TEXT NOT NULL, summary TEXT NOT NULL, detail TEXT NOT NULL, taskId TEXT REFERENCES tasks(id), resourceId TEXT REFERENCES resources(id), recipientId TEXT REFERENCES agents(id), createdAt TEXT NOT NULL);
-      CREATE INDEX entries_scope ON entries(taskId, resourceId, id);
-      CREATE INDEX usages_resource ON usages(resourceId, active);
-      CREATE TRIGGER entries_no_update BEFORE UPDATE ON entries BEGIN SELECT RAISE(ABORT, 'entries are append-only'); END;
-      CREATE TRIGGER entries_no_delete BEFORE DELETE ON entries BEGIN SELECT RAISE(ABORT, 'entries are append-only'); END;
-      PRAGMA user_version = 1;
-    `));
-    if (version < 2) this.transaction(() => this.db.exec('ALTER TABLE usages ADD COLUMN version INTEGER NOT NULL DEFAULT 1; PRAGMA user_version = 2;'));
+    try {
+      this.db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 250;');
+      // WAL activation can return BUSY immediately when several new clients open a fresh file.
+      // Retry only lock contention, with at most 20 attempts and a short startup-only wait.
+      const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+      for (let attempt = 0; ; attempt++) {
+        try { this.db.exec('PRAGMA journal_mode = WAL;'); break; }
+        catch (error) {
+          const locked = error instanceof Error && 'errcode' in error && typeof error.errcode === 'number'
+            && [5, 6].includes(error.errcode & 0xff);
+          if (!locked || attempt >= 19) throw error;
+          Atomics.wait(waitBuffer, 0, 0, 25);
+        }
+      }
+      this.db.exec('PRAGMA busy_timeout = 5000;');
+      // Separate desktop MCP processes must inspect and apply migrations under the same write lock.
+      this.transaction(() => {
+        const version = Number((this.db.prepare('PRAGMA user_version').get() as {user_version: number}).user_version);
+        if (version > 2) throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500);
+        if (version === 0) this.db.exec(`
+          CREATE TABLE agents(id TEXT PRIMARY KEY, name TEXT NOT NULL, lastSeenAt TEXT NOT NULL);
+          CREATE TABLE tasks(id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, acceptanceCriteria TEXT NOT NULL, status TEXT NOT NULL, assignee TEXT REFERENCES agents(id), version INTEGER NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
+          CREATE TABLE resources(id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, description TEXT NOT NULL, capabilities TEXT NOT NULL, accessNotes TEXT NOT NULL, version INTEGER NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
+          CREATE TABLE usages(id TEXT PRIMARY KEY, resourceId TEXT NOT NULL REFERENCES resources(id), agentId TEXT NOT NULL REFERENCES agents(id), purpose TEXT NOT NULL, scope TEXT NOT NULL, sharing TEXT NOT NULL, taskId TEXT REFERENCES tasks(id), active INTEGER NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
+          CREATE TABLE entries(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, agentId TEXT NOT NULL, summary TEXT NOT NULL, detail TEXT NOT NULL, taskId TEXT REFERENCES tasks(id), resourceId TEXT REFERENCES resources(id), recipientId TEXT REFERENCES agents(id), createdAt TEXT NOT NULL);
+          CREATE INDEX entries_scope ON entries(taskId, resourceId, id);
+          CREATE INDEX usages_resource ON usages(resourceId, active);
+          CREATE TRIGGER entries_no_update BEFORE UPDATE ON entries BEGIN SELECT RAISE(ABORT, 'entries are append-only'); END;
+          CREATE TRIGGER entries_no_delete BEFORE DELETE ON entries BEGIN SELECT RAISE(ABORT, 'entries are append-only'); END;
+          PRAGMA user_version = 1;
+        `);
+        if (version < 2) this.db.exec('ALTER TABLE usages ADD COLUMN version INTEGER NOT NULL DEFAULT 1; PRAGMA user_version = 2;');
+      });
+    } catch (error) { this.db.close(); throw error; }
   }
   close() { this.db.close(); }
   private transaction<T>(fn: () => T): T {

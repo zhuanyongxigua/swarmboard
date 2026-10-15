@@ -17,6 +17,7 @@
   ],
   "extensions": {
     "com.openai": {
+      "requires_local_executor": true,
       "interface": {
         "displayName": "Swarmboard",
         "shortDescription": "任务、资源与 Agent 协作记录，一个共享空间。"
