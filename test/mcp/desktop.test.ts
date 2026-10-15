@@ -9,7 +9,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { Task, Resource, Usage, Entry } from '../../src/store.js';
 
-const archive = resolve('dist/swarmboard-desktop-0.1.0.zip');
+const packageVersion = (JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as {version: string}).version;
+const archive = resolve(`dist/swarmboard-desktop-${packageVersion}.zip`);
 let root: string, pluginRoot: string, work: string;
 interface Board { tasks: Task[]; resources: Resource[]; usages: Usage[]; entries: Entry[] }
 interface Configuration { mcpServers: { swarmboard: { type: string; command: string; args: string[]; cwd: string } } }
@@ -52,7 +53,7 @@ afterAll(async () => { await Promise.all([...clients].map(client => client.close
 describe('portable desktop plugin', () => {
   it('ships a self-contained local stdio plugin without runtime state or private paths', () => {
     const manifest = JSON.parse(readFileSync(join(pluginRoot, 'plugin.json'), 'utf8'));
-    expect(manifest).toMatchObject({ name: 'swarmboard', license: 'MIT', extensions: { 'com.openai': { requires_local_executor: true } } });
+    expect(manifest).toMatchObject({ name: 'swarmboard', version: packageVersion, license: 'MIT', extensions: { 'com.openai': { requires_local_executor: true } } });
     const config = JSON.parse(readFileSync(join(pluginRoot, 'mcp.json'), 'utf8')) as Configuration;
     expect(config.mcpServers.swarmboard).toEqual({ type: 'stdio', command: 'node', args: ['${PLUGIN_ROOT}/server/swarmboard.mjs'], cwd: '${PLUGIN_ROOT}' });
     const names = files(pluginRoot);

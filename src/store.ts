@@ -14,12 +14,14 @@ const id = z.string().trim().min(1).max(128);
 export const taskStatuses = ['todo', 'in_progress', 'in_review', 'done', 'blocked', 'canceled'] as const;
 export const entryKinds = ['OBSERVED', 'FACT', 'FAIL', 'CLAIM', 'PATCH_SUMMARY', 'MESSAGE'] as const;
 const taskFields = { title: text, description: optionalText, acceptanceCriteria: optionalText };
-const resourceFields = { name: text, kind: text, description: optionalText, capabilities: z.array(text).max(50).default([]), accessNotes: optionalText };
+// Retain the legacy kind column/API field without requiring resource classification.
+const legacyResourceKind = z.string().trim().max(500);
+const resourceFields = { name: text, kind: legacyResourceKind.default(''), description: optionalText, capabilities: z.array(text).max(50).default([]), accessNotes: optionalText };
 export const schemas = {
   taskCreate: z.object({ ...taskFields, agentId: id.optional() }).strict(),
   taskUpdate: z.object({ expectedVersion: z.number().int().positive(), title: text.optional(), description: longText.optional(), acceptanceCriteria: longText.optional(), status: z.enum(taskStatuses).optional(), agentId: id.optional() }).strict(),
   resourceCreate: z.object({ ...resourceFields, agentId: id.optional() }).strict(),
-  resourceUpdate: z.object({ expectedVersion: z.number().int().positive(), name: text.optional(), kind: text.optional(), description: longText.optional(), capabilities: z.array(text).max(50).optional(), accessNotes: longText.optional(), agentId: id.optional() }).strict(),
+  resourceUpdate: z.object({ expectedVersion: z.number().int().positive(), name: text.optional(), kind: legacyResourceKind.optional(), description: longText.optional(), capabilities: z.array(text).max(50).optional(), accessNotes: longText.optional(), agentId: id.optional() }).strict(),
   agent: z.object({ name: text, agentId: id.optional() }).strict(),
   claim: z.object({ agentId: id, expectedVersion: z.number().int().positive() }).strict(),
   taskRelease: z.object({ agentId: id, expectedVersion: z.number().int().positive(), status: z.enum(['todo', 'blocked']).default('todo') }).strict(),

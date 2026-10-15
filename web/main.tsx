@@ -3,63 +3,449 @@ import { createRoot } from 'react-dom/client';
 import { App } from '@modelcontextprotocol/ext-apps';
 import './style.css';
 
-type Task = {id:string;title:string;description:string;acceptanceCriteria:string;status:string;assignee:string|null;version:number;updatedAt:string};
-type Resource = {id:string;name:string;kind:string;description:string;capabilities:string[];accessNotes:string;version:number};
-type Agent = {id:string;name:string;lastSeenAt:string};
-type Entry = {id:number;kind:string;agentId:string;summary:string;detail:string;taskId?:string;resourceId?:string;recipientId?:string;createdAt:string};
-type Usage = {id:string;resourceId:string;agentId:string;purpose:string;scope:string;sharing:string;active:boolean};
-type Board = {tasks:Task[];resources:Resource[];agents:Agent[];usages:Usage[];entries:Entry[];cursor:number};
-type Editor = {type:'task';item?:Task}|{type:'resource';item?:Resource};
-const statuses:Record<string,string> = {todo:'待认领',in_progress:'进行中',in_review:'待验收',done:'已完成',blocked:'受阻',canceled:'已取消'};
-const kinds:Record<string,string> = {OBSERVED:'观察',FACT:'事实',FAIL:'失败经验',CLAIM:'工作声明',PATCH_SUMMARY:'成果摘要',MESSAGE:'消息'};
-const tabs = ['任务面板','资源池','共享面板'];
+type Task = {
+  id: string; title: string; description: string; acceptanceCriteria: string;
+  status: string; assignee: string | null; version: number; updatedAt: string;
+};
+type Resource = {
+  id: string; name: string; kind: string; description: string;
+  capabilities: string[]; accessNotes: string; version: number;
+};
+type Agent = { id: string; name: string; lastSeenAt: string };
+type Entry = {
+  id: number; kind: string; agentId: string; summary: string; detail: string;
+  taskId?: string; resourceId?: string; recipientId?: string; createdAt: string;
+};
+type Usage = {
+  id: string; resourceId: string; agentId: string; purpose: string; scope: string;
+  sharing: string; taskId?: string; active: boolean;
+};
+type Board = { tasks: Task[]; resources: Resource[]; agents: Agent[]; usages: Usage[]; entries: Entry[]; cursor: number };
+type Editor = { type: 'task'; item?: Task } | { type: 'resource'; item?: Resource };
+type Tab = 'tasks' | 'resources' | 'shared';
+
+const statuses: Record<string, string> = {
+  todo: '待认领', in_progress: '进行中', in_review: '待验收',
+  done: '已完成', blocked: '受阻', canceled: '已取消',
+};
+const entryKinds: Record<string, string> = {
+  OBSERVED: '观察', FACT: '事实', FAIL: '失败经验',
+  CLAIM: '工作声明', PATCH_SUMMARY: '成果摘要', MESSAGE: '消息',
+};
+const tabs: { id: Tab; title: string }[] = [
+  { id: 'tasks', title: '任务管理' },
+  { id: 'resources', title: '资源池' },
+  { id: 'shared', title: '共享面板' },
+];
 let bridge: App | null = null;
-function unpack(value:unknown):unknown {
-  const result = value as {isError?:boolean;structuredContent?:unknown;content?:{type:string;text?:string}[]};
+
+class OperationError extends Error {
+  constructor(message: string, readonly code?: string) { super(message); }
+}
+function operationError(error?: { code?: string; message?: string }) {
+  return new OperationError(error?.code === 'VERSION_CONFLICT'
+    ? '内容已被其他参与者更新。看板将刷新，请核对最新内容后重试。'
+    : error?.message ?? '操作未完成，请检查连接后重试。', error?.code);
+}
+function message(error: unknown) { return error instanceof Error ? error.message : '操作未完成，请重试。'; }
+function unpack(value: unknown): unknown {
+  const result = value as { isError?: boolean; structuredContent?: unknown; content?: { type: string; text?: string }[] };
   let data = result.structuredContent;
-  if (!data) {const content=result.content?.find(item=>item.type==='text');if(content?.text){try{data=JSON.parse(content.text);}catch{data={error:{message:content.text}};}}}
-  if(result.isError)throw new Error((data as {error?:{message?:string}})?.error?.message??'操作未完成');
+  if (!data) {
+    const content = result.content?.find(item => item.type === 'text');
+    if (content?.text) {
+      try { data = JSON.parse(content.text); }
+      catch { data = { error: { message: content.text } }; }
+    }
+  }
+  if (result.isError) throw operationError((data as { error?: { code?: string; message?: string } })?.error);
   return data;
 }
-async function operation<T>(name:string,args:Record<string,unknown>={}):Promise<T> {
-  if(bridge)return unpack(await bridge.callServerTool({name,arguments:args})) as T;
-  let url='/api/board';let method='GET';let body:Record<string,unknown>|undefined;
-  const {id,...patch}=args;
-  if(name==='task_create'){url='/api/tasks';method='POST';body=args;}
-  if(name==='task_update'){url=`/api/tasks/${encodeURIComponent(String(id))}`;method='PATCH';body=patch;}
-  if(name==='resource_create'){url='/api/resources';method='POST';body=args;}
-  if(name==='resource_update'){url=`/api/resources/${encodeURIComponent(String(id))}`;method='PATCH';body=patch;}
-  const response=await fetch(url,{method,headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined});
-  const data=await response.json();if(!response.ok)throw new Error(data.error?.code==='VERSION_CONFLICT'?'内容已被其他参与者更新，请关闭编辑窗口并刷新后重试。':data.error?.message??'暂时无法连接协作空间');return data as T;
+async function operation<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+  if (bridge) return unpack(await bridge.callServerTool({ name, arguments: args })) as T;
+  if (window.parent !== window) throw new OperationError('插件尚未连接桌面宿主，请重新打开面板后重试。');
+  let url = '/api/board';
+  let method = 'GET';
+  let body: Record<string, unknown> | undefined;
+  const { id, ...patch } = args;
+  if (name === 'task_create') { url = '/api/tasks'; method = 'POST'; body = args; }
+  if (name === 'task_update') { url = `/api/tasks/${encodeURIComponent(String(id))}`; method = 'PATCH'; body = patch; }
+  if (name === 'resource_create') { url = '/api/resources'; method = 'POST'; body = args; }
+  if (name === 'resource_update') { url = `/api/resources/${encodeURIComponent(String(id))}`; method = 'PATCH'; body = patch; }
+  const response = await fetch(url, {
+    method, headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await response.json();
+  if (!response.ok) throw operationError(data.error);
+  return data as T;
 }
-function RichText({value}:{value:string}){return <>{value.split(/(https?:\/\/[^\s<>]+)/g).map((part,index)=>/^https?:\/\//.test(part)?<a key={index} href={part} target="_blank" rel="noopener noreferrer">{part}</a>:<React.Fragment key={index}>{part}</React.Fragment>)}</>;}
-function time(value:string){return new Date(value).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
-function Icon({name,size=20}:{name:string;size?:number}){return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{name==='task'?<><rect x="4" y="4" width="16" height="17" rx="3"/><path d="m8 10 1.5 1.5L12 9m2 2h2m-8 5h8M9 4V2m6 2V2"/></>:name==='resource'?<><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01m5-10h5m-5 10h5"/></>:name==='shared'?<><path d="M8 7h12M8 12h12M8 17h12M4 7h.01M4 12h.01M4 17h.01"/></>:name==='plus'?<path d="M12 5v14M5 12h14"/>:name==='refresh'?<><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 6a8 8 0 0 1 13 3M5 15a8 8 0 0 0 13 3"/></>:<><path d="m4 20 4-1 12-12a2 2 0 0 0-3-3L5 16l-1 4Z"/></>}</svg>}
-function Workspace(){
- const [board,setBoard]=useState<Board|null>(null);const [tab,setTab]=useState(0);const [error,setError]=useState('');const [loading,setLoading]=useState(true);const [refreshing,setRefreshing]=useState(false);const [editor,setEditor]=useState<Editor|null>(null);const [query,setQuery]=useState('');const [status,setStatus]=useState('');const [kind,setKind]=useState('');const [agent,setAgent]=useState('');const [connected,setConnected]=useState(false);const [updated,setUpdated]=useState('');const mounted=useRef(true);
- const refresh=useCallback(async(quiet=false)=>{if(!quiet)setRefreshing(true);try{const data=await operation<Board>('board_read');if(mounted.current){setBoard(data);setError('');setUpdated(new Date().toISOString());}}catch(e){if(mounted.current)setError(e instanceof Error?e.message:'刷新失败');}finally{if(mounted.current){setLoading(false);setRefreshing(false);}}},[]);
- useEffect(()=>{mounted.current=true;let active=true;let timer:ReturnType<typeof setInterval>|undefined;async function start(){try{if(window.parent!==window){const app=new App({name:'Swarmboard',version:'0.1.0'});app.ontoolresult=result=>{const data=unpack(result) as Board;if(data?.tasks&&data?.resources&&active){setBoard(data);setLoading(false);setUpdated(new Date().toISOString());}};await app.connect();if(!active)return;bridge=app;setConnected(true);}await refresh();timer=setInterval(()=>{if(document.visibilityState==='visible')void refresh(true);},15000);}catch(e){setLoading(false);setError(e instanceof Error?e.message:'连接失败');}}void start();return()=>{active=false;mounted.current=false;if(timer)clearInterval(timer);};},[refresh]);
- const name=(id:string)=>id==='human'?'空间管理者':board?.agents.find(a=>a.id===id)?.name??id;
- const stale=(id:string)=>{const person=board?.agents.find(a=>a.id===id);return Boolean(person&&Date.now()-Date.parse(person.lastSeenAt)>120000);};
- const activeTasks=board?.tasks.filter(t=>!['done','canceled'].includes(t.status)).length??0;
- const uses=board?.usages.filter(u=>u.active)??[];
- const filteredTasks=board?.tasks.filter(t=>(!status||t.status===status)&&(!query||`${t.title} ${t.description}`.toLowerCase().includes(query.toLowerCase())))??[];
- const filteredResources=board?.resources.filter(r=>!query||`${r.name} ${r.kind} ${r.capabilities.join(' ')}`.toLowerCase().includes(query.toLowerCase()))??[];
- const entries=(board?.entries??[]).filter(e=>(!kind||e.kind===kind)&&(!agent||e.agentId===agent)&&(!query||`${e.summary} ${e.detail}`.toLowerCase().includes(query.toLowerCase()))).slice().reverse();
- return <div className="workspace"><header className="masthead"><div className="brand"><div className="brand-mark"><span/><span/><span/><span/></div><div><h1>Swarmboard</h1><span className="brand-caption">让协作，自然发生</span></div></div><div className="connection"><span className={error?'status-dot warning':'status-dot'}/>{error?'连接需检查':connected?'已连接协作空间':'本地协作空间'}</div></header>
- <section className="overview" aria-label="空间概览"><div><span className="eyebrow">SHARED WORKSPACE</span><h2>目标在一起，行动有默契。</h2><p>任务、资源与共享发现，汇聚在同一个协作空间。</p></div><div className="stats"><div><strong>{board?activeTasks:'—'}</strong><span>待推进任务</span></div><div><strong>{board?.resources.length??'—'}</strong><span>共享资源</span></div><div><strong>{board?.agents.length??'—'}</strong><span>已登记 Agent</span></div></div></section>
- <nav className="tabs" role="tablist" aria-label="工作面板">{tabs.map((title,index)=><button key={title} role="tab" aria-label={title} id={`tab-${index}`} aria-selected={tab===index} aria-controls={`panel-${index}`} tabIndex={tab===index?0:-1} onKeyDown={event=>{if(['ArrowRight','ArrowLeft','Home','End'].includes(event.key)){event.preventDefault();const next=event.key==='Home'?0:event.key==='End'?2:(tab+(event.key==='ArrowRight'?1:2))%3;setTab(next);setQuery('');document.getElementById(`tab-${next}`)?.focus();}}} onClick={()=>{setTab(index);setQuery('');}} className={tab===index?'active':''}><Icon name={['task','resource','shared'][index]}/>{title}<span className="tab-count">{index===0?board?.tasks.length??0:index===1?board?.resources.length??0:board?.entries.length??0}</span></button>)}</nav>
- <main role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}><div className="section-heading"><div><h2>{tabs[tab]}</h2><p>{tab===0?'明确目标与验收条件，由 Agents 自行协作推进。':tab===1?'描述资源和使用方式，让 Agents 协商如何共享。':'观察 Agents 的声明、发现与沟通，了解协作如何发生。'}</p></div>{tab<2?<button className="primary" onClick={()=>setEditor(tab===0?{type:'task'}:{type:'resource'})}><Icon name="plus" size={17}/>{tab===0?'新建任务':'添加资源'}</button>:<span className="readonly">只读视图</span>}</div>
- <div className="toolbar"><label className="search"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input aria-label={tab===0?'搜索任务':tab===1?'搜索资源':'搜索共享记录'} placeholder={tab===0?'搜索任务…':tab===1?'搜索名称、类型或能力…':'搜索共享记录…'} value={query} onChange={e=>setQuery(e.target.value)}/></label>{tab===0&&<select aria-label="筛选任务状态" value={status} onChange={e=>setStatus(e.target.value)}><option value="">全部状态</option>{Object.entries(statuses).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select>}{tab===2&&<><select aria-label="筛选记录类型" value={kind} onChange={e=>setKind(e.target.value)}><option value="">全部类型</option>{Object.entries(kinds).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select><select aria-label="筛选 Agent" value={agent} onChange={e=>setAgent(e.target.value)}><option value="">全部参与者</option><option value="human">空间管理者</option>{board?.agents.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></>}<button className="icon-button" aria-label="刷新面板" disabled={refreshing} onClick={()=>void refresh()}><Icon name="refresh" size={18}/></button></div>
- {error&&<div className="error" role="alert"><strong>暂时无法同步</strong><span>{error}</span><button onClick={()=>void refresh()}>重试</button></div>}
- {loading?<div className="empty" role="status"><span className="loader"/><h3>正在读取协作空间</h3><p>获取任务、资源与最新共享记录…</p></div>:!board?<Empty icon="shared" title="协作空间暂未连接" text="恢复连接后，即可查看已有任务、资源与共享记录。"/>:tab===0?<>{!filteredTasks.length?<Empty icon="task" title={query||status?'没有匹配的任务':'从一个清晰的目标开始'} text={query||status?'试试其他关键词或状态。':'创建任务，写下目标和验收条件，让 Agents 接续推进。'}/>:<div className="task-list">{filteredTasks.map(task=><article className="task-card" key={task.id}><div className="card-heading"><span className={`pill state-${task.status}`}>{statuses[task.status]}</span><button className="text-button" aria-label={`编辑任务 ${task.title}`} onClick={()=>setEditor({type:'task',item:task})}><Icon name="edit" size={15}/>编辑</button></div><h3>{task.title}</h3>{task.description&&<p className="description"><RichText value={task.description}/></p>}{task.acceptanceCriteria&&<details className="acceptance"><summary>验收条件</summary><p><RichText value={task.acceptanceCriteria}/></p></details>}<div className="card-footer"><span className="assignee"><span className="avatar">{task.assignee?name(task.assignee).slice(0,1).toUpperCase():'·'}</span>{task.assignee?name(task.assignee):'等待 Agent 认领'}{task.assignee&&stale(task.assignee)&&<span className="stale">最近未报告</span>}</span><time dateTime={task.updatedAt}>{time(task.updatedAt)}</time></div></article>)}</div>}</>:tab===1?<>{!filteredResources.length?<Empty icon="resource" title={query?'没有匹配的资源':'让资源成为团队的共同能力'} text={query?'试试其他名称或能力标签。':'添加开发机、测试环境或其他资源，并说明如何访问与共享。'}/>:<div className="resource-grid">{filteredResources.map(resource=>{const declarations=uses.filter(u=>u.resourceId===resource.id);return <article className="resource-card" key={resource.id}><div className="resource-title"><span className="resource-icon"><Icon name="resource"/></span><div><h3>{resource.name}</h3><span>{resource.kind}</span></div><button className="icon-button" aria-label={`编辑资源 ${resource.name}`} onClick={()=>setEditor({type:'resource',item:resource})}><Icon name="edit" size={17}/></button></div>{resource.description&&<p className="description"><RichText value={resource.description}/></p>}<div className="tags">{resource.capabilities.map((cap,index)=><span key={`${cap}-${index}`}>{cap}</span>)}</div>{resource.accessNotes&&<details className="access"><summary>访问与共享说明</summary><p><RichText value={resource.accessNotes}/></p></details>}<div className="usage-section"><h4><span className={declarations.length?'status-dot':'status-dot neutral'}/>{declarations.length?`${declarations.length} 项活跃使用声明`:'暂无活跃使用声明'}</h4>{declarations.map(usage=><div className="usage" key={usage.id}><div><strong>{name(usage.agentId)}</strong>{stale(usage.agentId)&&<span className="stale">最近未报告 · 使用待核实</span>}</div><p>{usage.purpose}</p>{usage.scope&&<p><span>范围</span>{usage.scope}</p>}{usage.sharing&&<p><span>共享约定</span>{usage.sharing}</p>}</div>)}<p className="hint">使用声明供协作参考，不代表独占或实际进程状态。</p></div></article>;})}</div>}</>:<>{!entries.length?<Empty icon="shared" title={query||kind||agent?'没有匹配的记录':'协作的过程，会留在这里'} text={query||kind||agent?'调整筛选条件，查看其他共享记录。':'Agents 发布工作声明、发现或沟通后，会自动出现在此处。'}/>:<ol className="timeline">{entries.map(entry=><li key={entry.id}><span className={`event-marker kind-${entry.kind}`}/><article className="event"><div className="event-header"><strong>{name(entry.agentId)}</strong><span className="event-kind">{kinds[entry.kind]??entry.kind}</span><time dateTime={entry.createdAt}>{time(entry.createdAt)}</time></div><p className="event-summary">{entry.summary}</p><div className="event-scope">{entry.taskId&&<span>任务 · {board?.tasks.find(t=>t.id===entry.taskId)?.title??entry.taskId}</span>}{entry.resourceId&&<span>资源 · {board?.resources.find(r=>r.id===entry.resourceId)?.name??entry.resourceId}</span>}{entry.recipientId&&<span>发送给 · {name(entry.recipientId)}</span>}</div>{entry.detail&&<details><summary>查看详情</summary><pre>{entry.detail}</pre></details>}</article></li>)}</ol>}<p className="feed-note">显示最近 {board?.entries.length??0} 条共享记录 · 记录只读，保留协作过程。</p></>}
- </main><footer className="workspace-footer"><span>自主协作，共享上下文</span><span>{updated?`上次同步 ${time(updated)} · 每 15 秒更新`:'等待连接'}</span></footer>{editor&&<EditorDialog editor={editor} close={()=>setEditor(null)} saved={()=>{setEditor(null);void refresh();}}/>}</div>;
+function RichText({ value }: { value: string }) {
+  return <>{value.split(/(https?:\/\/[^\s<>]+)/g).map((part, index) => /^https?:\/\//.test(part)
+    ? <a key={index} href={part} target="_blank" rel="noopener noreferrer">{part}</a>
+    : <React.Fragment key={index}>{part}</React.Fragment>)}</>;
 }
-function Empty({icon,title,text}:{icon:string;title:string;text:string}){return <div className="empty"><div className="empty-icon"><Icon name={icon} size={28}/></div><h3>{title}</h3><p>{text}</p></div>;}
-function EditorDialog({editor,close,saved}:{editor:Editor;close:()=>void;saved:()=>void}){
- const dialog=useRef<HTMLDialogElement>(null);const first=useRef<HTMLInputElement>(null);const [saving,setSaving]=useState(false);const [error,setError]=useState('');const isTask=editor.type==='task';const item=editor.item;const title=isTask?(item?'编辑任务':'新建任务'):(item?'编辑资源':'添加资源');
- useEffect(()=>{const previous=document.activeElement as HTMLElement|null;dialog.current?.showModal();first.current?.focus();return()=>previous?.focus();},[]);
- async function submit(event:React.FormEvent<HTMLFormElement>){event.preventDefault();const data=new FormData(event.currentTarget);const value=(key:string)=>String(data.get(key)??'').trim();let args:Record<string,unknown>;if(isTask){args={title:value('title'),description:value('description'),acceptanceCriteria:value('acceptanceCriteria')};if(item)args.status=value('status');}else{args={name:value('name'),kind:value('kind'),description:value('description'),capabilities:value('capabilities').split(/[,，\n]/).map(s=>s.trim()).filter(Boolean),accessNotes:value('accessNotes')};}if(item){args.id=item.id;args.expectedVersion=item.version;}setSaving(true);setError('');try{await operation(`${isTask?'task':'resource'}_${item?'update':'create'}`,args);saved();}catch(e){setError(e instanceof Error?e.message:'保存失败');}finally{setSaving(false);}}
- return <dialog ref={dialog} aria-labelledby="editor-title" onCancel={event=>{if(saving)event.preventDefault();else close();}} onClick={event=>{if(event.target===dialog.current&&!saving)close();}}><form onSubmit={event=>void submit(event)}><div className="dialog-header"><div><span className="eyebrow">{isTask?'TASK':'RESOURCE'}</span><h2 id="editor-title">{title}</h2></div><button type="button" className="close-button" aria-label="关闭编辑窗口" onClick={close} disabled={saving}>×</button></div><div className="form-body">{isTask?<><label>标题<input ref={first} name="title" required maxLength={500} defaultValue={(item as Task|undefined)?.title} placeholder="需要团队完成什么？"/></label><label>任务说明<textarea name="description" rows={3} maxLength={20000} defaultValue={item?.description} placeholder="背景、目标、工作范围，以及相关链接"/></label><label>验收条件<textarea name="acceptanceCriteria" rows={3} maxLength={20000} defaultValue={(item as Task|undefined)?.acceptanceCriteria} placeholder="怎样确认工作已经完成？可以附上证据链接要求。"/></label>{item&&<label>状态<select name="status" defaultValue={(item as Task).status}>{Object.entries(statuses).map(([key,label])=><option value={key} key={key}>{label}</option>)}</select></label>}</>:<><label>资源名称<input ref={first} name="name" required maxLength={500} defaultValue={(item as Resource|undefined)?.name} placeholder="例如：开发机 Alpha"/></label><label>资源类型<input name="kind" required maxLength={500} defaultValue={(item as Resource|undefined)?.kind} placeholder="例如：开发机、测试环境、数据集"/></label><label>资源说明<textarea name="description" rows={2} maxLength={20000} defaultValue={item?.description} placeholder="这项资源能帮助完成什么？"/></label><label>能力标签<input name="capabilities" defaultValue={(item as Resource|undefined)?.capabilities.join(', ')} placeholder="例如：Linux, Docker, GPU（逗号分隔）"/></label><label>访问说明<textarea name="accessNotes" rows={3} maxLength={20000} defaultValue={(item as Resource|undefined)?.accessNotes} placeholder="访问方式、使用限制或共享注意事项"/></label><p className="form-note">仅填写访问说明，请勿保存密码、密钥或订阅凭据。</p></>}{error&&<div className="error" role="alert">{error}</div>}</div><div className="dialog-footer"><button type="button" className="secondary" onClick={close} disabled={saving}>取消</button><button type="submit" className="primary" disabled={saving}>{saving?'正在保存…':item?'保存修改':isTask?'创建任务':'添加资源'}</button></div></form></dialog>;
+function time(value: string, full = false) {
+  return new Date(value).toLocaleString('zh-CN', full
+    ? { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }
+    : { hour: '2-digit', minute: '2-digit' });
 }
-createRoot(document.getElementById('root')!).render(<Workspace/>);
+function shortId(id: string) { return id.length > 12 ? `${id.slice(0, 8)}…` : id; }
+
+function Workspace() {
+  const [board, setBoard] = useState<Board | null>(null);
+  const [tab, setTab] = useState<Tab>('tasks');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [connected, setConnected] = useState(false);
+  const [updated, setUpdated] = useState('');
+  const [editor, setEditor] = useState<Editor | null>(null);
+  const [expandedResource, setExpandedResource] = useState<string | null>(null);
+  const [movingId, setMovingId] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState('');
+  const mounted = useRef(true);
+  const dragged = useRef<Task | null>(null);
+  const moving = useRef(false);
+
+  const refresh = useCallback(async (quiet = false): Promise<Board | null> => {
+    if (!quiet) setRefreshing(true);
+    try {
+      const data = await operation<Board>('board_read');
+      if (mounted.current) {
+        setBoard(data); setError(''); setUpdated(new Date().toISOString());
+      }
+      return data;
+    } catch (error) {
+      if (mounted.current) setError(message(error));
+      return null;
+    } finally {
+      if (mounted.current) { setLoading(false); setRefreshing(false); }
+    }
+  }, []);
+
+  useEffect(() => {
+    mounted.current = true;
+    let active = true;
+    let localBridge: App | null = null;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    async function start() {
+      try {
+        if (window.parent !== window) {
+          const app = new App({ name: 'Swarmboard', version: '0.2.0' });
+          localBridge = app;
+          app.ontoolresult = result => {
+            try {
+              const data = unpack(result) as Board;
+              if (data?.tasks && data?.resources && active) {
+                setBoard(data); setLoading(false); setUpdated(new Date().toISOString());
+              }
+            } catch (error) { if (active) setError(message(error)); }
+          };
+          await app.connect();
+          if (!active) return;
+          bridge = app;
+          setConnected(true);
+        }
+        await refresh();
+        timer = setInterval(() => {
+          if (document.visibilityState === 'visible') void refresh(true);
+        }, 15000);
+      } catch (error) {
+        if (active) { setLoading(false); setError(message(error)); }
+      }
+    }
+    void start();
+    return () => {
+      active = false; mounted.current = false;
+      if (timer) clearInterval(timer);
+      if (bridge === localBridge) bridge = null;
+    };
+  }, [refresh]);
+
+  const name = (id: string) => id === 'human' ? '空间管理者' : board?.agents.find(agent => agent.id === id)?.name ?? id;
+  const stale = (id: string) => {
+    const agent = board?.agents.find(agent => agent.id === id);
+    return Boolean(agent && Date.now() - Date.parse(agent.lastSeenAt) > 120000);
+  };
+  const usages = board?.usages.filter(usage => usage.active) ?? [];
+
+  function changeTab(next: Tab) { setTab(next); }
+  function tabKey(event: React.KeyboardEvent, index: number) {
+    if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? 2
+      : (index + (event.key === 'ArrowRight' ? 1 : 2)) % tabs.length;
+    changeTab(tabs[next].id);
+    document.getElementById(`tab-${tabs[next].id}`)?.focus();
+  }
+  function openTask(taskId: string) {
+    const task = board?.tasks.find(task => task.id === taskId);
+    if (task) { setTab('tasks'); setEditor({ type: 'task', item: task }); }
+  }
+  function openResource(resourceId: string) {
+    if (!board?.resources.some(resource => resource.id === resourceId)) return;
+    setTab('resources'); setExpandedResource(resourceId);
+    requestAnimationFrame(() => document.getElementById(`resource-${resourceId}`)?.focus());
+  }
+  async function moveTask(task: Task, status: string) {
+    if (task.status === status || moving.current) return;
+    moving.current = true; setMovingId(task.id); setError('');
+    try {
+      await operation('task_update', { id: task.id, status, expectedVersion: task.version });
+      await refresh(true);
+      setAnnouncement(`${task.title} 已移至${statuses[status] ?? status}`);
+    } catch (error) {
+      await refresh(true);
+      setError(`未能移动“${task.title}”：${message(error)}`);
+      setAnnouncement('移动未完成，请查看错误提示。');
+    } finally { moving.current = false; setMovingId(null); }
+  }
+  function drop(event: React.DragEvent, status: string) {
+    if (!dragged.current) return;
+    event.preventDefault();
+    const task = dragged.current;
+    dragged.current = null;
+    void moveTask(task, status);
+  }
+  async function reloadEditor(): Promise<boolean> {
+    const data = await refresh(true);
+    if (!data || !editor?.item) return false;
+    const latest = editor.type === 'task'
+      ? data.tasks.find(item => item.id === editor.item?.id)
+      : data.resources.find(item => item.id === editor.item?.id);
+    if (!latest) return false;
+    setEditor(editor.type === 'task' ? { type: 'task', item: latest as Task } : { type: 'resource', item: latest as Resource });
+    return true;
+  }
+
+  return <div className="workspace">
+    <header className="workspace-header">
+      <h1>Swarmboard</h1>
+      <nav className="tabs" role="tablist" aria-label="工作面板">
+        {tabs.map((item, index) => <button key={item.id} type="button" role="tab"
+          id={`tab-${item.id}`} aria-selected={tab === item.id} aria-controls={`panel-${item.id}`}
+          tabIndex={tab === item.id ? 0 : -1} onKeyDown={event => tabKey(event, index)}
+          onClick={() => changeTab(item.id)}>{item.title}</button>)}
+      </nav>
+      <span className="connection" title={updated ? `上次同步 ${time(updated, true)}` : '等待连接'}>
+        {error ? '同步需检查' : connected ? '已连接' : '本地空间'}
+      </span>
+      <button className="refresh-button" type="button" aria-label="刷新面板"
+        disabled={refreshing} onClick={() => void refresh()}>↻</button>
+    </header>
+
+    <main id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
+      <div className="panel-toolbar">
+        <span className="subtle">{tab === 'tasks' ? `${board?.tasks.length ?? 0} 个任务`
+          : tab === 'resources' ? `${board?.resources.length ?? 0} 项资源` : 'Agent 交互记录'}</span>
+        {tab === 'tasks' ? <button className="primary" type="button" onClick={() => setEditor({ type: 'task' })}>新建任务</button>
+          : tab === 'resources' ? <button className="primary" type="button" onClick={() => setEditor({ type: 'resource' })}>添加资源</button>
+            : <span className="subtle">只读</span>}
+      </div>
+      {error && <div className="error" role="alert"><span>{error}</span><button type="button" onClick={() => void refresh()}>重试</button></div>}
+      {loading ? <Empty title="正在读取协作空间" text="获取任务、资源与最新共享记录…" loading />
+        : !board ? <Empty title="协作空间暂未连接" text="恢复连接后可查看已有任务、资源与共享记录。" />
+          : tab === 'tasks' ? <TaskBoard board={board} usages={usages} name={name} stale={stale}
+            movingId={movingId} open={task => setEditor({ type: 'task', item: task })}
+            dragStart={(event, task) => {
+              if (moving.current) { event.preventDefault(); return; }
+              dragged.current = task;
+              event.dataTransfer.setData('text/plain', task.id);
+              event.dataTransfer.effectAllowed = 'move';
+            }} dragEnd={() => { dragged.current = null; }}
+            dragOver={event => { if (dragged.current) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} drop={drop} />
+            : tab === 'resources' ? <ResourcePool board={board} usages={usages} name={name} stale={stale}
+              expanded={expandedResource} toggle={id => setExpandedResource(current => current === id ? null : id)}
+              edit={resource => setEditor({ type: 'resource', item: resource })} />
+              : <SharedFeed board={board} name={name} openTask={openTask} openResource={openResource} />}
+    </main>
+    <div className="sr-only" aria-live="polite">{announcement}</div>
+    {editor && <EditorDialog key={`${editor.type}-${editor.item?.id ?? 'new'}-${editor.item?.version ?? 0}`}
+      editor={editor} name={name} usages={usages} resources={board?.resources ?? []}
+      close={() => setEditor(null)} saved={() => { setEditor(null); setAnnouncement('修改已保存。'); void refresh(true); }}
+      failed={() => refresh(true)} reload={reloadEditor} />}
+  </div>;
+}
+
+function TaskBoard({ board, usages, name, stale, movingId, open, dragStart, dragEnd, dragOver, drop }: {
+  board: Board; usages: Usage[]; name: (id: string) => string; stale: (id: string) => boolean;
+  movingId: string | null; open: (task: Task) => void;
+  dragStart: (event: React.DragEvent, task: Task) => void; dragEnd: () => void;
+  dragOver: (event: React.DragEvent) => void; drop: (event: React.DragEvent, status: string) => void;
+}) {
+  const order = ['todo', 'in_progress', 'in_review', 'done'];
+  for (const task of board.tasks) if (!order.includes(task.status)) order.push(task.status);
+  return <div className="task-board" aria-label="任务状态看板" style={{ '--column-count': order.length } as React.CSSProperties}>
+    {order.map(status => {
+      const tasks = board.tasks.filter(task => task.status === status);
+      return <section className="task-column" key={status} aria-label={statuses[status] ?? status}
+        data-status={status} onDragOver={dragOver} onDrop={event => drop(event, status)}>
+        <div className="column-heading"><h2>{statuses[status] ?? status}</h2><span>{tasks.length}</span></div>
+        <div className="column-list" data-drop-status={status}>
+          {tasks.length ? tasks.map(task => {
+            const related = [...new Set(usages.filter(usage => usage.taskId === task.id).map(usage => usage.resourceId))]
+              .map(id => board.resources.find(resource => resource.id === id)?.name ?? id);
+            return <button type="button" key={task.id} className="task-card" draggable={movingId === null}
+              data-task-id={task.id} aria-label={`查看任务 ${task.title}`} disabled={movingId === task.id}
+              onClick={() => open(task)} onDragStart={event => dragStart(event, task)} onDragEnd={dragEnd}>
+              <span className="task-id" title={task.id}>{shortId(task.id)}</span>
+              <span className="task-title">{task.title}</span>
+              {task.description && <span className="task-excerpt">{task.description}</span>}
+              <span className="task-footer">
+                <span>{task.assignee ? name(task.assignee) : '未认领'}
+                  {task.assignee && stale(task.assignee) && <span className="stale"> · 最近未报告</span>}</span>
+                <span>{related.length ? related.join('、') : '暂无活跃资源声明'}</span>
+              </span>
+            </button>;
+          }) : <p className="column-empty">暂无任务</p>}
+        </div>
+      </section>;
+    })}
+  </div>;
+}
+
+function ResourcePool({ board, usages, name, stale, expanded, toggle, edit }: {
+  board: Board; usages: Usage[]; name: (id: string) => string; stale: (id: string) => boolean;
+  expanded: string | null; toggle: (id: string) => void; edit: (resource: Resource) => void;
+}) {
+  if (!board.resources.length) return <Empty title="暂无资源" text="添加资源名称、说明与使用约定，供 Agents 协商使用。" />;
+  return <div className="resources">
+    <div className="resource-grid table-heading" aria-hidden="true"><span>名称与说明</span><span>使用声明</span><span>使用约定</span></div>
+    {board.resources.map(resource => {
+      const declarations = usages.filter(usage => usage.resourceId === resource.id);
+      const isExpanded = expanded === resource.id;
+      return <section className="resource-item" key={resource.id}>
+        <button className="resource-grid resource-row" type="button" id={`resource-${resource.id}`}
+          aria-label={`查看资源 ${resource.name}`} aria-expanded={isExpanded} aria-controls={`usage-${resource.id}`}
+          onClick={() => toggle(resource.id)}>
+          <span><span className="resource-name">{resource.name}</span><span className="resource-description">{resource.description || '暂无说明'}</span></span>
+          <span className="usage-summary">{declarations.length
+            ? declarations.map(usage => <span key={usage.id}>{name(usage.agentId)} · {usage.purpose}</span>)
+            : '暂无活跃使用声明'}</span>
+          <span className="subtle resource-agreement">{resource.accessNotes || '暂无使用约定'}</span>
+        </button>
+        {isExpanded && <div className="resource-detail" id={`usage-${resource.id}`}>
+          <div className="resource-detail-heading"><p className="subtle">使用声明供协作参考，不代表独占或机器实际空闲。</p>
+            <button className="secondary" type="button" aria-label={`编辑资源 ${resource.name}`} onClick={() => edit(resource)}>编辑资源</button></div>
+          {declarations.length ? declarations.map(usage => <div className="usage-line" key={usage.id}>
+            <div>{name(usage.agentId)}{stale(usage.agentId) && <p className="stale">最近未报告 · 使用待核实</p>}</div>
+            <div><p>{usage.purpose}</p><p><span>范围：</span><RichText value={usage.scope || '未说明'} /></p>
+              <p><span>共享约定：</span><RichText value={usage.sharing || '未说明'} /></p></div>
+          </div>) : <p className="subtle">尚无 Agent 声明使用这项资源，实际使用情况仍需核实。</p>}
+        </div>}
+      </section>;
+    })}
+  </div>;
+}
+
+function SharedFeed({ board, name, openTask, openResource }: {
+  board: Board; name: (id: string) => string; openTask: (id: string) => void; openResource: (id: string) => void;
+}) {
+  if (!board.entries.length) return <Empty title="暂无共享记录" text="Agents 发布工作声明、发现或消息后，会显示在这里。" />;
+  return <div className="shared-feed" aria-label="Agent 交互记录">
+    {board.entries.slice().reverse().map(entry => <article className="shared-entry" key={entry.id}>
+      <time dateTime={entry.createdAt} title={time(entry.createdAt, true)}>{time(entry.createdAt)}</time>
+      <div className="entry-author"><span>{name(entry.agentId)}</span><span className="entry-kind">{entryKinds[entry.kind] ?? entry.kind}</span></div>
+      <div className="entry-content"><p><RichText value={entry.summary} /></p>
+        <div className="entry-references">
+          {entry.taskId && <button type="button" className="reference-button" onClick={() => openTask(entry.taskId!)}>
+            任务 · {board.tasks.find(task => task.id === entry.taskId)?.title ?? shortId(entry.taskId)}</button>}
+          {entry.resourceId && <button type="button" className="reference-button" onClick={() => openResource(entry.resourceId!)}>
+            资源 · {board.resources.find(resource => resource.id === entry.resourceId)?.name ?? shortId(entry.resourceId)}</button>}
+          {entry.recipientId && <span className="subtle">发送给 · {name(entry.recipientId)}</span>}
+        </div>
+        {entry.detail && <details className="entry-details"><summary>展开详情</summary><pre>{entry.detail}</pre></details>}
+      </div>
+    </article>)}
+    <p className="feed-note">最近 {board.entries.length} 条记录 · 只读</p>
+  </div>;
+}
+
+function Empty({ title, text, loading = false }: { title: string; text: string; loading?: boolean }) {
+  return <div className="empty" role={loading ? 'status' : undefined}><h2>{title}</h2><p>{text}</p></div>;
+}
+
+function EditorDialog({ editor, name, usages, resources, close, saved, failed, reload }: {
+  editor: Editor; name: (id: string) => string; usages: Usage[]; resources: Resource[];
+  close: () => void; saved: () => void; failed: () => Promise<Board | null>; reload: () => Promise<boolean>;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const first = useRef<HTMLInputElement>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [conflict, setConflict] = useState(false);
+  const isTask = editor.type === 'task';
+  const item = editor.item;
+  const task = isTask ? editor.item : undefined;
+  const resource = editor.type === 'resource' ? editor.item : undefined;
+  const title = isTask ? item ? '任务详情' : '新建任务' : item ? '编辑资源' : '添加资源';
+  const related = task ? [...new Set(usages.filter(usage => usage.taskId === task.id).map(usage => usage.resourceId))]
+    .map(id => resources.find(resource => resource.id === id)?.name ?? id) : [];
+
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    dialog.current?.showModal(); first.current?.focus();
+    return () => { if (previous?.isConnected) previous.focus(); };
+  }, []);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (saving || conflict) return;
+    const data = new FormData(event.currentTarget);
+    const value = (key: string) => String(data.get(key) ?? '').trim();
+    const args: Record<string, unknown> = isTask
+      ? { title: value('title'), description: value('description'), acceptanceCriteria: value('acceptanceCriteria') }
+      : { name: value('name'), description: value('description'), accessNotes: value('accessNotes') };
+    if (item) {
+      args.id = item.id; args.expectedVersion = item.version;
+      if (isTask) args.status = value('status');
+    }
+    setSaving(true); setError('');
+    try {
+      await operation(`${isTask ? 'task' : 'resource'}_${item ? 'update' : 'create'}`, args);
+      saved();
+    } catch (error) {
+      const isConflict = error instanceof OperationError && error.code === 'VERSION_CONFLICT';
+      setConflict(isConflict);
+      setError(message(error));
+      await failed();
+    } finally { setSaving(false); }
+  }
+  async function reloadLatest() {
+    setSaving(true);
+    if (!await reload()) { setError('暂时无法载入最新内容，请检查连接后重试。'); setSaving(false); }
+  }
+
+  return <dialog ref={dialog} aria-labelledby="editor-title"
+    onCancel={event => { if (saving) event.preventDefault(); else close(); }}
+    onClick={event => { if (event.target === dialog.current && !saving) close(); }}>
+    <form onSubmit={event => void submit(event)}>
+      <div className="dialog-header"><h2 id="editor-title">{title}</h2>
+        <button type="button" className="close-button" aria-label="关闭编辑窗口" disabled={saving} onClick={close}>×</button></div>
+      <div className="form-body">
+        {isTask ? <>
+          <label>标题<input ref={first} name="title" required maxLength={500} defaultValue={task?.title} /></label>
+          {task && <div className="form-columns">
+            <label>状态<select name="status" defaultValue={task.status}>{Object.entries(statuses).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+            <div className="field-info"><span>执行者</span><span>{task.assignee ? name(task.assignee) : '未认领'}</span></div>
+          </div>}
+          <label>任务说明<textarea name="description" rows={3} maxLength={20000} defaultValue={task?.description} /></label>
+          <label>验收条件<textarea name="acceptanceCriteria" rows={3} maxLength={20000} defaultValue={task?.acceptanceCriteria} /></label>
+          {task && <div className="field-info"><span>资源</span><span>{related.length ? related.join('、') : '暂无活跃资源声明'}</span></div>}
+        </> : <>
+          <label>资源名称<input ref={first} name="name" required maxLength={500} defaultValue={resource?.name} /></label>
+          <label>资源说明<textarea name="description" rows={3} maxLength={20000} defaultValue={resource?.description} /></label>
+          <label>使用约定<textarea name="accessNotes" rows={3} maxLength={20000} defaultValue={resource?.accessNotes} /></label>
+          <p className="form-note">说明访问和共享条件，请勿填写密码、密钥或订阅凭据。</p>
+        </>}
+        {error && <div className="error dialog-error" role="alert"><span>{error}</span>
+          {conflict && <button type="button" disabled={saving} onClick={() => void reloadLatest()}>载入最新内容</button>}</div>}
+      </div>
+      <div className="dialog-actions"><button type="button" className="secondary" onClick={close} disabled={saving}>取消</button>
+        <button type="submit" className="primary" disabled={saving || conflict}>{saving ? '正在保存…' : item ? '保存修改' : isTask ? '创建任务' : '添加资源'}</button></div>
+    </form>
+  </dialog>;
+}
+
+createRoot(document.getElementById('root')!).render(<Workspace />);

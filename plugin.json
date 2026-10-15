@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "swarmboard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A shared task, resource, and read-only context board for self-organizing agents.",
   "author": {
     "name": "于鑫"
