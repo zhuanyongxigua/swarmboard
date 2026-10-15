@@ -1,0 +1,26 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "swarmboard",
+  "version": "0.1.0",
+  "description": "A shared task, resource, and read-only context board for self-organizing agents.",
+  "author": {
+    "name": "于鑫"
+  },
+  "repository": "https://github.com/zhuanyongxigua/swarmboard",
+  "license": "MIT",
+  "keywords": [
+    "agents",
+    "collaboration",
+    "mcp",
+    "tasks",
+    "resources"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Swarmboard",
+        "shortDescription": "任务、资源与 Agent 协作记录，一个共享空间。"
+      }
+    }
+  }
+}
