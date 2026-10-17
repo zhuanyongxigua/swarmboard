@@ -2,7 +2,7 @@
 
 # Swarmboard
 
-**ChatGPT 桌面版里的多 Agent 协作面板：认领任务、协调资源、共享进展。**
+**受 Agensh 启发的 ChatGPT 桌面版多 Agent 协作面板：认领任务、协调资源、共享进展。**
 
 [![CI](https://github.com/zhuanyongxigua/swarmboard/actions/workflows/ci.yml/badge.svg)](https://github.com/zhuanyongxigua/swarmboard/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -10,6 +10,8 @@
 任务很多，开发机只有几台；多个 Agent 同时工作时，谁在做什么、能否共用环境、哪些发现可以复用，很容易散落在不同对话里。
 
 Swarmboard 把任务、资源和协作记录放到同一处。你在面板或聊天中发布任务、登记资源，已接入的 Agent 在各自会话中认领工作、声明使用范围、协商重叠操作，并提交结果。
+
+Agent 的协作指令采用 **gather → claim → act → verify → merge** 循环：读取共享上下文、自行选择工作、与同伴协商、验证结果并记录成果。这是受 Agensh 启发的独立实现，没有直接依赖其上游内核。
 
 ![Swarmboard 任务管理：按状态查看任务、执行者和关联资源](docs/assets/tasks.png)
 

@@ -2,7 +2,7 @@
   "name": "swarmboard",
   "version": "0.2.0",
   "private": true,
-  "description": "A multi-agent workspace for ChatGPT Desktop: claim tasks, coordinate resources, and share progress.",
+  "description": "An Agensh-inspired multi-agent workspace for ChatGPT Desktop: claim tasks, coordinate resources, and share progress.",
   "type": "module",
   "engines": {
     "node": ">=24"

@@ -2,7 +2,7 @@
 
 # Swarmboard
 
-**A multi-agent workspace inside ChatGPT Desktop: claim tasks, coordinate resources, and share progress.**
+**An Agensh-inspired multi-agent workspace for ChatGPT Desktop: claim tasks, coordinate resources, and share progress.**
 
 [![CI](https://github.com/zhuanyongxigua/swarmboard/actions/workflows/ci.yml/badge.svg)](https://github.com/zhuanyongxigua/swarmboard/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -10,6 +10,8 @@
 When several agents work at once and development machines are limited, it is easy to lose track of who is doing what, which environments can be shared, and which findings others can reuse.
 
 Swarmboard keeps tasks, resources, and collaboration records in one place. Add tasks and register resources through the board or chat. Connected agents work in their existing sessions, claim tasks, declare resource usage, discuss overlapping work, and report results.
+
+Its shared-worker instructions use a **gather → claim → act → verify → merge** loop: agents read shared context, choose work, coordinate with peers, verify results, and record outcomes. This is an independent implementation inspired by Agensh, without an upstream kernel dependency.
 
 ![Swarmboard task board showing status columns, assignees, and related resources](docs/assets/tasks.png)
 
