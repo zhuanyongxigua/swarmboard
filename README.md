@@ -70,7 +70,7 @@ Version 0.6.2 currently keeps model execution in bound official Codex sessions w
 
 Version 0.6.2 runs three equal persistent peers by default (configurable from 2 to 8) for a human-authorized project. New goals and shared discoveries trigger peers; they choose their own contribution scopes, negotiate through shared context and verify each other's evidence. No central model assigns subtasks or fixed roles. Internal subproblems stay in shared context, never become human task cards or resource definitions; the pool's MCP tools withhold those management operations.
 
-Bind the project once through `pool_configure` (see [setup and recovery](docs/event-workers.md), Chinese). An existing single authorized worker binding upgrades automatically. Peers get isolated Git checkouts and reuse session identities. No native scheduled conversations are created. The recovery timer reads durable events and never calls a model for an unchanged queue.
+Bind the project once through `pool_configure` (see [setup and recovery](docs/event-workers.md), Chinese). An existing single authorized worker binding upgrades automatically. Peers get isolated Git checkouts and reuse session identities. No native scheduled conversations are created. The recovery scan reads durable events without model calls, except for the bounded stranded-goal nudges described above.
 
 All goals done/canceled closes idle model processes; blocked or awaiting review waits for events. A Stop/Resume control prevents new turns while allowing active turns to finish safely. New human goals reuse the same organization. Normal CLI login, workspace sandbox and human approvals remain in force; event delivery does not supply missing external-harness or production permissions.
 
