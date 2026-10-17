@@ -29,8 +29,13 @@ await mkdir(path.join(destination, 'skills/shared-worker'), { recursive: true })
 await cp(path.join(root, 'skills/shared-worker/SKILL.md'), path.join(destination, 'skills/shared-worker/SKILL.md'));
 await cp(path.join(root, 'dist/widget.html'), path.join(destination, 'widget.html'));
 await mkdir(path.join(destination, 'docs'), { recursive: true });
-for (const name of ['architecture.md', 'testing.md', 'verification.md']) {
+for (const name of ['architecture.md', 'testing.md', 'verification.md', 'setup.md']) {
   await cp(path.join(root, 'docs', name), path.join(destination, 'docs', name));
+}
+// Keep the README image links usable in the portable plugin as well as on GitHub.
+await mkdir(path.join(destination, 'docs/assets'), { recursive: true });
+for (const name of ['tasks.png', 'resources.png', 'shared.png']) {
+  await cp(path.join(root, 'docs/assets', name), path.join(destination, 'docs/assets', name));
 }
 // Preserve dependency license notices without shipping development dependencies or their source trees.
 const packageDirectories = new Set();
