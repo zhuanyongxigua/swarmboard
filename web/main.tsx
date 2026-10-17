@@ -534,6 +534,7 @@ function EditorDialog({ editor, name, usages, resources, close, saved, failed, r
             {nativeFeedback && <p className={nativeFailed ? 'native-failure' : 'form-note'}
               role={nativeFailed ? 'alert' : 'status'}>{nativeFeedback}</p>}
           </div>}
+          {task && <label>{t("任务 ID")}<input readOnly value={task.id} /></label>}
           <label>{t("标题")}<input ref={first} name="title" required maxLength={500} defaultValue={task?.title} /></label>
           {task && <div className="form-columns">
             <label>{t("状态")}<select name="status" defaultValue={task.status}>{Object.entries(statuses).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>

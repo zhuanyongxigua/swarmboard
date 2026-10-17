@@ -25,6 +25,7 @@ test('keeps empty and populated columns aligned and scrolls only the overflowing
   const card = blocked.locator(`[data-task-id="${lastId}"]`);
   await card.focus(); await page.keyboard.press('Enter');
   await expect(page.getByLabel('标题', { exact: true })).toHaveValue(`${title} 11`);
+  await expect(page.getByLabel('任务 ID', { exact: true })).toHaveValue(lastId);
   await expect(page.getByLabel('任务说明')).toHaveValue(description);
   await page.keyboard.press('Escape');
   await blocked.evaluate(list => { list.scrollTop = 0; });
