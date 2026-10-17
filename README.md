@@ -60,23 +60,17 @@ codex plugin add swarmboard@swarmboard-local
 
 Restart the desktop app and open **Swarmboard** from the sidebar. After registering the marketplace, you can also install it through the desktop Plugins Directory under **Swarmboard Local**.
 
-The build produces the plugin directory `dist/desktop/` and the portable archive `dist/swarmboard-desktop-0.5.1.zip`. Installation currently uses a local marketplace; build the source before registering it. See [installation, upgrades, and troubleshooting](docs/setup.md) for details.
+The build produces the plugin directory `dist/desktop/` and the portable archive `dist/swarmboard-desktop-0.6.0.zip`. Installation currently uses a local marketplace; build the source before registering it. See [installation, upgrades, and troubleshooting](docs/setup.md) for details.
 
 ## Usage
 
-### Automatic task claiming
+### Self-organizing event workers
 
-Registered event workers react to new tasks and messages immediately and retain their sessions. Installations without an event worker retain the compatible native scheduled-claim setup. Open Swarmboard in a supported local desktop host to initialize that legacy path. There is no mode switch, settings dialog, model picker or workspace field. The host uses its configured model and an internal check interval. Execution targets come from the task and available resources rather than one project-wide directory.
+Version 0.6.0 runs three equal persistent peers by default (configurable from 2 to 8) for a human-authorized project. New goals and shared discoveries trigger peers; they choose their own contribution scopes, negotiate through shared context and verify each other's evidence. No central model assigns subtasks or fixed roles. Internal subproblems stay in shared context, never become human task cards or resource definitions; the pool's MCP tools withhold those management operations.
 
-First-time setup may open a native setup conversation. Once the host confirms its standalone scheduled automation, future runs no longer depend on that conversation. Each run atomically claims one available task, coordinates resource usage and submits verified work for review. If no work is available, it exits without registering a worker or changing the board.
+Bind the project once through `pool_configure` (see [setup and recovery](docs/event-workers.md), Chinese). An existing single authorized worker binding upgrades automatically. Peers get isolated Git checkouts and reuse session identities. No native scheduled conversations are created. The recovery timer reads durable events and never calls a model for an unchanged queue.
 
-Setup is never shown as complete just because a message was sent. Pending or uncertain setup cannot create duplicate jobs; read-only reconciliation is required. A short error explains missing host capabilities or a failed setup; the normal refresh action retries it. Browser preview remains a board preview and does not start native automation.
-
-This uses the native scheduler approach of [Codex Taskboard](https://github.com/chuspeeism/dashi-taskboard) through official host tools, without CDP injection. Authentication stays in the host. The legacy scheduled workflow is separate from the event workers below; neither claims to reproduce the full Agensh runtime.
-
-### Event-driven worker sessions
-
-Version 0.5.0 can wake persistent local Codex sessions on new tasks and peer messages. Busy sessions queue later events and reuse the same thread. Register an explicitly authorized workspace and task scope; normal sandbox and human approval boundaries remain in force. A 30-second scan only recovers missed notifications. Event workers take precedence over the legacy cron path. See [event worker setup and recovery](docs/event-workers.md) (Chinese).
+All goals done/canceled closes idle model processes; blocked or awaiting review waits for events. A Stop/Resume control prevents new turns while allowing active turns to finish safely. New human goals reuse the same organization. Normal CLI login, workspace sandbox and human approvals remain in force; event delivery does not supply missing external-harness or production permissions.
 
 ### Discuss a plan in the native conversation
 
@@ -117,7 +111,7 @@ and release your resource-use declarations.
 
 Review results in the board while agents execute work in their existing authorized workspaces.
 
-**Posted tasks are picked up by the native scheduled automation once initialization succeeds.** The desktop host must remain running. You can also connect existing agent sessions. Resource sharing also depends on agents following their agreements: a usage declaration is not an operating-system lock and does not block other processes from accessing a machine.
+**After project binding, new goals trigger the equal-peer organization.** The desktop host must remain running. You can also connect existing agent sessions. Resource sharing also depends on agents following their agreements: a usage declaration is not an operating-system lock and does not block other processes from accessing a machine.
 
 ## Development and documentation
 

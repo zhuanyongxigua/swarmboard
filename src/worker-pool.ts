@@ -1,0 +1,99 @@
+// Supply equal persistent peers and isolated execution directories. The pool
+// manages capacity and lifecycle only; workers decide their own contributions.
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { AppError, parse, type Store } from './store.js';
+import { poolSchemas, type Pool, type WorkerStore } from './worker-store.js';
+
+export class WorkerPool {
+  constructor(private workers: WorkerStore, private board: Store, private databasePath: string) {}
+  configure(input: unknown) {
+    const data = parse(poolSchemas.configure, input);
+    let workspacePath: string;
+    try {
+      if (!isAbsolute(data.workspacePath) || !statSync(data.workspacePath).isDirectory()) throw new Error();
+      workspacePath = realpathSync(data.workspacePath);
+    } catch { throw new AppError('INVALID_WORKSPACE', 'Select an existing authorized absolute project directory'); }
+    for (const id of data.taskIds) if (!this.board.db.prepare('SELECT id FROM tasks WHERE id=?').get(id)) throw new AppError('NOT_FOUND', 'Subscribed human task not found', 404);
+    return this.workers.transaction(() => {
+      if (this.workers.list().some(w => !w.poolId && ['running', 'uncertain'].includes(w.status))) throw new AppError('LEGACY_WORK_ACTIVE', 'Finish or reconcile the existing individual delivery before starting a peer pool', 409);
+      const before = this.workers.pool();
+      if ((before?.version ?? 0) !== data.expectedVersion) throw new AppError('VERSION_CONFLICT', 'Pool changed; read runtime_read', 409);
+      if (before && (before.memberIds.length || ['active', 'stopping'].includes(before.state))) throw new AppError('POOL_BOUND', 'The pool already has persistent members; stop/resume it rather than replacing their workspaces', 409);
+      const pool: Pool = { id: before?.id ?? randomUUID(), version: (before?.version ?? 0) + 1,
+        workspacePath, size: data.size, taskIds: [...new Set(data.taskIds)].sort(), enabled: true,
+        memberIds: [], state: 'ready', error: '' };
+      return this.workers.savePool(pool);
+    });
+  }
+  control(input: unknown) {
+    const data = parse(poolSchemas.control, input);
+    return this.workers.transaction(() => {
+      const pool = this.workers.pool();
+      if (!pool || pool.version !== data.expectedVersion) throw new AppError('VERSION_CONFLICT', 'Pool changed; read runtime_read', 409);
+      return this.workers.savePool({ ...pool, enabled: data.enabled, version: pool.version + 1,
+        state: data.enabled ? 'ready' : 'stopping' });
+    });
+  }
+  private directory(pool: Pool, index: number) {
+    const root = this.databasePath === ':memory:' ? join(tmpdir(), 'swarmboard-pools', pool.id)
+      : join(dirname(this.databasePath), 'workspaces', pool.id);
+    mkdirSync(root, { recursive: true });
+    const target = join(root, `peer-${index + 1}`);
+    const ready = join(root, `peer-${index + 1}.ready`);
+    // Each checkout owns its Git metadata, so a workspace-write session needs
+    // no write access to a sibling checkout or the source repository's .git.
+    if (!existsSync(ready)) {
+      if (existsSync(target)) throw new AppError('WORKSPACE_INCOMPLETE', 'An interrupted workspace preparation needs inspection before reuse', 409);
+      let repository = false;
+      try { repository = execFileSync('git', ['-C', pool.workspacePath, 'rev-parse', '--is-inside-work-tree'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'true'; } catch { /* A non-Git workspace gets an empty isolated directory. */ }
+      if (repository) {
+        execFileSync('git', ['clone', '--local', '--no-hardlinks', '--', pool.workspacePath, target], { stdio: 'ignore', timeout: 30000 });
+        execFileSync('git', ['-C', target, 'switch', '-c', `full/swarmboard-${pool.id.slice(0,8)}-peer-${index + 1}`], { stdio: 'ignore' });
+        execFileSync('git', ['-C', target, 'config', 'push.default', 'nothing'], { stdio: 'ignore' });
+        let origin = '';
+        try { origin = execFileSync('git', ['-C', pool.workspacePath, 'remote', 'get-url', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { /* Local-only repositories have no publishing target. */ }
+        if (/^https?:\/\//i.test(origin)) { const url = new URL(origin); url.username = ''; url.password = ''; origin = url.toString(); }
+        if (origin) execFileSync('git', ['-C', target, 'remote', 'set-url', 'origin', origin], { stdio: 'ignore' });
+        else execFileSync('git', ['-C', target, 'remote', 'remove', 'origin'], { stdio: 'ignore' });
+      } else mkdirSync(target);
+      writeFileSync(ready, 'Prepared by Swarmboard; do not remove workspaces automatically.\n', { mode: 0o600 });
+    }
+    return realpathSync(target);
+  }
+  ensureMembers(pool: Pool) {
+    for (let index = 0; index < pool.size; index++) {
+      const fresh = this.workers.pool();
+      if (!fresh?.enabled) return fresh ?? pool;
+      pool = fresh;
+      if (pool.memberIds[index]) continue;
+      const workspacePath = this.directory(pool, index);
+      // register is idempotently recoverable if the process exits before the
+      // pool's member list was checkpointed.
+      const member = this.workers.list().find(w => w.workspacePath === workspacePath)
+        ?? this.workers.register({ name: `Swarmboard peer ${index + 1}`, workspacePath, taskIds: pool.taskIds });
+      this.workers.save({ ...member, poolId: pool.id });
+      if (!this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(member.id)) this.board.registerAgent({ agentId: member.id, name: member.name });
+      pool = this.workers.checkpointPool({ ...pool, memberIds: [...pool.memberIds, member.id] });
+    }
+    return pool;
+  }
+  sync(busy: boolean) {
+    let pool = this.workers.pool(); if (!pool) return null;
+    const tasks = this.board.board().tasks.filter(t => !pool!.taskIds.length || pool!.taskIds.includes(t.id));
+    let state: Pool['state'];
+    if (!pool.enabled) state = busy ? 'stopping' : 'stopped';
+    else if (tasks.length && tasks.every(t => ['done', 'canceled'].includes(t.status))) state = busy ? 'stopping' : 'completed';
+    else if (tasks.some(t => ['todo', 'in_progress'].includes(t.status))) state = 'active';
+    else state = tasks.length ? 'waiting' : 'ready';
+    if (state === 'active' && pool.memberIds.length < pool.size) {
+      pool = this.workers.checkpointPool({ ...pool, state: 'active' });
+      try { pool = this.ensureMembers(pool); } catch { state = 'error'; pool = { ...pool, error: 'Unable to prepare isolated peer workspaces; no task was executed' }; }
+    }
+    if (pool.state !== state) pool = this.workers.checkpointPool({ ...pool, state, error: state === 'error' ? pool.error : '' });
+    return pool;
+  }
+}

@@ -26,7 +26,7 @@ type Usage = {
 type Board = { tasks: Task[]; resources: Resource[]; agents: Agent[]; usages: Usage[]; entries: Entry[]; cursor: number };
 type Editor = { type: 'task'; item?: Task } | { type: 'resource'; item?: Resource };
 type Tab = 'tasks' | 'resources' | 'shared';
-type RuntimeStatus = { mode: 'events'; workers: { id: string; name: string; enabled: boolean; status: string; error: string }[]; error: string };
+type RuntimeStatus = { mode: 'events'; pool?: { size: number; enabled: boolean; version: number; state: string; error: string } | null; workers: { id: string; name: string; poolId?: string; enabled: boolean; status: string; error: string }[]; error: string };
 
 
 const statuses: Record<string, string> = {
@@ -74,6 +74,7 @@ async function operation<T>(name: string, args: Record<string, unknown> = {}): P
   let body: Record<string, unknown> | undefined;
   const { id, ...patch } = args;
   if (name === 'runtime_read') url = '/api/runtime';
+  if (name === 'pool_control') { url = '/api/pool/control'; method = 'POST'; body = args; }
   if (name === 'task_create') { url = '/api/tasks'; method = 'POST'; body = args; }
   if (name === 'task_update') { url = `/api/tasks/${encodeURIComponent(String(id))}`; method = 'PATCH'; body = patch; }
   if (name === 'resource_create') { url = '/api/resources'; method = 'POST'; body = args; }
@@ -110,6 +111,14 @@ function Workspace() {
   const [automation, setAutomation] = useState<AutomationConfig | null>(null);
   const [automationError, setAutomationError] = useState('');
   const [eventRuntime, setEventRuntime] = useState<RuntimeStatus | null>(null);
+  const [poolBusy, setPoolBusy] = useState(false);
+  async function controlPool() {
+    const pool = eventRuntime?.pool; if (!pool || poolBusy) return;
+    setPoolBusy(true);
+    try { await operation('pool_control', { expectedVersion: pool.version, enabled: !pool.enabled }); setEventRuntime(await operation<RuntimeStatus>('runtime_read')); }
+    catch (error) { setError(message(error)); }
+    finally { setPoolBusy(false); }
+  }
   const automationBusy = useRef(false);
   const [expandedResource, setExpandedResource] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
@@ -193,7 +202,7 @@ function Workspace() {
     async function start() {
       try {
         if (window.parent !== window) {
-          const app = new App({ name: 'Swarmboard', version: '0.5.1' });
+          const app = new App({ name: 'Swarmboard', version: '0.6.0' });
           localBridge = app;
           app.ontoolresult = result => {
             try {
@@ -323,8 +332,11 @@ function Workspace() {
       <button className="refresh-button" type="button" aria-label={t("刷新面板")}
         disabled={refreshing} onClick={() => void manualRefresh()}>↻</button>
     </header>
-    {eventRuntime?.workers.length ? <div className="automation-notice" role="status">
-      <span>{t('事件协作')} · {eventRuntime.workers.filter(w => w.enabled).length} {t('个工作会话')}</span>
+    {eventRuntime?.pool || eventRuntime?.workers.length ? <div className="automation-notice" role="status">
+      {eventRuntime.pool ? <div className="pool-controls"><span>{t('自协作池')} · {t('最多')} {eventRuntime.pool.size} {t('个平等 worker')} · {t(({ ready: '等待任务', active: '协作中', waiting: '等待事件', completed: '任务完成，已停止', stopping: '正在安全停止', stopped: '已停止', error: '需要处理' } as Record<string,string>)[eventRuntime.pool.state] ?? eventRuntime.pool.state)}</span>
+        <button type="button" className="secondary" disabled={poolBusy} onClick={() => void controlPool()}>{t(eventRuntime.pool.enabled ? '停止协作' : '恢复协作')}</button></div>
+        : <span>{t('事件协作')} · {eventRuntime.workers.filter(w => w.enabled).length} {t('个工作会话')}</span>}
+      {eventRuntime.pool?.error ? <p role="alert">{eventRuntime.pool.error}</p> : null}
       {eventRuntime.workers.filter(w => w.error).map(w => <p role="alert" key={w.id}>{w.name}: {w.error}</p>)}
       {eventRuntime.error ? <p role="alert">{eventRuntime.error}</p> : null}
     </div> : autoUnavailable ? <p className="automation-notice" role="status">{t("当前宿主不支持自动认领，任务与资源仍可使用。")}</p>

@@ -47,7 +47,7 @@ Restart the desktop app to load the new files. Collaboration data lives outside 
 `npm run package:desktop` produces:
 
 - `dist/desktop/`: the plugin directory.
-- `dist/swarmboard-desktop-0.5.1.zip`: a portable archive whose root is the plugin root.
+- `dist/swarmboard-desktop-0.6.0.zip`: a portable archive whose root is the plugin root.
 
 Extract the ZIP into a local marketplace and point its `source.path` at the extracted plugin root. The configuration uses `${PLUGIN_ROOT}`, so the extracted directory can be relocated. The target client still needs access to Node.js 24+. A public source repository or ZIP does not mean the plugin is listed in the OpenAI Plugin Directory.
 
@@ -99,12 +99,12 @@ The command builds the current source, starts a temporary loopback service, writ
 
 **The desktop app cannot find node.** Confirm that its execution environment can find Node.js 24+. A working terminal environment does not establish the desktop launch environment. Version 0.4.0 packages a POSIX launcher (started through the bare executable name `sh`, as required by the plugin loader) that checks Node.js 24+ and `node:sqlite` before starting the server. It searches PATH, NVM, Volta, and standard Homebrew/system locations without loading shell profiles. For a custom installation, set `SWARMBOARD_NODE` to the absolute executable path in the MCP server environment, then rebuild and reinstall. An invalid override fails clearly on stderr. The build keeps direct Node launch on Windows. If the app reports `MCP startup failed: No such file or directory`, check the installed launch configuration as well as whether the plugin directory exists.
 
-**No work starts after adding a task.** Check the automatic initialization error and the native scheduler status. Scheduled runs require the desktop host and local Swarmboard tools.
+**No work starts after adding a task.** Read `runtime_read`: verify the authorized project binding, pool enabled/state, queued delivery and any approval or uncertain-session error. A new installation needs one `pool_configure` binding. The local listener and CLI must be available. Do not create a native scheduler as a workaround.
 
 **Does the absence of usage declarations mean a machine is idle?** No. Declarations and heartbeats describe collaboration records. Verify the actual resource state separately.
 
-## Default automatic claiming
+## Default equal-peer organization
 
-Open the plugin in a local desktop host with native automation tools and Swarmboard MCP available. Automatic initialization creates or restores one board-specific standalone native schedule. No manual project binding is required; a fresh board uses a projectless native job and resolves authorized execution targets from its tasks/resources. Legacy project mappings remain supported internally.
+Bind a human-authorized source project once with `pool_configure`; three equal peers are provided by default. A single existing authorized worker binding upgrades automatically and retains an explicit human pause. Peers receive committed task/context events and negotiate their own scopes in shared context. Internal subproblems never become task cards or resource definitions.
 
-The first setup uses a native conversation and the host's configured model. It must report the actual scheduler result before any automatic claims are allowed. Pending/unknown outcomes are reconciled read-only rather than blindly retried. The normal board refresh retries a failed setup; periodic UI refresh only reads state and cannot spawn repeated setup chats. Keep the host running for scheduled execution.
+All goals done/canceled closes idle model processes; blocked/in_review waits for events. Stop/Resume is versioned and does not discard code or history. Active turns finish safely. No native scheduled conversation is created; old schedules require explicit cleanup through official host tools. Before upgrading a separately running `--event-runtime` daemon, stop that old version safely, then start the installed new entrypoint. See [lifecycle and recovery](event-workers.md) (Chinese).

@@ -39,6 +39,10 @@ export function createApp(options: AppOptions = {}) {
   app.use(express.json({limit:'128kb'}));
   app.get('/',(_req,res,next)=>res.sendFile(widgetPath,error=>{if(error)next(new AppError('UI_NOT_BUILT','Build the UI before opening the board',503));}));
   app.get('/api/runtime', (_req,res) => res.json(options.runtime?.status() ?? {mode:'events',workers:[],error:''}));
+  app.post('/api/pool/control', (req,res,next) => {
+    try { if (!options.runtime) throw new AppError('RUNTIME_UNAVAILABLE', 'Event runtime is not active in this preview', 503); res.json(options.runtime.controlPool(req.body)); }
+    catch (error) { next(error); }
+  });
   app.get('/api/board',(_req,res)=>res.json(store.board()));
   const route = (method:'post'|'patch',path:string,operation:(req:Request)=>unknown)=>app[method](path,(req,res,next)=>{try{res.json(operation(req));}catch(error){next(error);}});
   route('post','/api/tasks',req=>store.createTask(req.body));

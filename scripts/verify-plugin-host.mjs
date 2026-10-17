@@ -68,7 +68,7 @@ async function scenario(name, rejected) {
       assert(server, `Swarmboard missing from host inventory: ${stderr.slice(-1200)}`);
       assert.equal(server.toolsError, null);
       assert(server.tools.board_open, 'Host must discover board_open');
-      for (const name of ['automation_read', 'automation_ensure', 'automation_prepare', 'automation_claim', 'automation_confirm', 'automation_setup_failed', 'automation_reconcile', 'runtime_read', 'worker_register', 'worker_update', 'worker_reconcile']) {
+      for (const name of ['automation_read', 'automation_ensure', 'automation_prepare', 'automation_claim', 'automation_confirm', 'automation_setup_failed', 'automation_reconcile', 'runtime_read', 'worker_register', 'worker_update', 'worker_reconcile', 'pool_configure', 'pool_control', 'context_search']) {
         assert(server.tools[name], `Host must discover ${name}`);
       }
       assert.deepEqual(server.tools.board_open._meta['openai/ui'].entrypoints, [{ type: 'global' }, { type: 'thread' }]);

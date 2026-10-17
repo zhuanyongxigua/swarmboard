@@ -150,3 +150,4 @@ dialog::backdrop { background: light-dark(#0005, #0008); }
 }
 
 .automation-notice { margin: 0; padding: 7px 22px; color: var(--muted); font-size: 11px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.pool-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

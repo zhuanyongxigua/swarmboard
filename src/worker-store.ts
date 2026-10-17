@@ -13,6 +13,7 @@ export const workerSchemas = {
   update: z.object({ id: z.string().min(1), expectedVersion: z.number().int().positive(), enabled: z.boolean() }).strict(),
 };
 export interface Worker {
+  poolId?: string;
   id: string; name: string; workspacePath: string; taskIds: string[]; threadId: string | null;
   enabled: boolean; version: number; cursor: number;
   status: 'idle' | 'running' | 'error' | 'uncertain'; error: string;
@@ -30,6 +31,7 @@ export class WorkerStore {
     this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;
       CREATE TABLE IF NOT EXISTS workers(id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runtime_owner(id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL, pid INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS worker_pool(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
     `);
   }
   close() { this.db.close(); }
@@ -105,4 +107,28 @@ export class WorkerStore {
   owns(token: string) { return this.db.prepare('SELECT token FROM runtime_owner WHERE id=1').get()?.token === token; }
   release(token: string) { this.db.prepare('DELETE FROM runtime_owner WHERE token=?').run(token); }
   owner() { return this.db.prepare('SELECT pid FROM runtime_owner WHERE id=1').get() ?? null; }
+  pool(): Pool | null {
+    const row = this.db.prepare('SELECT data FROM worker_pool WHERE id=1').get();
+    return row ? JSON.parse(String(row.data)) as Pool : null;
+  }
+  savePool(pool: Pool) {
+    this.db.prepare('INSERT INTO worker_pool VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(JSON.stringify(pool)); return pool;
+  }
+  checkpointPool(pool: Pool) {
+    return this.transaction(() => {
+      const current = this.pool();
+      if (!current || current.id !== pool.id || current.workspacePath !== pool.workspacePath) throw new AppError('VERSION_CONFLICT', 'Pool configuration changed', 409);
+      return this.savePool({ ...pool, enabled: current.enabled, version: current.version,
+        state: current.version === pool.version ? pool.state : current.state });
+    });
+  }
 }
+
+export interface Pool {
+  id: string; version: number; workspacePath: string; size: number; taskIds: string[];
+  enabled: boolean; memberIds: string[]; state: 'ready' | 'active' | 'waiting' | 'completed' | 'stopping' | 'stopped' | 'error'; error: string;
+}
+export const poolSchemas = {
+  configure: z.object({ workspacePath: z.string().max(4096), size: z.number().int().min(2).max(8).default(3), taskIds: z.array(z.string().min(1).max(128)).max(200).default([]), expectedVersion: z.number().int().nonnegative().default(0) }).strict(),
+  control: z.object({ expectedVersion: z.number().int().positive(), enabled: z.boolean() }).strict(),
+};

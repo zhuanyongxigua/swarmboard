@@ -18,17 +18,24 @@ export class CodexSession implements SessionAdapter {
   private turns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
   private early = new Map<string, any>();
   private initialized?: Promise<void>;
-  constructor(private options: { databasePath: string; serverEntry: string; binary?: string; requestTimeoutMs?: number; onApproval?: () => void }) {}
+  constructor(private options: { databasePath: string; serverEntry: string; workerId?: string; poolMember?: boolean; binary?: string; requestTimeoutMs?: number; onApproval?: () => void }) {}
   private start() {
     return this.initialized ??= (async () => {
       const bundled = '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex';
       const binary = this.options.binary ?? process.env.SWARMBOARD_CODEX ?? (existsSync(bundled) ? bundled : 'codex');
       const config = (key: string, value: unknown) => ['-c', `${key}=${JSON.stringify(value)}`];
       this.child = spawn(binary, ['app-server', '--stdio',
+        ...config('plugins."swarmboard@swarmboard-local".enabled', false),
+        // A disabled, previously absent MCP entry still needs a valid stdio
+        // transport in the host configuration schema.
+        ...config('mcp_servers.swarmboard.command', process.execPath),
+        ...config('mcp_servers.swarmboard.enabled', false),
         ...config('mcp_servers.swarmboard_worker.command', process.execPath),
         ...config('mcp_servers.swarmboard_worker.args', [this.options.serverEntry]),
         ...config('mcp_servers.swarmboard_worker.env.SWARMBOARD_DB_PATH', this.options.databasePath),
         ...config('mcp_servers.swarmboard_worker.env.SWARMBOARD_DISABLE_RUNTIME', '1'),
+        ...config('mcp_servers.swarmboard_worker.env.SWARMBOARD_WORKER_ID', this.options.workerId ?? ''),
+        ...config('mcp_servers.swarmboard_worker.env.SWARMBOARD_POOL_MEMBER', this.options.poolMember ? '1' : '0'),
       ], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, SWARMBOARD_DISABLE_RUNTIME: '1' } });
       // stderr can include command output; drain it without recording credentials or task data.
       this.child.stderr.resume();
@@ -36,7 +43,7 @@ export class CodexSession implements SessionAdapter {
       lines.on('line', line => { try { this.receive(JSON.parse(line)); } catch { /* Ignore non-protocol diagnostics. */ } });
       const failed = () => this.fail(new Error('Codex App Server disconnected; inspect the bound session before retrying'));
       this.child.once('error', failed); this.child.once('exit', failed); this.child.stdin.on('error', failed); this.child.stdout.on('error', failed);
-      await this.request('initialize', { clientInfo: { name: 'swarmboard-event-worker', title: 'Swarmboard event worker', version: '0.5.1' }, capabilities: { experimentalApi: true } });
+      await this.request('initialize', { clientInfo: { name: 'swarmboard-event-worker', title: 'Swarmboard event worker', version: '0.6.0' }, capabilities: { experimentalApi: true } });
       this.send({ method: 'initialized' });
     })();
   }

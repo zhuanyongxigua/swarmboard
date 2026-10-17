@@ -6,6 +6,7 @@ import { createMcpServer } from './mcp.js';
 import { defaultDatabasePath, defaultWidgetPath } from './paths.js';
 import { Store } from './store.js';
 import { EventRuntime } from './event-runtime.js';
+import { WorkerStore } from './worker-store.js';
 
 export interface StdioOptions { dbPath?: string; widgetPath?: string }
 
@@ -14,13 +15,29 @@ export async function startStdioServer(options: StdioOptions = {}) {
   accessSync(widgetPath, constants.R_OK);
   const databasePath = options.dbPath ?? defaultDatabasePath();
   const store = new Store(databasePath);
-  const runtime = process.env.SWARMBOARD_DISABLE_RUNTIME === '1' ? undefined : new EventRuntime(store, { databasePath, serverEntry: fileURLToPath(import.meta.url) });
+  const runtime = process.env.SWARMBOARD_DISABLE_RUNTIME === '1' ? undefined : new EventRuntime(store, { databasePath, serverEntry: fileURLToPath(import.meta.url), autoPool: true });
   runtime?.start();
-  const server = createMcpServer(store, widgetPath, runtime);
+  const poolMember = process.env.SWARMBOARD_POOL_MEMBER === '1';
+  const workerId = process.env.SWARMBOARD_WORKER_ID;
+  const peerState = poolMember && workerId ? new WorkerStore(databasePath + '.runtime.sqlite') : undefined;
+  let updateCursor = peerState && workerId ? (peerState.get(workerId).deliveryCursor ?? peerState.get(workerId).cursor) : 0;
+  const mayAct = () => {
+    const pool = peerState?.pool();
+    if (!pool?.enabled) return false;
+    const tasks = store.board().tasks.filter(t => !pool.taskIds.length || pool.taskIds.includes(t.id));
+    return tasks.some(t => !['done', 'canceled'].includes(t.status));
+  };
+  const sharedUpdates = () => {
+    const pool = peerState?.pool(); if (!pool) return undefined;
+    const events = store.readEntries({ after: updateCursor, limit: 100 }); updateCursor = events.cursor;
+    const items = events.items.filter(e => e.agentId !== workerId && (!e.taskId || !pool.taskIds.length || pool.taskIds.includes(e.taskId)) && (!e.recipientId || e.recipientId === workerId));
+    return { control: mayAct() ? 'continue-if-useful' : 'stop-after-safe-boundary', items, hasMore: events.hasMore };
+  };
+  const server = createMcpServer(store, widgetPath, runtime, { poolMember, ...(peerState ? { sharedUpdates, mayAct } : {}) });
   const transport = new StdioServerTransport();
   let closing: Promise<void> | undefined;
   const close = () => closing ??= (async () => {
-    try { await runtime?.close(); await server.close(); } finally { store.close(); }
+    try { await runtime?.close(); await server.close(); } finally { peerState?.close(); store.close(); }
   })();
   try { await server.connect(transport); }
   catch (error) { await close(); throw error; }
@@ -38,7 +55,7 @@ function isEntrypoint(): boolean {
 async function startEventDaemon() {
   const databasePath = defaultDatabasePath();
   const store = new Store(databasePath);
-  const runtime = new EventRuntime(store, { databasePath, serverEntry: fileURLToPath(import.meta.url), keepAlive: true });
+  const runtime = new EventRuntime(store, { databasePath, serverEntry: fileURLToPath(import.meta.url), keepAlive: true, autoPool: true });
   runtime.start();
   let closing: Promise<void> | undefined;
   return { close: () => closing ??= (async () => { try { await runtime.close(); } finally { store.close(); } })() };

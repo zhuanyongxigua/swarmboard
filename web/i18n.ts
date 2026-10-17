@@ -2,6 +2,7 @@
 // the existing Chinese desktop default; ?lang=en selects the English preview.
 export const locale = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('lang') === 'en' ? 'en' : 'zh-CN';
 const english: Record<string, string> = {
+  '最多': 'Up to', '自协作池': 'Self-organizing pool', '个平等 worker': 'equal peers', '等待任务': 'Waiting for tasks', '协作中': 'Working', '等待事件': 'Waiting for events', '任务完成，已停止': 'Goals complete, stopped', '正在安全停止': 'Stopping safely', '已停止': 'Stopped', '需要处理': 'Needs attention', '停止协作': 'Stop collaboration', '恢复协作': 'Resume collaboration',
   '任务 ID': 'Task ID',
   '事件协作': 'Event collaboration', '个工作会话': 'worker sessions',
   '当前宿主不支持自动认领，任务与资源仍可使用。': 'Auto-claim is unavailable in this host. Tasks and resources are still available.',

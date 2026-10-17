@@ -8,6 +8,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { Task, Resource, Usage, Entry } from '../../src/store.js';
+import { Store } from '../../src/store.js';
+import { WorkerStore } from '../../src/worker-store.js';
+import { WorkerPool } from '../../src/worker-pool.js';
 
 const packageVersion = (JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as {version: string}).version;
 const archive = resolve(`dist/swarmboard-desktop-${packageVersion}.zip`);
@@ -51,6 +54,28 @@ beforeAll(() => {
 });
 afterAll(async () => { await Promise.all([...clients].map(client => client.close())); if (root) rmSync(root, { recursive: true, force: true }); });
 describe('portable desktop plugin', () => {
+  it('enforces the pool tool boundary and mid-turn updates in the real packaged child process', async () => {
+    const path = join(root, 'pool-peer.sqlite'); const board = new Store(path); const state = new WorkerStore(path + '.runtime.sqlite');
+    const pool = new WorkerPool(state, board, path).configure({ workspacePath: work });
+    const member = state.register({ name: 'Synthetic peer', workspacePath: work }); state.save({ ...member, poolId: pool.id });
+    state.savePool({ ...pool, memberIds: [member.id] });
+    board.registerAgent({ agentId: member.id, name: member.name }); board.registerAgent({ agentId: 'other-peer', name: 'Peer' });
+    const goal = board.createTask({ title: 'One human goal' });
+    const client = await connect(path, work, { SWARMBOARD_DISABLE_RUNTIME: '1', SWARMBOARD_POOL_MEMBER: '1', SWARMBOARD_WORKER_ID: member.id });
+    try {
+      const names = (await client.listTools()).tools.map(t => t.name);
+      for (const name of ['task_create','resource_create','resource_update','pool_configure','pool_control']) expect(names).not.toContain(name);
+      await call(client, 'board_read');
+      const fact = board.publishEntry({ agentId: 'other-peer', taskId: goal.id, kind: 'FACT', summary: 'New evidence while the turn is active' });
+      const response = await client.callTool({ name: 'board_read', arguments: {} });
+      expect(JSON.stringify((response.content as unknown[]).slice(1))).toContain(fact.summary);
+      expect(JSON.stringify(((await client.callTool({ name: 'board_read', arguments: {} })).content as unknown[]).slice(1))).not.toContain(fact.summary);
+      new WorkerPool(state, board, path).control({ expectedVersion: 1, enabled: false });
+      const stopped = await client.callTool({ name: 'task_claim', arguments: { id: goal.id, agentId: member.id, expectedVersion: goal.version } });
+      expect(stopped.isError).toBe(true); expect(JSON.stringify(stopped.content)).toContain('POOL_STOPPING');
+      expect(board.board().tasks).toHaveLength(1); expect(board.board().resources).toHaveLength(0);
+    } finally { await close(client); state.close(); board.close(); }
+  });
   it('ships a self-contained local stdio plugin without runtime state or private paths', () => {
     const manifest = JSON.parse(readFileSync(join(pluginRoot, 'plugin.json'), 'utf8'));
     expect(manifest).toMatchObject({ name: 'swarmboard', version: packageVersion, license: 'MIT', extensions: { 'com.openai': { requires_local_executor: true } } });

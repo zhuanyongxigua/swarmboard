@@ -7,14 +7,16 @@ import { Store, type Entry } from './store.js';
 import { WorkerStore, type Worker } from './worker-store.js';
 import { CodexSession, UncertainDelivery, type SessionAdapter } from './codex-session.js';
 import { workerPrompt } from './worker-prompt.js';
+import { WorkerPool } from './worker-pool.js';
 
 export interface RuntimeOptions {
   databasePath: string; serverEntry: string;
   adapter?: (worker: Worker) => SessionAdapter;
-  fallbackMs?: number; debounceMs?: number; keepAlive?: boolean;
+  fallbackMs?: number; debounceMs?: number; keepAlive?: boolean; autoPool?: boolean;
 }
 export class EventRuntime {
   readonly workers: WorkerStore;
+  readonly pool: WorkerPool;
   private token = randomUUID();
   private watcher?: FSWatcher;
   private fileWatchers = new Map<string, FSWatcher>();
@@ -26,8 +28,22 @@ export class EventRuntime {
   private lastError = '';
   constructor(readonly board: Store, readonly options: RuntimeOptions) {
     this.workers = new WorkerStore(options.databasePath === ':memory:' ? ':memory:' : options.databasePath + '.runtime.sqlite');
+    this.pool = new WorkerPool(this.workers, board, options.databasePath);
   }
   start() {
+    // Previously registered workspace bindings are already human-authorized.
+    // Upgrade one legacy binding to a default peer pool, never guess a project
+    // from task text or use the installed plugin directory as a working target.
+    if (this.options.autoPool && !this.workers.pool()) {
+      const legacy = this.workers.list().filter(w => !w.poolId);
+      const source = process.env.SWARMBOARD_PROJECT_PATH || (legacy.length === 1 ? legacy[0]!.workspacePath : '');
+      if (source) {
+        try {
+          const configured = this.pool.configure({ workspacePath: source });
+          if (!process.env.SWARMBOARD_PROJECT_PATH && !legacy[0]!.enabled) this.pool.control({ expectedVersion: configured.version, enabled: false });
+        } catch { if (!this.workers.pool()) this.lastError = 'Unable to initialize the default organization from the authorized project'; }
+      }
+    }
     if (this.options.databasePath !== ':memory:') {
       const boardName = basename(this.options.databasePath);
       const names = [boardName, boardName + '-wal', boardName + '.runtime.sqlite', boardName + '.runtime.sqlite-wal'];
@@ -62,9 +78,11 @@ export class EventRuntime {
     this.debounce.unref();
   }
   status() {
-    return { mode: 'events' as const, owner: this.workers.owner(), workers: this.workers.list(), error: this.lastError };
+    return { mode: 'events' as const, owner: this.workers.owner(), workers: this.workers.list(), pool: this.workers.pool(), error: this.lastError };
   }
-  hasWorkers() { return this.workers.list().length > 0; }
+  hasWorkers() { return this.workers.list().length > 0 || this.workers.pool() !== null; }
+  configurePool(input: unknown) { const pool = this.pool.configure(input); this.notify(); return pool; }
+  controlPool(input: unknown) { const pool = this.pool.control(input); this.notify(); return pool; }
   register(input: unknown) {
     const worker = this.workers.register(input);
     this.board.registerAgent({ agentId: worker.id, name: worker.name });
@@ -73,6 +91,17 @@ export class EventRuntime {
   requestReconcile(input: unknown) { const worker = this.workers.requestReconcile(input); this.notify(); return worker; }
   update(input: unknown) { const worker = this.workers.update(input); this.notify(); return worker; }
   private relevant(worker: Worker, entry: Entry) {
+    if (worker.poolId) {
+      if (entry.agentId === worker.id) return false;
+      const pool = this.workers.pool();
+      if (!pool || pool.id !== worker.poolId) return false;
+      if (entry.recipientId) return entry.kind === 'MESSAGE' && entry.recipientId === worker.id;
+      if (entry.taskId && pool.taskIds.length && !pool.taskIds.includes(entry.taskId)) return false;
+      // A human goal is shared by the whole organization. Peers' claims,
+      // counterexamples and patches are not limited to the card's assignee.
+      if (entry.kind === 'MESSAGE' || ['FACT', 'FAIL', 'CLAIM', 'PATCH_SUMMARY'].includes(entry.kind)) return true;
+      return entry.kind === 'OBSERVED' && !!entry.taskId;
+    }
     if (entry.taskId && entry.kind === 'OBSERVED') {
       let completed = false;
       try { completed = JSON.parse(entry.detail).status === 'done'; } catch { /* Other observations are not task transitions. */ }
@@ -111,7 +140,18 @@ export class EventRuntime {
   }
   async scan() {
     if (this.closed || !this.hasWorkers() || !this.workers.acquire(this.token, process.pid)) return;
+    const before = this.workers.pool();
+    const busy = !!before && before.memberIds.some(id => this.running.has(id) || ['running', 'uncertain'].includes(this.workers.get(id).status));
+    const pool = this.pool.sync(busy);
     for (const worker of this.workers.list()) {
+      // A configured organization replaces legacy individual execution. Keep
+      // its history, but do not run a fourth, unbounded worker alongside peers.
+      if (pool && !worker.poolId) {
+        if (this.running.has(worker.id)) continue;
+        const adapter = this.adapters.get(worker.id);
+        if (adapter) { await adapter.close(); this.adapters.delete(worker.id); }
+        continue;
+      }
       if (worker.status === 'error' || this.running.has(worker.id)) continue;
       if (worker.status === 'running' || worker.status === 'uncertain') {
         if (worker.status === 'running' || worker.reconcileRequested) {
@@ -121,10 +161,16 @@ export class EventRuntime {
         }
         continue;
       }
+      if (worker.poolId && (!pool || !pool.enabled || !['active', 'waiting'].includes(pool.state))) {
+        const adapter = this.adapters.get(worker.id);
+        if (adapter) { await adapter.close(); this.adapters.delete(worker.id); }
+        continue;
+      }
       if (!worker.enabled) continue;
       const batch = this.batch(worker);
       if (!batch.events.length) {
         if (batch.cursor !== worker.cursor) this.workers.save({ ...worker, cursor: batch.cursor });
+        if (worker.poolId) { const adapter = this.adapters.get(worker.id); if (adapter) { await adapter.close(); this.adapters.delete(worker.id); } }
         continue;
       }
       const delivering = this.workers.save({ ...worker, status: 'running', deliveryId: randomUUID(), deliveryCursor: batch.cursor, error: '' });
@@ -135,6 +181,7 @@ export class EventRuntime {
   private session(worker: Worker) {
     const adapter = this.adapters.get(worker.id) ?? this.options.adapter?.(worker) ?? new CodexSession({
       databasePath: this.options.databasePath, serverEntry: this.options.serverEntry,
+      workerId: worker.id, poolMember: !!worker.poolId,
       onApproval: () => { this.workers.pauseForApproval(worker.id); },
     });
     this.adapters.set(worker.id, adapter); return adapter;
@@ -158,10 +205,15 @@ export class EventRuntime {
       const threadId = await adapter.open(worker);
       if (this.closed || !this.workers.owns(this.token)) throw new Error('Runtime owner changed before delivery');
       let current = this.workers.get(worker.id);
-      if (!current.enabled) { this.workers.save({ ...current, status: 'idle', deliveryId: null, deliveryCursor: null }); return; }
+      const pool = worker.poolId ? this.workers.pool() : null;
+      // Opening/resuming a session is asynchronous. Recheck human stop and goal
+      // completion after it returns, before submitting a new model turn.
+      const poolStopped = !!worker.poolId && (!pool?.enabled || !this.board.board().tasks.some(t =>
+        (!pool.taskIds.length || pool.taskIds.includes(t.id)) && !['done', 'canceled'].includes(t.status)));
+      if (!current.enabled || poolStopped) { this.workers.save({ ...current, threadId, status: 'idle', deliveryId: null, deliveryCursor: null }); return; }
       this.workers.save({ ...current, threadId });
       submitted = true;
-      await adapter.run(threadId, workerPrompt(worker, worker.deliveryId!, events), turnId => {
+      await adapter.run(threadId, workerPrompt(worker, worker.deliveryId!, events, worker.poolId ? this.workers.pool() : null), turnId => {
         const latest = this.workers.get(worker.id); this.workers.save({ ...latest, turnId });
       });
       if (!this.workers.owns(this.token)) return;

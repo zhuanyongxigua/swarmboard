@@ -27,7 +27,7 @@ export const schemas = {
   claim: z.object({ agentId: id, expectedVersion: z.number().int().positive() }).strict(),
   taskRelease: z.object({ agentId: id, expectedVersion: z.number().int().positive(), status: z.enum(['todo', 'blocked']).default('todo') }).strict(),
   entry: z.object({ agentId: id, kind: z.enum(entryKinds), summary: text, detail: optionalText, taskId: id.optional(), resourceId: id.optional(), recipientId: id.optional() }).strict(),
-  context: z.object({ after: z.coerce.number().int().nonnegative().default(0), limit: z.coerce.number().int().min(1).max(200).default(50), kind: z.enum(entryKinds).optional(), agentId: id.optional(), taskId: id.optional(), resourceId: id.optional() }).strict(),
+  context: z.object({ after: z.coerce.number().int().nonnegative().default(0), limit: z.coerce.number().int().min(1).max(200).default(50), kind: z.enum(entryKinds).optional(), agentId: id.optional(), taskId: id.optional(), resourceId: id.optional(), query: z.string().trim().min(1).max(500).optional() }).strict(),
   usage: z.object({ resourceId: id, agentId: id, purpose: text, scope: optionalText, sharing: optionalText, taskId: id.optional() }).strict(),
   usageUpdate: z.object({ agentId: id, expectedVersion: z.number().int().positive(), purpose: text.optional(), scope: longText.optional(), sharing: longText.optional() }).strict(),
   release: z.object({ agentId: id, expectedVersion: z.number().int().positive() }).strict(),
@@ -305,6 +305,7 @@ export class Store {
     return this.transaction(() => {
     const clauses = ['id > ?']; const values: (string|number)[] = [query.after];
     for (const key of ['kind','agentId','taskId','resourceId'] as const) if (query[key] !== undefined) {clauses.push(`${key} = ?`);values.push(query[key]);}
+    if (query.query) { clauses.push("instr(lower(summary || char(10) || detail), lower(?)) > 0"); values.push(query.query); }
     const rows = this.db.prepare(`SELECT * FROM entries WHERE ${clauses.join(' AND ')} ORDER BY id LIMIT ?`).all(...values,query.limit+1);
     const hasMore = rows.length > query.limit; const items = rows.slice(0,query.limit).map(row => this.decode('entries',row) as unknown as Entry);
     const max = Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor);
