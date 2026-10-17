@@ -1,7 +1,7 @@
 // Launch the shipped archive with the official client so repository dependencies cannot hide packaging defects.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -22,12 +22,12 @@ function files(directory: string, base = ''): string[] {
 function fingerprints() {
   return files(pluginRoot).map(name => [name, createHash('sha256').update(readFileSync(join(pluginRoot, name))).digest('hex')]);
 }
-async function connect(database: string, workingDirectory = work) {
+async function connect(database: string, workingDirectory = work, overrides: Record<string, string> = {}) {
   const config = JSON.parse(readFileSync(join(pluginRoot, 'mcp.json'), 'utf8')) as Configuration;
   const command = config.mcpServers.swarmboard;
   const transport = new StdioClientTransport({ command: command.command,
     args: command.args.map(arg => arg.replaceAll('${PLUGIN_ROOT}', pluginRoot)), cwd: workingDirectory,
-    env: { PATH: process.env.PATH ?? '', HOME: root, XDG_DATA_HOME: join(root, 'data'), SWARMBOARD_DB_PATH: database }, stderr: 'pipe' });
+    env: { PATH: process.env.PATH ?? '', HOME: root, XDG_DATA_HOME: join(root, 'data'), SWARMBOARD_DB_PATH: database, ...overrides }, stderr: 'pipe' });
   let stderr = '';
   transport.stderr?.on('data', chunk => { stderr += chunk.toString(); });
   const client = new Client({ name: 'clean-desktop-package-test', version: '1.0.0' });
@@ -55,7 +55,7 @@ describe('portable desktop plugin', () => {
     const manifest = JSON.parse(readFileSync(join(pluginRoot, 'plugin.json'), 'utf8'));
     expect(manifest).toMatchObject({ name: 'swarmboard', version: packageVersion, license: 'MIT', extensions: { 'com.openai': { requires_local_executor: true } } });
     const config = JSON.parse(readFileSync(join(pluginRoot, 'mcp.json'), 'utf8')) as Configuration;
-    expect(config.mcpServers.swarmboard).toEqual({ type: 'stdio', command: 'node', args: ['${PLUGIN_ROOT}/server/swarmboard.mjs'], cwd: '${PLUGIN_ROOT}' });
+    expect(config.mcpServers.swarmboard).toEqual({ type: 'stdio', command: process.platform === 'win32' ? 'node' : '/bin/sh', args: [process.platform === 'win32' ? '${PLUGIN_ROOT}/server/swarmboard.mjs' : '${PLUGIN_ROOT}/server/launch.sh'], cwd: '${PLUGIN_ROOT}' });
     const names = files(pluginRoot);
     expect(names).toEqual(expect.arrayContaining(['server/swarmboard.mjs', 'widget.html', 'skills/shared-worker/SKILL.md', 'BUILD.json']));
     expect(names.some(name => /(^|\/)(node_modules|\.env|\.git)(\/|$)|\.(sqlite|db)(-|$)/.test(name))).toBe(false);
@@ -71,6 +71,30 @@ describe('portable desktop plugin', () => {
     }
 
     for (const name of names) expect(readFileSync(join(pluginRoot, name), 'utf8')).not.toMatch(/\/Users\/[^/]+\/|\/home\/runner\/work\//);
+  });
+  it.skipIf(process.platform === 'win32')('discovers NVM Node with no node or shell utilities on the desktop PATH', async () => {
+    const nvm = join(root, 'synthetic nvm');
+    const bin = join(nvm, 'versions/node/v24-fixture/bin');
+    const emptyPath = join(root, 'empty PATH');
+    mkdirSync(bin, { recursive: true }); mkdirSync(emptyPath);
+    const marker = join(root, 'runtime-invoked');
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    // Record execution of the isolated NVM fixture, then run the actual test runtime.
+    writeFileSync(join(bin, 'node'), `#!/bin/sh\n# This fixture proves NVM discovery without relying on a developer shell.\nprintf 'invoked\\n' >> ${quote(marker)}\nexec ${quote(process.execPath)} "$@"\n`, { mode: 0o755 });
+    const client = await connect(join(root, 'gui-path.sqlite'), work, { PATH: emptyPath, NVM_DIR: nvm, NVM_BIN: join(root, 'absent-nvm-bin'), VOLTA_HOME: join(root, 'absent-volta') });
+    expect((await client.listTools()).tools.some(tool => tool.name === 'board_open')).toBe(true);
+    expect((await client.readResource({ uri: 'ui://swarmboard/board.html' })).contents[0]).toMatchObject({ text: expect.stringContaining('<!doctype html>') });
+    expect(readFileSync(marker, 'utf8')).toContain('invoked');
+    await close(client);
+  });
+  it.skipIf(process.platform === 'win32')('rejects an invalid explicit runtime with a clear stderr-only diagnostic', () => {
+    const output = spawnSync('/bin/sh', [join(pluginRoot, 'server/launch.sh')], {
+      env: { PATH: '/usr/bin:/bin', HOME: root, SWARMBOARD_NODE: '/nonexistent/swarmboard-node' },
+      encoding: 'utf8', stdio: 'pipe', timeout: 5000,
+    });
+    expect(output.status).toBe(127);
+    expect(output.stdout).toBe('');
+    expect(output.stderr).toContain('SWARMBOARD_NODE must point to a working Node.js 24+');
   });
   it('discovers native entrypoints and UI, collaborates, and persists after a clean process restart', async () => {
     const before = fingerprints(), database = join(root, 'persistence', 'board.sqlite');

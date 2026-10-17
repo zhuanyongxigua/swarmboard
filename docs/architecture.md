@@ -68,3 +68,7 @@ HTTP 服务保留作开发预览及其他 MCP 客户端接入。可选 `BOARD_TO
 参考：[原生扩展](https://developers.openai.com/plugins/build/extensions)、[本地 marketplace](https://developers.openai.com/plugins/build/plugins)、[桌面本地 MCP](https://developers.openai.com/plugins/deploy/desktop-only)。
 
 服务不读取订阅登录文件，不接管 OAuth，不调用模型 API，不创建模型 worker。Agent 的持续运行与唤醒由其原有客户端决定。声明不是系统锁，也不会强制阻止绕过协作约定的直接资源操作。
+
+## 桌面启动环境
+
+macOS/Linux 的构建产物通过绝对路径 `/bin/sh` 启动包内 `server/launch.sh`，由其发现 Node.js 24+ 并校验内置 SQLite；Windows 构建继续使用 Node 命令。来源中的标准 `mcp.json` 在构建阶段生成对应启动配置，包内路径仍使用 `${PLUGIN_ROOT}`。启动器仅查找运行时，不读写协作数据、不加载 shell 配置、不改变用户全局环境；最终服务沿用原有数据目录。

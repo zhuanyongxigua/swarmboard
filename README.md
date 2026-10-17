@@ -60,7 +60,7 @@ codex plugin add swarmboard@swarmboard-local
 
 Restart the desktop app and open **Swarmboard** from the sidebar. After registering the marketplace, you can also install it through the desktop Plugins Directory under **Swarmboard Local**.
 
-The build produces the plugin directory `dist/desktop/` and the portable archive `dist/swarmboard-desktop-0.3.0.zip`. Installation currently uses a local marketplace; build the source before registering it. See [installation, upgrades, and troubleshooting](docs/setup.md) for details.
+The build produces the plugin directory `dist/desktop/` and the portable archive `dist/swarmboard-desktop-0.3.1.zip`. Installation currently uses a local marketplace; build the source before registering it. See [installation, upgrades, and troubleshooting](docs/setup.md) for details.
 
 ## Usage
 

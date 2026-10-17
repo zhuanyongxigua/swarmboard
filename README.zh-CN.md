@@ -60,7 +60,7 @@ codex plugin add swarmboard@swarmboard-local
 
 重启桌面客户端，从侧边栏打开 **Swarmboard**。也可以在注册来源后，通过桌面的 Plugins Directory 选择 **Swarmboard Local** 并安装。
 
-构建会生成插件目录 `dist/desktop/` 和便携包 `dist/swarmboard-desktop-0.3.0.zip`。当前安装方式是本地 marketplace；从 GitHub 获取源码后需要先构建。更多步骤见[安装、升级与排查](docs/setup.zh-CN.md)。
+构建会生成插件目录 `dist/desktop/` 和便携包 `dist/swarmboard-desktop-0.3.1.zip`。当前安装方式是本地 marketplace；从 GitHub 获取源码后需要先构建。更多步骤见[安装、升级与排查](docs/setup.zh-CN.md)。
 
 ## 如何使用
 

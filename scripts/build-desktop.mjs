@@ -28,6 +28,15 @@ for (const name of ['plugin.json', 'mcp.json', 'LICENSE', 'README.md', 'README.z
 await mkdir(path.join(destination, 'skills/shared-worker'), { recursive: true });
 await cp(path.join(root, 'skills/shared-worker/SKILL.md'), path.join(destination, 'skills/shared-worker/SKILL.md'));
 await cp(path.join(root, 'dist/widget.html'), path.join(destination, 'widget.html'));
+// POSIX GUI launches need runtime discovery; Windows keeps native Node resolution.
+await cp(path.join(root, 'scripts/launch-desktop.sh'), path.join(destination, 'server/launch.sh'));
+const mcp = JSON.parse(await readFile(path.join(root, 'mcp.json'), 'utf8'));
+if (process.platform !== 'win32') {
+  mcp.mcpServers.swarmboard.command = '/bin/sh';
+  mcp.mcpServers.swarmboard.args = ['${PLUGIN_ROOT}/server/launch.sh'];
+}
+await writeFile(path.join(destination, 'mcp.json'), JSON.stringify(mcp, null, 2) + '\n');
+
 await mkdir(path.join(destination, 'docs'), { recursive: true });
 for (const name of ['architecture.md', 'testing.md', 'verification.md', 'setup.md', 'setup.zh-CN.md']) {
   await cp(path.join(root, 'docs', name), path.join(destination, 'docs', name));

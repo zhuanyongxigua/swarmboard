@@ -6,7 +6,7 @@
 
 ## Requirements
 
-- Building and running require **Node.js 24+**, including its built-in `node:sqlite`. The desktop app must also be able to find `node`.
+- Building and running require **Node.js 24+**, including its built-in `node:sqlite`. On macOS/Linux the packaged launcher discovers Node from PATH, NVM, Volta, and standard installation locations. Windows uses native `node` resolution.
 - Building from source additionally requires npm, Git, and `zip`. The current packaging script uses the macOS/Linux `zip` command.
 - Desktop installation requires a ChatGPT desktop app with local plugin support. The commands below use the current Codex CLI's `plugin` subcommand.
 
@@ -47,7 +47,7 @@ Restart the desktop app to load the new files. Collaboration data lives outside 
 `npm run package:desktop` produces:
 
 - `dist/desktop/`: the plugin directory.
-- `dist/swarmboard-desktop-0.3.0.zip`: a portable archive whose root is the plugin root.
+- `dist/swarmboard-desktop-0.3.1.zip`: a portable archive whose root is the plugin root.
 
 Extract the ZIP into a local marketplace and point its `source.path` at the extracted plugin root. The configuration uses `${PLUGIN_ROOT}`, so the extracted directory can be relocated. The target client still needs access to Node.js 24+. A public source repository or ZIP does not mean the plugin is listed in the OpenAI Plugin Directory.
 
@@ -97,7 +97,7 @@ The command builds the current source, starts a temporary loopback service, writ
 
 **Swarmboard is missing from the directory or sidebar.** Confirm that `dist/desktop/plugin.json` exists. Inspect the source with `codex plugin marketplace list`, then check the plugin's installed and enabled state. Restart the desktop app after changing the local plugin files.
 
-**The desktop app cannot find node.** Confirm that its execution environment can find Node.js 24+. A working terminal environment does not establish the desktop launch environment.
+**The desktop app cannot find node.** Confirm that its execution environment can find Node.js 24+. A working terminal environment does not establish the desktop launch environment. Version 0.3.1 packages a POSIX launcher that checks Node.js 24+ and `node:sqlite` before starting the server. It searches PATH, NVM, Volta, and standard Homebrew/system locations without loading shell profiles. For a custom installation, set `SWARMBOARD_NODE` to the absolute executable path in the MCP server environment, then rebuild and reinstall. An invalid override fails clearly on stderr. The build keeps direct Node launch on Windows. If the app reports `MCP startup failed: No such file or directory`, check the installed launch configuration as well as whether the plugin directory exists.
 
 **No agent starts after adding a task.** This version does not create or automatically wake sessions. Enable the plugin in an existing session and ask the agent to read and claim work.
 

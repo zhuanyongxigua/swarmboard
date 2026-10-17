@@ -11,7 +11,7 @@ type DisplayModeMetadata = { availableDisplayModes: ('inline' | 'fullscreen')[];
 
 export const BOARD_RESOURCE_URI = 'ui://swarmboard/board.html';
 export function createMcpServer(store: Store, widgetPath: string) {
-  const server = new McpServer({name:'swarmboard',version:'0.3.0'});
+  const server = new McpServer({name:'swarmboard',version:'0.3.1'});
   registerAppResource(server, 'swarmboard-ui', BOARD_RESOURCE_URI, {}, async () => ({
     contents: [{uri:BOARD_RESOURCE_URI,mimeType:RESOURCE_MIME_TYPE,text:readFileSync(widgetPath,'utf8'),_meta:{ui:{prefersBorder:false,csp:{connectDomains:[],resourceDomains:[]}},'openai/ui':{availableDisplayModes:['inline','fullscreen'],preferredDisplayMode:'fullscreen'} satisfies DisplayModeMetadata}}],
   }));
