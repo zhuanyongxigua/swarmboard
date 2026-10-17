@@ -54,13 +54,17 @@ async function scenario(name, rejected) {
   try {
     await request('initialize', { clientInfo: { name: 'swarmboard-host-acceptance', title: 'Isolated plugin acceptance', version: '1.0.0' }, capabilities: { experimentalApi: true, requestAttestation: false } });
     child.stdin.write('{"method":"initialized"}\n');
+    const detail = await request('plugin/read', { marketplacePath: join(marketplace, '.agents/plugins/marketplace.json'), pluginName: 'swarmboard' });
+    assert.equal(detail.plugin.summary.installed, true);
+    assert.equal(detail.plugin.summary.enabled, true);
     const status = await request('mcpServerStatus/list', { serverName: 'swarmboard', detail: 'full' });
     const server = status.data.find(item => item.name === 'swarmboard');
     if (rejected) {
       assert.equal(server, undefined, 'The real plugin loader must reject absolute commands');
-      assert.match(stderr, /bare executable name or a contained/);
+      assert.deepEqual(detail.plugin.mcpServers, [], 'Rejected commands must not appear as loadable MCP servers');
       console.log('PASS: absolute command rejected by actual plugin loader');
     } else {
+      assert(detail.plugin.mcpServers.includes('swarmboard'), 'Accepted commands must appear in parsed plugin metadata');
       assert(server, `Swarmboard missing from host inventory: ${stderr.slice(-1200)}`);
       assert.equal(server.toolsError, null);
       assert(server.tools.board_open, 'Host must discover board_open');
