@@ -143,7 +143,7 @@ for (const mode of ['unsupported', 'mobile'] as const) {
     const host = await simulatedHost(page, mode);
     try {
       await expect(host.frame.getByText('当前宿主不支持自动认领，任务与资源仍可使用。')).toBeVisible();
-      expect(host.calls.every(call => ['board_read', 'automation_read'].includes(call.name))).toBe(true);
+      expect(host.calls.every(call => ['board_read', 'automation_read', 'runtime_read'].includes(call.name))).toBe(true);
       expect(host.messages).toEqual([]);
       expect(await host.tool<AutomationConfig>('automation_read')).toMatchObject({ state: 'off', desiredEnabled: true, actualStatus: null, version: 0 });
       await host.frame.getByRole('tab', { name: '资源池', exact: true }).click();

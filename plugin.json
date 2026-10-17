@@ -1,10 +1,10 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "swarmboard",
-  "version": "0.4.1",
+  "version": "0.7.2",
   "description": "An Agensh-inspired multi-agent workspace for ChatGPT Desktop: claim tasks, coordinate resources, and share progress.",
   "author": {
-    "name": "于鑫"
+    "name": "\u4e8e\u946b"
   },
   "repository": "https://github.com/zhuanyongxigua/swarmboard",
   "license": "MIT",

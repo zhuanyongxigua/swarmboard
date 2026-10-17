@@ -8,7 +8,7 @@ import { appendNativeDraft, nativeConversationUnavailableReason, startNativeAuto
 
 type Task = {
   id: string; title: string; description: string; acceptanceCriteria: string;
-  status: string; assignee: string | null; version: number; updatedAt: string;
+  status: string; assignee: string | null; participants?: string[]; version: number; updatedAt: string;
 };
 type Resource = {
   id: string; name: string; kind: string; description: string;
@@ -26,6 +26,7 @@ type Usage = {
 type Board = { tasks: Task[]; resources: Resource[]; agents: Agent[]; usages: Usage[]; entries: Entry[]; cursor: number };
 type Editor = { type: 'task'; item?: Task } | { type: 'resource'; item?: Resource };
 type Tab = 'tasks' | 'resources' | 'shared';
+type RuntimeStatus = { mode: 'events'; ciWatches?: { id: string; pipelineId: number; sha: string; state: string; error: string }[]; pool?: { id?: string; size: number; maxSize?: number; workspacePath?: string; taskIds?: string[]; enabled: boolean; version: number; state: string; error: string } | null; activity?: { members: number; running: number; idle: number; state: string; executionMode: string; watchdog: { state: string; attempts: number; nextWakeAt: string | null } }; workers: { id: string; name: string; poolId?: string; enabled: boolean; status: string; error: string }[]; error: string };
 
 
 const statuses: Record<string, string> = {
@@ -72,6 +73,9 @@ async function operation<T>(name: string, args: Record<string, unknown> = {}): P
   let method = 'GET';
   let body: Record<string, unknown> | undefined;
   const { id, ...patch } = args;
+  if (name === 'runtime_read') url = '/api/runtime';
+  if (name === 'pool_configure') { url = '/api/pool/configure'; method = 'POST'; body = args; }
+  if (name === 'pool_control') { url = '/api/pool/control'; method = 'POST'; body = args; }
   if (name === 'task_create') { url = '/api/tasks'; method = 'POST'; body = args; }
   if (name === 'task_update') { url = `/api/tasks/${encodeURIComponent(String(id))}`; method = 'PATCH'; body = patch; }
   if (name === 'resource_create') { url = '/api/resources'; method = 'POST'; body = args; }
@@ -94,6 +98,7 @@ function time(value: string, full = false) {
     ? { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }
     : { hour: '2-digit', minute: '2-digit', hour12: false });
 }
+function participants(task: Task) { return task.participants ?? (task.assignee ? [task.assignee] : []); }
 function shortId(id: string) { return id.length > 12 ? `${id.slice(0, 8)}…` : id; }
 
 function Workspace() {
@@ -107,6 +112,22 @@ function Workspace() {
   const [editor, setEditor] = useState<Editor | null>(null);
   const [automation, setAutomation] = useState<AutomationConfig | null>(null);
   const [automationError, setAutomationError] = useState('');
+  const [eventRuntime, setEventRuntime] = useState<RuntimeStatus | null>(null);
+  const [poolBusy, setPoolBusy] = useState(false);
+  async function controlPool(enabled?: boolean) {
+    const pool = eventRuntime?.pool; if (!pool || poolBusy) return;
+    setPoolBusy(true);
+    try { await operation('pool_control', { expectedVersion: pool.version, enabled: enabled ?? !pool.enabled }); setEventRuntime(await operation<RuntimeStatus>('runtime_read')); }
+    catch (error) { setError(message(error)); }
+    finally { setPoolBusy(false); }
+  }
+  async function addPeer() {
+    const pool = eventRuntime?.pool; if (!pool?.workspacePath || poolBusy) return;
+    setPoolBusy(true);
+    try { await operation('pool_configure', { workspacePath: pool.workspacePath, taskIds: pool.taskIds ?? [], size: pool.size + 1, maxSize: pool.maxSize, expectedVersion: pool.version }); setEventRuntime(await operation<RuntimeStatus>('runtime_read')); }
+    catch (error) { setError(message(error)); setEventRuntime(await operation<RuntimeStatus>('runtime_read')); }
+    finally { setPoolBusy(false); }
+  }
   const automationBusy = useRef(false);
   const [expandedResource, setExpandedResource] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
@@ -169,6 +190,7 @@ function Workspace() {
     try {
       const data = await operation<Board>('board_read');
       void readAutomation();
+      void operation<RuntimeStatus>('runtime_read').then(data => { if (mounted.current && data?.mode === 'events') setEventRuntime(data); }).catch(() => {});
       if (mounted.current) {
         setBoard(data); setError(''); setUpdated(new Date().toISOString());
       }
@@ -189,7 +211,7 @@ function Workspace() {
     async function start() {
       try {
         if (window.parent !== window) {
-          const app = new App({ name: 'Swarmboard', version: '0.4.1' });
+          const app = new App({ name: 'Swarmboard', version: '0.7.2' });
           localBridge = app;
           app.ontoolresult = result => {
             try {
@@ -304,7 +326,7 @@ function Workspace() {
     return true;
   }
 
-  return <div className="workspace">
+  return <div className="workspace" data-panel={tab}>
     <header className="workspace-header">
       <h1>Swarmboard</h1>
       <nav className="tabs" role="tablist" aria-label={t("工作面板")}>
@@ -319,11 +341,23 @@ function Workspace() {
       <button className="refresh-button" type="button" aria-label={t("刷新面板")}
         disabled={refreshing} onClick={() => void manualRefresh()}>↻</button>
     </header>
-    {autoUnavailable ? <p className="automation-notice" role="status">{t("当前宿主不支持自动认领，任务与资源仍可使用。")}</p>
+    {eventRuntime?.pool || eventRuntime?.workers.length ? <div className="automation-notice" role="status">
+      {eventRuntime.pool ? <div className="pool-controls"><span>{t('自协作池')} · {eventRuntime.activity?.members ?? eventRuntime.workers.filter(w => w.poolId === eventRuntime.pool?.id).length} {t('个成员')} · {eventRuntime.activity?.running ?? eventRuntime.workers.filter(w => w.poolId === eventRuntime.pool?.id && w.status === 'running').length} {t('个正在执行')} · {t(({ ready: '等待任务', active: '有未完成目标，当前空闲', idle: '有未完成目标，当前空闲', running: '协作中', waiting: '等待前置或验收', completed: '任务完成，已停止', stopping: '正在安全停止', stopped: '已停止', error: '需要处理', attention: '需要处理' } as Record<string,string>)[eventRuntime.activity?.state ?? eventRuntime.pool.state] ?? eventRuntime.pool.state)}{eventRuntime.activity?.executionMode === 'internal-only' ? ` · ${t('仅内部协作')}` : ''}</span>
+        {eventRuntime.pool.workspacePath ? <button type="button" className="secondary" disabled={poolBusy || !eventRuntime.pool.enabled || eventRuntime.pool.size >= (eventRuntime.pool.maxSize ?? 8)} onClick={() => void addPeer()}>{t('增加成员')}</button> : null}
+        <button type="button" className="secondary" disabled={poolBusy} onClick={() => void controlPool()}>{t(eventRuntime.pool.enabled ? '停止协作' : '恢复协作')}</button></div>
+        : <span>{t('事件协作')} · {eventRuntime.workers.filter(w => w.enabled).length} {t('个工作会话')}</span>}
+      {eventRuntime.ciWatches?.some(w => w.state === 'watching') ? <p className="subtle">{t('等待 CI 结果，完成后通知全体成员')}</p> : null}
+      {eventRuntime.ciWatches?.filter(w => w.state === 'error').map(w => <p role="alert" key={w.id}>CI #{w.pipelineId}: {w.error}</p>)}
+      {eventRuntime.activity?.watchdog.nextWakeAt ? <p className="subtle">{t('下次空闲检查')} {time(eventRuntime.activity.watchdog.nextWakeAt, true)}</p> : null}
+      {eventRuntime.pool?.enabled && eventRuntime.activity?.watchdog.state === 'attention' ? <p role="alert">{t('两次空闲检查后目标仍未推进，请检查阻塞原因。')}{' '}<button type="button" className="secondary" disabled={poolBusy} onClick={() => void controlPool(true)}>{t('重新检查')}</button></p> : null}
+      {eventRuntime.pool?.error ? <p role="alert">{eventRuntime.pool.error}</p> : null}
+      {eventRuntime.workers.filter(w => w.error).map(w => <p role="alert" key={w.id}>{w.name}: {w.error}</p>)}
+      {eventRuntime.error ? <p role="alert">{eventRuntime.error}</p> : null}
+    </div> : autoUnavailable ? <p className="automation-notice" role="status">{t("当前宿主不支持自动认领，任务与资源仍可使用。")}</p>
       : autoError ? <p className="automation-notice" role="alert">{t("自动认领初始化未完成：")}{autoError}</p>
         : automation?.state === 'pending' ? <p className="automation-notice" role="status">{automation.setupMode === 'reconcile'
           ? t("正在核对自动认领状态。") : t("正在初始化自动认领，等待宿主确认。")}</p> : null}
-    <main id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
+    <main id={`panel-${tab}`} className={tab === 'tasks' ? 'task-panel' : undefined} role="tabpanel" aria-labelledby={`tab-${tab}`}>
       <div className="panel-toolbar">
         <span className="subtle">{tab === 'tasks' ? `${board?.tasks.length ?? 0} ${t('个任务')}`
           : tab === 'resources' ? `${board?.resources.length ?? 0} ${t('项资源')}` : t("Agent 交互记录")}</span>
@@ -367,7 +401,7 @@ function TaskBoard({ board, usages, name, stale, movingId, open, dragStart, drag
 }) {
   const order = ['todo', 'in_progress', 'in_review', 'done'];
   for (const task of board.tasks) if (!order.includes(task.status)) order.push(task.status);
-  return <div className="task-board" aria-label={t("任务状态看板")} style={{ '--column-count': order.length } as React.CSSProperties}>
+  return <div className="task-board" role="region" tabIndex={0} aria-label={t("任务状态看板")} style={{ '--column-count': order.length } as React.CSSProperties}>
     {order.map(status => {
       const tasks = board.tasks.filter(task => task.status === status);
       return <section className="task-column" key={status} aria-label={statuses[status] ?? status}
@@ -380,13 +414,12 @@ function TaskBoard({ board, usages, name, stale, movingId, open, dragStart, drag
             return <button type="button" key={task.id} className="task-card" draggable={movingId === null}
               data-task-id={task.id} aria-label={`${t('查看任务')} ${task.title}`} disabled={movingId === task.id}
               onClick={() => open(task)} onDragStart={event => dragStart(event, task)} onDragEnd={dragEnd}>
-              <span className="task-id" title={task.id}>{shortId(task.id)}</span>
-              <span className="task-title">{task.title}</span>
-              {task.description && <span className="task-excerpt">{task.description}</span>}
+              <span className="task-title" title={task.title}>{task.title}</span>
+              {task.description && <span className="task-excerpt">{task.description.replace(/\b[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}\b/gi, shortId)}</span>}
               <span className="task-footer">
-                <span>{task.assignee ? name(task.assignee) : t("未认领")}
-                  {task.assignee && stale(task.assignee) && <span className="stale"> {t("· 最近未报告")}</span>}</span>
-                <span>{related.length ? related.join(locale === 'en' ? ', ' : '、') : t("暂无活跃资源声明")}</span>
+                <span title={participants(task).map(name).join(', ')}>{participants(task).length ? `${t('参与者')} ${participants(task).length}` : t("未认领")}
+                  {participants(task).length > 0 && participants(task).every(stale) && <span className="stale"> {t("· 最近未报告")}</span>}</span>
+                {related.length > 0 && <span title={related.join(locale === 'en' ? ', ' : '、')}>{related.join(locale === 'en' ? ', ' : '、')}</span>}
               </span>
             </button>;
           }) : <p className="column-empty">{t("暂无任务")}</p>}
@@ -527,10 +560,11 @@ function EditorDialog({ editor, name, usages, resources, close, saved, failed, r
             {nativeFeedback && <p className={nativeFailed ? 'native-failure' : 'form-note'}
               role={nativeFailed ? 'alert' : 'status'}>{nativeFeedback}</p>}
           </div>}
+          {task && <label>{t("任务 ID")}<input readOnly value={task.id} /></label>}
           <label>{t("标题")}<input ref={first} name="title" required maxLength={500} defaultValue={task?.title} /></label>
           {task && <div className="form-columns">
             <label>{t("状态")}<select name="status" defaultValue={task.status}>{Object.entries(statuses).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-            <div className="field-info"><span>{t("执行者")}</span><span>{task.assignee ? name(task.assignee) : t("未认领")}</span></div>
+            <div className="field-info"><span>{t("参与者")}</span><span>{participants(task).map(name).join(', ') || t("未认领")}</span></div>
           </div>}
           <label>{t("任务说明")}<textarea name="description" rows={3} maxLength={20000} defaultValue={task?.description} /></label>
           <label>{t("验收条件")}<textarea name="acceptanceCriteria" rows={3} maxLength={20000} defaultValue={task?.acceptanceCriteria} /></label>

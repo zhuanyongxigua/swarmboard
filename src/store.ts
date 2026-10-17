@@ -27,12 +27,12 @@ export const schemas = {
   claim: z.object({ agentId: id, expectedVersion: z.number().int().positive() }).strict(),
   taskRelease: z.object({ agentId: id, expectedVersion: z.number().int().positive(), status: z.enum(['todo', 'blocked']).default('todo') }).strict(),
   entry: z.object({ agentId: id, kind: z.enum(entryKinds), summary: text, detail: optionalText, taskId: id.optional(), resourceId: id.optional(), recipientId: id.optional() }).strict(),
-  context: z.object({ after: z.coerce.number().int().nonnegative().default(0), limit: z.coerce.number().int().min(1).max(200).default(50), kind: z.enum(entryKinds).optional(), agentId: id.optional(), taskId: id.optional(), resourceId: id.optional() }).strict(),
+  context: z.object({ after: z.coerce.number().int().nonnegative().default(0), limit: z.coerce.number().int().min(1).max(200).default(50), kind: z.enum(entryKinds).optional(), agentId: id.optional(), taskId: id.optional(), resourceId: id.optional(), query: z.string().trim().min(1).max(500).optional() }).strict(),
   usage: z.object({ resourceId: id, agentId: id, purpose: text, scope: optionalText, sharing: optionalText, taskId: id.optional() }).strict(),
   usageUpdate: z.object({ agentId: id, expectedVersion: z.number().int().positive(), purpose: text.optional(), scope: longText.optional(), sharing: longText.optional() }).strict(),
   release: z.object({ agentId: id, expectedVersion: z.number().int().positive() }).strict(),
 };
-export interface Task { id: string; title: string; description: string; acceptanceCriteria: string; status: typeof taskStatuses[number]; assignee: string | null; version: number; createdAt: string; updatedAt: string }
+export interface Task { id: string; title: string; description: string; acceptanceCriteria: string; status: typeof taskStatuses[number]; assignee: string | null; participants: string[]; version: number; createdAt: string; updatedAt: string }
 export interface Resource { id: string; name: string; kind: string; description: string; capabilities: string[]; accessNotes: string; version: number; createdAt: string; updatedAt: string }
 export interface Agent { id: string; name: string; lastSeenAt: string }
 export interface Entry { id: number; kind: typeof entryKinds[number]; agentId: string; summary: string; detail: string; taskId?: string; resourceId?: string; recipientId?: string; createdAt: string }
@@ -67,7 +67,7 @@ export class Store {
       // Separate desktop MCP processes must inspect and apply migrations under the same write lock.
       this.transaction(() => {
         const version = Number((this.db.prepare('PRAGMA user_version').get() as {user_version: number}).user_version);
-        if (version > 4) throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500);
+        if (version > 5) throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500);
         if (version === 0) this.db.exec(`
           CREATE TABLE agents(id TEXT PRIMARY KEY, name TEXT NOT NULL, lastSeenAt TEXT NOT NULL);
           CREATE TABLE tasks(id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, acceptanceCriteria TEXT NOT NULL, status TEXT NOT NULL, assignee TEXT REFERENCES agents(id), version INTEGER NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
@@ -88,6 +88,12 @@ export class Store {
           if (config.state === 'off' && !config.desiredEnabled) this.saveAutomation({ ...config, desiredEnabled: true, version: config.version + 1, updatedAt: new Date().toISOString() });
           this.db.exec('PRAGMA user_version = 4;');
         }
+        if (version < 5) {
+          this.db.exec(`CREATE TABLE task_participants(taskId TEXT NOT NULL REFERENCES tasks(id),agentId TEXT NOT NULL REFERENCES agents(id),active INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(taskId,agentId));
+            INSERT INTO task_participants(taskId,agentId) SELECT id,assignee FROM tasks WHERE assignee IS NOT NULL;
+            UPDATE tasks SET assignee=NULL WHERE assignee IS NOT NULL;
+            PRAGMA user_version=5;`);
+        }
       });
     } catch (error) { this.db.close(); throw error; }
   }
@@ -105,6 +111,7 @@ export class Store {
   }
   private decode(table: string, row: Record<string, unknown>) {
     const result = { ...row };
+    if (table === 'tasks') result.participants = this.db.prepare('SELECT agentId FROM task_participants WHERE taskId=? AND active=1 ORDER BY agentId').all(String(result.id)).map(r => String(r.agentId));
     if (table === 'resources') result.capabilities = JSON.parse(String(result.capabilities));
     if (table === 'usages') result.active = Boolean(result.active);
     for (const key of ['taskId', 'resourceId', 'recipientId']) if (result[key] === null) delete result[key];
@@ -198,7 +205,7 @@ export class Store {
     const { agentId, ...data } = parse(schemas.taskCreate, input);
     return this.transaction(() => {
       if (agentId) this.agent(agentId);
-      const now = new Date().toISOString(); const task: Task = { ...data, id: randomUUID(), status: 'todo', assignee: null, version: 1, createdAt: now, updatedAt: now };
+      const now = new Date().toISOString(); const task: Task = { ...data, id: randomUUID(), status: 'todo', assignee: null, participants: [], version: 1, createdAt: now, updatedAt: now };
       this.db.prepare('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?)').run(task.id,task.title,task.description,task.acceptanceCriteria,task.status,null,1,now,now);
       this.append({kind:'OBSERVED',agentId:agentId ?? 'human',summary:`Task created: ${task.title}`,detail:'',taskId:task.id});
       if (agentId) this.touch(agentId); return task;
@@ -208,14 +215,15 @@ export class Store {
     const data = parse(schemas.taskUpdate,input);
     return this.transaction(() => {
       const before = this.get<Task>('tasks', taskId); this.checkVersion(before.version, data.expectedVersion);
-      if (data.agentId) { this.agent(data.agentId); if (before.assignee !== data.agentId) throw new AppError('NOT_OWNER','Only the task owner may update this task as an agent',403); }
+      if (data.agentId) { this.agent(data.agentId); if (!before.participants.includes(data.agentId)) throw new AppError('NOT_PARTICIPANT','Only an active participant may update this shared goal as an agent',403); }
       const { expectedVersion: _version, agentId, ...patch } = data; void _version;
       for (const key of Object.keys(patch) as (keyof typeof patch)[]) if (patch[key] === undefined) delete patch[key];
       if (!Object.keys(patch).length) throw new AppError('VALIDATION_ERROR','Provide at least one task field');
       const next = { ...before, ...patch, assignee: patch.status === 'todo' ? null : before.assignee, version: before.version + 1, updatedAt: new Date().toISOString() };
       this.db.prepare('UPDATE tasks SET title=?,description=?,acceptanceCriteria=?,status=?,assignee=?,version=?,updatedAt=? WHERE id=?').run(next.title,next.description,next.acceptanceCriteria,next.status,next.assignee,next.version,next.updatedAt,taskId);
       this.append({kind:'OBSERVED',agentId:agentId ?? 'human',summary:`Task updated: ${next.title} (${next.status})`,detail:JSON.stringify(patch),taskId});
-      if (agentId) this.touch(agentId); return next;
+      if (patch.status === 'todo') this.db.prepare('UPDATE task_participants SET active=0 WHERE taskId=?').run(taskId);
+      if (agentId) this.touch(agentId); return this.get<Task>('tasks', taskId);
     });
   }
   createResource(input: unknown): Resource {
@@ -253,12 +261,18 @@ export class Store {
     });
   }
   heartbeat(agentId: string): Agent { this.agent(agentId); this.touch(agentId); return this.get<Agent>('agents',agentId); }
+  private joinGoalLocked(taskId: string, agentId: string, startBlocked: boolean): Task {
+    this.agent(agentId); const before = this.get<Task>('tasks', taskId);
+    if (['done','canceled'].includes(before.status)) throw new AppError('TASK_UNAVAILABLE', 'Completed or canceled goals cannot accept new work', 409);
+    this.db.prepare('INSERT INTO task_participants VALUES(?,?,1) ON CONFLICT(taskId,agentId) DO UPDATE SET active=1').run(taskId,agentId);
+    if (before.status === 'todo' || startBlocked && before.status === 'blocked') this.db.prepare("UPDATE tasks SET status='in_progress',assignee=NULL,version=version+1,updatedAt=? WHERE id=?").run(new Date().toISOString(),taskId);
+    return this.get<Task>('tasks', taskId);
+  }
   private claimTaskLocked(taskId: string, data: z.infer<typeof schemas.claim>): Task {
-    this.agent(data.agentId); const task = this.get<Task>('tasks',taskId); this.checkVersion(task.version,data.expectedVersion);
-    if (task.assignee || !['todo','blocked'].includes(task.status)) throw new AppError('TASK_UNAVAILABLE','Task is already claimed or is not available for claiming',409);
-    const next: Task = {...task,assignee:data.agentId,status:'in_progress',version:task.version+1,updatedAt:new Date().toISOString()};
-    this.db.prepare('UPDATE tasks SET assignee=?,status=?,version=?,updatedAt=? WHERE id=?').run(next.assignee,next.status,next.version,next.updatedAt,taskId);
-    this.append({kind:'CLAIM',agentId:data.agentId,summary:`Task claimed: ${task.title}`,detail:'',taskId}); this.touch(data.agentId); return next;
+    this.agent(data.agentId); const before = this.get<Task>('tasks',taskId); this.checkVersion(before.version,data.expectedVersion);
+    const task = this.joinGoalLocked(taskId,data.agentId,true);
+    if (!before.participants.includes(data.agentId)) this.append({kind:'CLAIM',agentId:data.agentId,summary:`Joined shared goal: ${task.title}`,detail:'Participation does not reserve the goal or assign peer roles.',taskId});
+    this.touch(data.agentId); return task;
   }
   claimTask(taskId: string,input: unknown): Task {
     const data = parse(schemas.claim,input);
@@ -271,8 +285,9 @@ export class Store {
       this.checkVersion(config.version, data.automationVersion);
       if (config.state !== 'active' || !config.desiredEnabled || config.actualStatus !== 'ACTIVE' || !config.automationId) throw new AppError('AUTOMATION_INACTIVE', 'Automatic claiming is not active; stop this scheduled cycle', 409);
       const currentTask = this.get<Task>('tasks', data.id);
-      if (currentTask.status !== 'todo') throw new AppError('TASK_UNAVAILABLE', 'Automatic workers may only claim todo tasks', 409);
+      if (currentTask.status !== 'todo' || currentTask.participants.length) throw new AppError('TASK_UNAVAILABLE', 'Automatic workers may only claim todo tasks', 409);
       const task = this.claimTaskLocked(data.id, { agentId: data.agentId, expectedVersion: data.expectedVersion });
+      this.db.prepare('UPDATE tasks SET assignee=? WHERE id=?').run(data.agentId,task.id); task.assignee = data.agentId;
       const binding = { taskId: task.id, agentId: data.agentId, threadId: data.threadId, automationId: config.automationId, automationVersion: config.version, createdAt: new Date().toISOString() };
       this.db.prepare('INSERT INTO automation_bindings(taskId,agentId,threadId,automationId,automationVersion,createdAt) VALUES(?,?,?,?,?,?) ON CONFLICT(taskId) DO UPDATE SET agentId=excluded.agentId,threadId=excluded.threadId,automationId=excluded.automationId,automationVersion=excluded.automationVersion,createdAt=excluded.createdAt').run(binding.taskId,binding.agentId,binding.threadId,binding.automationId,binding.automationVersion,binding.createdAt);
       return { task, binding };
@@ -284,20 +299,34 @@ export class Store {
       this.agent(data.agentId);
       const before = this.get<Task>('tasks', taskId);
       this.checkVersion(before.version, data.expectedVersion);
-      if (before.assignee !== data.agentId) throw new AppError('NOT_OWNER', 'Only the task owner may release this task', 403);
-      if (['done', 'canceled'].includes(before.status)) throw new AppError('TASK_UNAVAILABLE', 'Completed or canceled tasks cannot be returned to the queue', 409);
-      const next: Task = { ...before, assignee: null, status: data.status, version: before.version + 1, updatedAt: new Date().toISOString() };
-      this.db.prepare('UPDATE tasks SET assignee=NULL,status=?,version=?,updatedAt=? WHERE id=?').run(next.status, next.version, next.updatedAt, taskId);
-      this.append({ kind: 'OBSERVED', agentId: data.agentId, summary: `Task released: ${before.title} (${next.status})`, detail: '', taskId });
-      this.touch(data.agentId);
-      return next;
+      if (!before.participants.includes(data.agentId)) throw new AppError('NOT_PARTICIPANT', 'Only an active participant may leave this goal', 403);
+      if (['done', 'canceled'].includes(before.status)) throw new AppError('TASK_UNAVAILABLE', 'Completed or canceled goals cannot be returned to the queue', 409);
+      this.db.prepare('UPDATE task_participants SET active=0 WHERE taskId=? AND agentId=?').run(taskId,data.agentId);
+      const remaining = this.get<Task>('tasks',taskId).participants;
+      if (!remaining.length) this.db.prepare('UPDATE tasks SET assignee=NULL,status=?,version=version+1,updatedAt=? WHERE id=?').run(data.status,new Date().toISOString(),taskId);
+      this.append({kind:'OBSERVED',agentId:data.agentId,summary:`Left shared goal: ${before.title}`,detail:JSON.stringify({remainingParticipants:remaining}),taskId});
+      this.touch(data.agentId); return this.get<Task>('tasks',taskId);
     });
   }
   publishEntry(input: unknown): Entry {
     const data = parse(schemas.entry,input);
     return this.transaction(() => {
       this.agent(data.agentId); if (data.taskId) this.get('tasks',data.taskId); if (data.resourceId) this.get('resources',data.resourceId); if (data.recipientId) this.agent(data.recipientId);
+      if (data.kind === 'CLAIM' && data.taskId) this.joinGoalLocked(data.taskId,data.agentId,false);
       const entry = this.append(data); this.touch(data.agentId); return entry;
+    });
+  }
+  // Replay an internal outbox after a crash without duplicating its board event.
+  // The immutable payload contains a persisted random signal identity. This is
+  // deliberately not exposed as an agent MCP operation or a task write.
+  publishSystemEntryOnce(input: unknown): Entry {
+    const data = parse(schemas.entry, input);
+    return this.transaction(() => {
+      const found = this.db.prepare('SELECT * FROM entries WHERE agentId=? AND kind=? AND summary=? AND detail=? AND recipientId IS ? AND taskId IS ? ORDER BY id LIMIT 1')
+        .get(data.agentId, data.kind, data.summary, data.detail, data.recipientId ?? null, data.taskId ?? null);
+      if (found) return this.decode('entries', found) as unknown as Entry;
+      this.agent(data.agentId); if (data.recipientId) this.agent(data.recipientId);
+      return this.append(data);
     });
   }
   readEntries(input: unknown = {}) {
@@ -305,6 +334,7 @@ export class Store {
     return this.transaction(() => {
     const clauses = ['id > ?']; const values: (string|number)[] = [query.after];
     for (const key of ['kind','agentId','taskId','resourceId'] as const) if (query[key] !== undefined) {clauses.push(`${key} = ?`);values.push(query[key]);}
+    if (query.query) { clauses.push("instr(lower(summary || char(10) || detail), lower(?)) > 0"); values.push(query.query); }
     const rows = this.db.prepare(`SELECT * FROM entries WHERE ${clauses.join(' AND ')} ORDER BY id LIMIT ?`).all(...values,query.limit+1);
     const hasMore = rows.length > query.limit; const items = rows.slice(0,query.limit).map(row => this.decode('entries',row) as unknown as Entry);
     const max = Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor);
