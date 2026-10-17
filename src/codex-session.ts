@@ -43,7 +43,7 @@ export class CodexSession implements SessionAdapter {
       lines.on('line', line => { try { this.receive(JSON.parse(line)); } catch { /* Ignore non-protocol diagnostics. */ } });
       const failed = () => this.fail(new Error('Codex App Server disconnected; inspect the bound session before retrying'));
       this.child.once('error', failed); this.child.once('exit', failed); this.child.stdin.on('error', failed); this.child.stdout.on('error', failed);
-      await this.request('initialize', { clientInfo: { name: 'swarmboard-event-worker', title: 'Swarmboard event worker', version: '0.8.0' }, capabilities: { experimentalApi: true } });
+      await this.request('initialize', { clientInfo: { name: 'swarmboard-event-worker', title: 'Swarmboard event worker', version: '0.8.2' }, capabilities: { experimentalApi: true } });
       this.send({ method: 'initialized' });
     })();
   }
@@ -51,7 +51,14 @@ export class CodexSession implements SessionAdapter {
   private request(method: string, params: unknown): Promise<any> {
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new UncertainDelivery(`${method} timed out; delivery outcome is unknown`)); }, this.options.requestTimeoutMs ?? 30000);
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        // Only mutating submissions can have an unacknowledged outcome. A
+        // resume or read timeout must not imply that a model turn was started.
+        reject(['turn/start', 'thread/start'].includes(method)
+          ? new UncertainDelivery(`${method} timed out; delivery outcome is unknown`)
+          : new Error(`${method} timed out`));
+      }, this.options.requestTimeoutMs ?? 30000);
       this.pending.set(id, { resolve, reject, timer }); this.send({ id, method, params });
     });
   }
@@ -60,7 +67,14 @@ export class CodexSession implements SessionAdapter {
       const pending = this.pending.get(message.id);
       if (!pending) return;
       clearTimeout(pending.timer); this.pending.delete(message.id);
-      if (message.error) pending.reject(new Error(`Codex request rejected: ${message.error.code ?? 'unknown'}`)); else pending.resolve(message.result);
+      if (message.error) {
+        // Report a recognized ownership conflict without copying arbitrary
+        // server diagnostics, which may contain private task data or secrets.
+        const diagnostic = typeof message.error.message === 'string' && message.error.message.includes('already has an active writer')
+          ? 'Codex session already has an active writer in another connection; release that connection before resuming this worker'
+          : `Codex request rejected: ${message.error.code ?? 'unknown'}`;
+        pending.reject(new Error(diagnostic));
+      } else pending.resolve(message.result);
     } else if (message.id !== undefined && message.method) {
       // Approval remains a human decision; this background transport never grants it.
       this.options.onApproval?.();

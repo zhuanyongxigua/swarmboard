@@ -73,6 +73,23 @@ function fixture(pool = false) {
 }
 
 describe.skipIf(process.platform === 'win32')('real process fault recovery', () => {
+  it('recovers an actual SIGKILL during resume without advancing events or duplicating a model submission', async () => {
+    const f = fixture(); f.board.createTask({ title: 'Synthetic goal' });
+    const original = f.workers.list()[0]!;
+    f.workers.save({ ...original, threadId: 'original-thread' });
+    const first = await f.spawn(); await first.request('start', { gate: 'during-resume' });
+    await until(() => first.events, xs => xs.some(e => e.phase === 'during-resume'), 'resume reached');
+    expect(f.workers.get(original.id).deliveryPhase).toBe('opening');
+    await first.kill(); const second = await f.spawn(); await second.request('start');
+    const recovered = await until(() => f.workers.get(original.id), w => w.status === 'error', 'pre-submission failure recovered');
+    expect(recovered).toMatchObject({ threadId: 'original-thread', cursor: 0, turnId: null });
+    expect(f.count()).toBe(0); expect(f.effects()).toHaveLength(0);
+    f.workers.update({ id: original.id, expectedVersion: recovered.version, enabled: true });
+    await until(() => f.count() === 1 && f.idle(), Boolean, 'explicit continuation completes');
+    expect(f.workers.get(original.id).threadId).toBe('original-thread');
+    expect(f.workers.get(original.id).deliveryPhase).toBeUndefined();
+    expect(f.effects()).toHaveLength(1);
+  });
   it.each(['before-signal', 'after-signal'])('recovers one CI result after SIGKILL at %s and wakes every original peer once', async gate => {
     const f = fixture(true);
     execFileSync('git',['init',f.dir],{stdio:'ignore'});execFileSync('git',['-C',f.dir,'remote','add','origin','https://gitlab.example.invalid/group/project.git']);

@@ -22,6 +22,7 @@ export interface Worker {
   status: 'idle' | 'running' | 'error' | 'uncertain'; error: string;
   reconcileRequested?: boolean;
   deliveryId: string | null; deliveryCursor: number | null; turnId: string | null;
+  deliveryPhase?: 'opening' | 'submitting' | 'running';
 }
 export function processAlive(pid: number) {
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
@@ -73,7 +74,7 @@ export class WorkerStore {
       // An ambiguous delivery must be inspected, never blindly replayed by toggling enable.
       if (data.enabled && ['running', 'uncertain'].includes(worker.status)) throw new AppError('DELIVERY_UNRESOLVED', 'Inspect the bound session before resuming this worker', 409);
       return this.write({ ...worker, enabled: data.enabled, version: worker.version + 1, status: data.enabled ? 'idle' : worker.status, error: data.enabled ? '' : worker.error,
-        ...(data.enabled ? { deliveryId: null, deliveryCursor: null, turnId: null, reconcileRequested: false } : {}) });
+        ...(data.enabled ? { deliveryId: null, deliveryCursor: null, turnId: null, deliveryPhase: undefined, reconcileRequested: false } : {}) });
     });
   }
   requestReconcile(input: unknown) {

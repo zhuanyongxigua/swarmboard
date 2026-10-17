@@ -95,6 +95,8 @@ npm run docs:screenshots
 
 ## 常见问题
 
+**成员提示 thread/resume 超时或 active writer？** 先暂停组织，区分恢复连接失败与模型回合结果未知。0.8.2 会记录投递阶段，已有会话的恢复失败不会被误判成业务已执行。active writer 表示另一个连接持有原会话，需要关闭相关聊天视图或正常重启占用客户端后，按[恢复门禁](event-workers.md#停止等待与恢复)启用原成员；不要删锁、换会话、创建任务定时器或直接重放未确认回合。
+
 **找不到 Swarmboard 来源或入口？** 确认 `dist/desktop/plugin.json` 存在，用 `codex plugin marketplace list` 检查来源，再回读插件安装和启用状态。修改目录内容后重启桌面客户端。
 
 **桌面提示找不到 node？** 终端能运行不代表桌面启动环境一致。0.4.0 的 macOS/Linux 便携包通过允许的裸命令 `sh` 调用启动器，在 PATH、NVM、Volta 和 Homebrew/系统常见位置查找 Node.js，并校验版本 24+ 与 `node:sqlite`；不加载 shell 配置、不修改系统 PATH。自定义安装可在 MCP 服务环境中设置 `SWARMBOARD_NODE` 为可执行文件的绝对路径，再重新构建和安装；无效覆盖值会在 stderr 给出明确错误。Windows 构建仍直接调用 `node`。遇到 `MCP startup failed: No such file or directory` 时，还应核对安装目录是否存在和实际启动配置。

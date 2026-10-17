@@ -95,6 +95,8 @@ The command builds the current source, starts a temporary loopback service, writ
 
 ## Troubleshooting
 
+**A peer reports thread/resume timeout or active writer.** Pause the organization. Version 0.8.2 distinguishes an existing-session connection failure from an uncertain model submission using durable delivery phases. An active writer belongs to another connection: close its chat view or normally restart its owning client, then follow the [recovery gates](event-workers.md) to enable the original peer. Do not delete locks, replace conversations, add task timers, or blindly replay unconfirmed turns.
+
 **Swarmboard is missing from the directory or sidebar.** Confirm that `dist/desktop/plugin.json` exists. Inspect the source with `codex plugin marketplace list`, then check the plugin's installed and enabled state. Restart the desktop app after changing the local plugin files.
 
 **The desktop app cannot find node.** Confirm that its execution environment can find Node.js 24+. A working terminal environment does not establish the desktop launch environment. Version 0.4.0 packages a POSIX launcher (started through the bare executable name `sh`, as required by the plugin loader) that checks Node.js 24+ and `node:sqlite` before starting the server. It searches PATH, NVM, Volta, and standard Homebrew/system locations without loading shell profiles. For a custom installation, set `SWARMBOARD_NODE` to the absolute executable path in the MCP server environment, then rebuild and reinstall. An invalid override fails clearly on stderr. The build keeps direct Node launch on Windows. If the app reports `MCP startup failed: No such file or directory`, check the installed launch configuration as well as whether the plugin directory exists.

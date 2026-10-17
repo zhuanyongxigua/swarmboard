@@ -11,6 +11,19 @@ function session(onApproval?: () => void) {
   sessions.push(s); return s;
 }
 describe('official App Server session adapter', () => {
+  it('separates an existing-thread resume timeout from an ambiguous model submission', async () => {
+    const s = session();
+    try { await s.open({ ...worker, threadId: 'resume-timeout-thread' }); expect.fail('Expected timeout'); }
+    catch (error) { expect(error).not.toBeInstanceOf(UncertainDelivery); expect(String(error)).toMatch(/thread\/resume timed out/); }
+  });
+  it('explains an active writer conflict without exposing arbitrary server errors', async () => {
+    await expect(session().open({ ...worker, threadId: 'locked-thread' })).rejects.toThrow(/active writer/);
+    try { await session().open({ ...worker, threadId: 'private-error-thread' }); expect.fail('Expected rejection'); }
+    catch (error) { expect(String(error)).toContain('-32603'); expect(String(error)).not.toContain('private-token-value'); }
+  });
+  it('keeps uncertainty when a newly created session identity was never acknowledged', async () => {
+    await expect(session().open({ ...worker, workspacePath: process.cwd() + '/new-thread-timeout' })).rejects.toBeInstanceOf(UncertainDelivery);
+  });
   it('resumes a large-history thread with metadata only before submitting the next turn',async()=>{
     const s=session(),id=await s.open({...worker,threadId:'large-history-thread'}),started=vi.fn();
     expect(id).toBe('large-history-thread');await s.run(id,'next',started);expect(started).toHaveBeenCalledWith('turn-1');

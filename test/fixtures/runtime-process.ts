@@ -10,7 +10,7 @@ const [databasePath, ledgerPath] = process.argv.slice(2) as [string, string];
 const board = new Store(databasePath);
 const ledger = new DatabaseSync(ledgerPath);
 ledger.exec('PRAGMA busy_timeout=5000;');
-type Gate = 'none' | 'before-effect' | 'before-ack' | 'after-ack' | 'approval' | 'before-signal' | 'after-signal';
+type Gate = 'none' | 'during-resume' | 'before-effect' | 'before-ack' | 'after-ack' | 'approval' | 'before-signal' | 'after-signal';
 let gate: Gate = 'none', outcome = 'completed', scans = 0, now = 1000;
 const publishSignal = board.publishSystemEntryOnce.bind(board);
 board.publishSystemEntryOnce = input => {
@@ -33,7 +33,10 @@ const runtime = new EventRuntime(board, {
   now: () => now, idleMs: 100,
   pipelineReader: async watch => ({ sha: watch.sha, status: 'success' }),
   adapter: worker => ({
-    open: async (w: Worker) => w.threadId ?? 'synthetic-thread-' + w.id,
+    open: async (w: Worker) => {
+      if (gate === 'during-resume') { send({ phase: 'during-resume', workerId: worker.id }); await wait('resume-' + worker.id); }
+      return w.threadId ?? 'synthetic-thread-' + w.id;
+    },
     run: async (threadId, prompt, started) => {
       const deliveryId = /Swarmboard delivery ([^. ]+)\./.exec(prompt)![1]!;
       const turnId = 'synthetic-turn-' + deliveryId;

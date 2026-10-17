@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../../src/store.js';
 import { EventRuntime } from '../../src/event-runtime.js';
-import type { SessionAdapter } from '../../src/codex-session.js';
+import { CodexSession, UncertainDelivery, type SessionAdapter } from '../../src/codex-session.js';
+import { resolve } from 'node:path';
 import { WorkerStore } from '../../src/worker-store.js';
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
@@ -25,6 +26,63 @@ function session() {
   return { adapter, prompts };
 }
 describe('event-driven persistent workers', () => {
+  it('keeps queued events and the original session after a real transport resume timeout', async () => {
+    const adapter = new CodexSession({ databasePath: ':memory:', serverEntry: 'unused', binary: resolve('test/fixtures/codex-session.mjs'), requestTimeoutMs: 1000 });
+    const run = vi.spyOn(adapter, 'run'), f = fixture(adapter);
+    const worker = f.runtime.register({ name: 'Builder', workspacePath: f.dir });
+    f.runtime.workers.save({ ...worker, threadId: 'resume-timeout-thread' });
+    f.store.createTask({ title: 'Still queued' }); await f.runtime.scan();
+    await vi.waitFor(() => expect(f.runtime.workers.get(worker.id).status).toBe('error'), { timeout: 3000 });
+    expect(f.runtime.workers.get(worker.id)).toMatchObject({ cursor: 0, threadId: 'resume-timeout-thread', turnId: null });
+    expect(run).not.toHaveBeenCalled();
+    await f.runtime.scan(); expect(run).not.toHaveBeenCalled();
+  });
+  it.each(['opening', 'legacy'] as const)('recovers a %s checkpoint that proves turn/start was never submitted', async kind => {
+    const { adapter, prompts } = session(); adapter.inspect = vi.fn(async () => 'unknown' as const);
+    const f = fixture(adapter), worker = f.runtime.register({ name: 'Builder', workspacePath: f.dir });
+    f.runtime.workers.save({ ...worker, threadId: 'original-thread', status: kind === 'legacy' ? 'uncertain' : 'running',
+      deliveryId: 'not-submitted', deliveryCursor: 1, turnId: null,
+      ...(kind === 'opening' ? { deliveryPhase: 'opening' as const } : {}),
+      error: kind === 'legacy' ? 'thread/resume timed out; delivery outcome is unknown' : '' });
+    if (kind === 'legacy') f.runtime.requestReconcile({ id: worker.id, expectedVersion: 1 });
+    await f.runtime.scan();
+    await vi.waitFor(() => expect(f.runtime.workers.get(worker.id).status).toBe('error'));
+    const recovered = f.runtime.workers.get(worker.id);
+    expect(recovered).toMatchObject({ cursor: 0, threadId: 'original-thread', deliveryId: 'not-submitted' });
+    expect(recovered.error).toMatch(/before turn\/start/); expect(adapter.inspect).not.toHaveBeenCalled(); expect(prompts).toHaveLength(0);
+    f.runtime.update({ id: worker.id, expectedVersion: recovered.version, enabled: true });
+    expect(f.runtime.workers.get(worker.id)).toMatchObject({ threadId: 'original-thread', cursor: 0, deliveryId: null });
+    expect(f.runtime.workers.get(worker.id).deliveryPhase).toBeUndefined();
+  });
+  it.each(['submitting', 'running', undefined] as const)('retains ambiguous %s checkpoints with a missing acknowledgement', async deliveryPhase => {
+    const { adapter, prompts } = session(); adapter.inspect = vi.fn(async () => 'unknown' as const);
+    const f = fixture(adapter), worker = f.runtime.register({ name: 'Builder', workspacePath: f.dir });
+    f.runtime.workers.save({ ...worker, threadId: 'original-thread', status: 'running', deliveryId: 'possibly-submitted', deliveryCursor: 1, turnId: null, deliveryPhase });
+    await f.runtime.scan();
+    await vi.waitFor(() => expect(adapter.inspect).toHaveBeenCalledOnce());
+    expect(f.runtime.workers.get(worker.id)).toMatchObject({ status: 'uncertain', cursor: 0, deliveryId: 'possibly-submitted' });
+    expect(prompts).toHaveLength(0);
+  });
+  it('checkpoints submission before invoking the adapter and preserves a lost acknowledgement', async () => {
+    const { adapter } = session(), f = fixture(adapter), worker = f.runtime.register({ name: 'Builder', workspacePath: f.dir });
+    let observedPhase: string | undefined;
+    vi.mocked(adapter.run).mockImplementationOnce(async () => {
+      observedPhase = f.runtime.workers.get(worker.id).deliveryPhase;
+      throw new UncertainDelivery('turn/start timed out; delivery outcome is unknown');
+    });
+    f.store.createTask({ title: 'Potentially submitted' }); await f.runtime.scan();
+    await vi.waitFor(() => expect(f.runtime.workers.get(worker.id).status).toBe('uncertain'));
+    expect(observedPhase).toBe('submitting');
+    expect(f.runtime.workers.get(worker.id).cursor).toBe(0);
+  });
+  it('does not clear uncertainty for an opening checkpoint without a known session identity', async () => {
+    const { adapter, prompts } = session(), f = fixture(adapter), worker = f.runtime.register({ name: 'Builder', workspacePath: f.dir });
+    f.runtime.workers.save({ ...worker, status: 'running', deliveryPhase: 'opening', deliveryId: 'unacknowledged-session', deliveryCursor: 1 });
+    await f.runtime.scan();
+    await vi.waitFor(() => expect(f.runtime.workers.get(worker.id).status).toBe('uncertain'));
+    expect(prompts).toHaveLength(0);
+    expect(() => f.runtime.update({ id: worker.id, expectedVersion: worker.version, enabled: true })).toThrow(/Inspect/);
+  });
   it('wakes across independent database connections without waiting for the recovery timer and reuses its session', async () => {
     const { adapter, prompts } = session(); const f = fixture(adapter);
     const worker = f.runtime.register({ name: 'Builder', workspacePath: f.dir }); f.runtime.start();

@@ -77,6 +77,10 @@ task_read(id, offset, limit) 返回目标元数据和 description/acceptanceCrit
 
 投递先持久化 deliveryId/待确认游标/threadId/turnId；只有成功完成才推进游标。进程退出或结果丢失保持 uncertain，不盲目重放。worker_reconcile 只读核对保存的执行：完成则确认；明确失败则 error，检查残留工作后恢复；仍运行或未知继续等待。无法核实的回合会阻止组织虚报完全停止。审批暂停和原因在核查完成后继续保留，只有显式恢复才继续工作；过期检查点不能覆盖较新的暂停及原因。
 
+0.8.2 增加持久化 deliveryPhase：opening 在恢复会话前记录，submitting 在调用 turn/start 前记录，running 在收到 turnId 后记录。已有 threadId 的恢复超时属于连接失败，尚未提交模型回合，保留游标与原身份并置 error，不再标成业务执行不明。重启核查只有在 opening、已有 threadId 且没有 turnId 的证据成立时，才允许转为可显式恢复的 error；缺少阶段的旧检查点仅兼容精确的旧 `thread/resume timed out; delivery outcome is unknown` 诊断。submitting/running、无此证据的旧检查点及新建会话确认丢失仍保持 uncertain，不以“没有 turnId”推断未执行。
+
+如果官方 App Server 返回 active writer，说明另一个连接仍持有该会话。运行时显示明确的连接占用原因，不强杀桌面进程、不删除锁、不换会话或盲目重试。先暂停组织，关闭占用的聊天视图或由用户正常重启占用客户端；确认占用已释放后，对旧 uncertain 检查点执行 worker_reconcile，再用最新版本显式启用 error 成员，最后恢复组织。恢复不推进未处理事件游标，不改变目标状态。若客户端仍持有写入权，恢复会再次停在 error，需要解决连接生命周期，不能宣称业务已恢复。
+
 ## 执行与权限
 
 通过官方 codex app-server --stdio 启动和恢复，使用正常 CLI 登录及模型配置。程序不读取订阅 Token，不使用私有桌面 RPC/CDP。每个 worker 使用自己隔离目录的 workspace-write 与 on-request；不复制凭据、不扩大到所有项目、不自动批准权限请求，也不通过换 harness 绕过拒绝。当前暂停外派；远程机器和生产变更仍需要各自可用工具、授权和验收；唤醒成功不是业务已完成。

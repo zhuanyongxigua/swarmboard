@@ -1,6 +1,6 @@
 {
   "name": "swarmboard",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "private": true,
   "description": "An Agensh-inspired multi-agent workspace for ChatGPT Desktop: claim tasks, coordinate resources, and share progress.",
   "type": "module",
@@ -27,6 +27,7 @@
     "check": "npm run lint && npm run typecheck && npm run build && npm run package:desktop && npm run test:coverage && npm run test:e2e",
     "docs:screenshots": "npm run build && node scripts/capture-readme.mjs",
     "test:host": "node scripts/verify-plugin-host.mjs",
+    "test:ownership": "node scripts/verify-session-ownership.mjs",
     "test:reliability": "vitest run test/integration/process-recovery.test.ts test/unit/codex-session.test.ts"
   },
   "dependencies": {

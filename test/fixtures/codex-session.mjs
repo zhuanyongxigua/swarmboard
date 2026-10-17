@@ -16,6 +16,10 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (params.sandbox !== 'workspace-write' || params.approvalPolicy !== 'on-request') { send({ id, error: { code: 400 } }); return; }
     // Simulate unbounded history hydration stalling a metadata-only resume.
     if (method === 'thread/resume' && params.threadId === 'large-history-thread' && params.excludeTurns !== true) return;
+    if (params.threadId === 'resume-timeout-thread') return;
+    if (method === 'thread/start' && params.cwd.endsWith('/new-thread-timeout')) return;
+    if (params.threadId === 'locked-thread') { send({ id, error: { code: -32600, message: 'thread locked-thread already has an active writer' } }); return; }
+    if (params.threadId === 'private-error-thread') { send({ id, error: { code: -32603, message: 'private-token-value' } }); return; }
     send({ id, result: { thread: { id: params.threadId ?? 'persistent-thread', cwd: params.cwd } } });
   }
   if (method === 'thread/read') {
