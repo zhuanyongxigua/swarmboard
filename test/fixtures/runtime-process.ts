@@ -4,18 +4,33 @@ import { DatabaseSync } from 'node:sqlite';
 import { EventRuntime } from '../../src/event-runtime.js';
 import { Store, type Entry } from '../../src/store.js';
 import type { Worker } from '../../src/worker-store.js';
+import { writeFileSync } from 'node:fs';
 
 const [databasePath, ledgerPath] = process.argv.slice(2) as [string, string];
 const board = new Store(databasePath);
 const ledger = new DatabaseSync(ledgerPath);
 ledger.exec('PRAGMA busy_timeout=5000;');
-type Gate = 'none' | 'before-effect' | 'before-ack' | 'after-ack' | 'approval';
-let gate: Gate = 'none', outcome = 'completed', scans = 0;
+type Gate = 'none' | 'before-effect' | 'before-ack' | 'after-ack' | 'approval' | 'before-signal' | 'after-signal';
+let gate: Gate = 'none', outcome = 'completed', scans = 0, now = 1000;
+const publishSignal = board.publishSystemEntryOnce.bind(board);
+board.publishSystemEntryOnce = input => {
+  const crashBoundary = () => {
+    writeFileSync(ledgerPath + '.signal-gate', gate);
+    // Block exactly inside this synchronous commit boundary. The parent really
+    // kills the process; no graceful teardown can fill in the missing receipt.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);
+  };
+  if (gate === 'before-signal') crashBoundary();
+  const event = publishSignal(input);
+  if (gate === 'after-signal') crashBoundary();
+  return event;
+};
 const waiting = new Map<string, () => void>();
 const send = (value: unknown) => process.send?.(value);
 const wait = (key: string) => new Promise<void>(resolve => { waiting.set(key, resolve); });
 const runtime = new EventRuntime(board, {
   databasePath, serverEntry: 'never-start-a-real-model', keepAlive: true, fallbackMs: 100, debounceMs: 5,
+  now: () => now, idleMs: 100,
   adapter: worker => ({
     open: async (w: Worker) => w.threadId ?? 'synthetic-thread-' + w.id,
     run: async (threadId, prompt, started) => {
@@ -49,7 +64,7 @@ const runtime = new EventRuntime(board, {
 const scan = runtime.scan.bind(runtime);
 runtime.scan = async () => { scans++; await scan(); };
 let started = false;
-process.on('message', (message: { id: number; command: string; gate?: Gate; outcome?: string }) => {
+process.on('message', (message: { id: number; command: string; gate?: Gate; outcome?: string; ms?: number }) => {
   void (async () => {
     if (message.command === 'suspend') {
       // Stop between callbacks, never while holding a SQLite transaction.
@@ -59,7 +74,8 @@ process.on('message', (message: { id: number; command: string; gate?: Gate; outc
     if (message.command === 'start') {
       gate = message.gate ?? 'none'; outcome = message.outcome ?? 'completed';
       if (!started) { runtime.start(); started = true; }
-    } else if (message.command === 'notify') { for (let n = 0; n < 30; n++) runtime.notify(); }
+    } else if (message.command === 'advance') { now += message.ms ?? 100; runtime.notify(); }
+    else if (message.command === 'notify') { for (let n = 0; n < 30; n++) runtime.notify(); }
     else if (message.command === 'drain') { gate = 'none'; for (const finish of waiting.values()) finish(); waiting.clear(); }
     else if (message.command === 'scan') await runtime.scan();
     else if (message.command === 'close') { await runtime.close(); ledger.close(); board.close(); }

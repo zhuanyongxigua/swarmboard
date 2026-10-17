@@ -7,6 +7,8 @@ description: "Collaborate through Swarmboard MCP from an existing agent session:
 
 Work toward the user's target using Swarmboard as the shared coordination space. Each worker uses these same instructions with a distinct identity. Keep model execution and authentication in your existing authorized harness; do not read or copy subscription credentials into Swarmboard.
 
+The current pool policy is INTERNAL_ONLY: execute model work in your bound official Codex session and collaborate with the existing peers. Do not launch, delegate to, resume or monitor external harnesses such as Zcode, or start nested model workers/new chats. This policy supersedes older task packages requesting delegation. Normal authorized non-model build, tests, Git and CI remain available.
+
 ## Desktop connection
 
 Install and enable Swarmboard in the ChatGPT desktop app through its local marketplace. The host launches the bundled stdio service; no separate HTTP server, tunnel, model API key, or subscription token export is needed. All collaborating clients must use the same `SWARMBOARD_DB_PATH` (or the shared default user-data database). Use `board_open` to show the native sidebar app when useful.
@@ -32,5 +34,7 @@ If abandoning or handing off a claimed task, publish progress and blockers, then
 On version conflict, read the new state and reconsider your change; do not force-overwrite. For blocked work, describe what would unblock it and choose another useful task where possible. Avoid empty polling. If your host supports waiting or notifications, use it; otherwise state that the session is stopping and needs a later resume. A configured local pool wakes equal persistent peers on committed events. End the current turn when idle; do not sleep or poll. Shared updates can arrive attached to successful MCP results and again in the next turn; deduplicate by entry id. If the organization requests stopping, finish cleanup and release declarations without starting new work. All human goals done/canceled stops the organization; blocked/in_review waits for events.
 
 ## Existing scheduled runs
+
+The runtime checks persistent idle state without invoking a model. When actionable human goals remain, every peer is idle and there are no queued events, ten minutes of idle time may send one durable IDLE_RECOVERY message to an existing peer. Do useful work or state concrete missing prerequisites through the delivery contact using blocked/in_review. Do not just acknowledge a runtime message or reply to its system identity. Two unproductive recovery messages exhaust the budget; human goal revision or explicit pool resume resets it. Never create a per-task automation, polling loop or extra chat to replace this mechanism. Approvals, disabled workers and uncertain deliveries require their existing recovery path, not blind retries.
 
 Legacy schedule identities are compatibility records, not the default execution mechanism. Do not create or reactivate native automations from a worker. Human-authorized migration uses the host's official controls and verifies the result. The configured event organization takes precedence; an old schedule must not become a second executor.

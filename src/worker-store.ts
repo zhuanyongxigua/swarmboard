@@ -6,6 +6,7 @@ import { mkdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { AppError, parse } from './store.js';
+import type { Liveness } from './pool-liveness.js';
 
 export const approvalPauseMessage = 'Human approval or input required; this worker is paused';
 
@@ -34,6 +35,7 @@ export class WorkerStore {
       CREATE TABLE IF NOT EXISTS workers(id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runtime_owner(id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL, pid INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS worker_pool(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS pool_liveness(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
     `);
   }
   close() { this.db.close(); }
@@ -113,6 +115,15 @@ export class WorkerStore {
   pool(): Pool | null {
     const row = this.db.prepare('SELECT data FROM worker_pool WHERE id=1').get();
     return row ? JSON.parse(String(row.data)) as Pool : null;
+  }
+  liveness(): Liveness | null {
+    const row = this.db.prepare('SELECT data FROM pool_liveness WHERE id=1').get();
+    return row ? JSON.parse(String(row.data)) as Liveness : null;
+  }
+  saveLiveness(value: Liveness) {
+    const data = JSON.stringify(value);
+    if (JSON.stringify(this.liveness()) !== data) this.db.prepare('INSERT INTO pool_liveness VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(data);
+    return value;
   }
   savePool(pool: Pool) {
     this.db.prepare('INSERT INTO worker_pool VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(JSON.stringify(pool)); return pool;

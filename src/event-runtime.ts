@@ -8,15 +8,19 @@ import { WorkerStore, approvalPauseMessage, type Worker } from './worker-store.j
 import { CodexSession, UncertainDelivery, type SessionAdapter } from './codex-session.js';
 import { workerPrompt } from './worker-prompt.js';
 import { WorkerPool } from './worker-pool.js';
+import { PoolLiveness } from './pool-liveness.js';
 
 export interface RuntimeOptions {
   databasePath: string; serverEntry: string;
   adapter?: (worker: Worker) => SessionAdapter;
   fallbackMs?: number; debounceMs?: number; keepAlive?: boolean; autoPool?: boolean;
+  now?: () => number; idleMs?: number;
 }
 export class EventRuntime {
   readonly workers: WorkerStore;
   readonly pool: WorkerPool;
+  private liveness: PoolLiveness;
+  private scanning?: Promise<void>;
   private token = randomUUID();
   private watcher?: FSWatcher;
   private fileWatchers = new Map<string, FSWatcher>();
@@ -29,6 +33,7 @@ export class EventRuntime {
   constructor(readonly board: Store, readonly options: RuntimeOptions) {
     this.workers = new WorkerStore(options.databasePath === ':memory:' ? ':memory:' : options.databasePath + '.runtime.sqlite');
     this.pool = new WorkerPool(this.workers, board, options.databasePath);
+    this.liveness = new PoolLiveness(board, this.workers, options.idleMs ?? 10 * 60 * 1000);
   }
   start() {
     // Previously registered workspace bindings are already human-authorized.
@@ -78,7 +83,7 @@ export class EventRuntime {
     this.debounce.unref();
   }
   status() {
-    return { mode: 'events' as const, owner: this.workers.owner(), workers: this.workers.list(), pool: this.workers.pool(), error: this.lastError };
+    return { mode: 'events' as const, owner: this.workers.owner(), workers: this.workers.list(), pool: this.workers.pool(), activity: this.liveness.activity(this.workers.pool()), error: this.lastError };
   }
   hasWorkers() { return this.workers.list().length > 0 || this.workers.pool() !== null; }
   configurePool(input: unknown) { const pool = this.pool.configure(input); this.notify(); return pool; }
@@ -139,10 +144,16 @@ export class EventRuntime {
     return { events: result, cursor };
   }
   async scan() {
+    if (this.scanning) return this.scanning;
+    this.scanning = this.scanOnce();
+    try { await this.scanning; } finally { this.scanning = undefined; }
+  }
+  private async scanOnce() {
     if (this.closed || !this.hasWorkers() || !this.workers.acquire(this.token, process.pid)) return;
     const before = this.workers.pool();
     const busy = !!before && before.memberIds.some(id => this.running.has(id) || ['running', 'uncertain'].includes(this.workers.get(id).status));
     const pool = this.pool.sync(busy);
+    this.liveness.sync(pool, this.options.now?.() ?? Date.now(), busy || this.workers.list().some(w => w.poolId === pool?.id && this.batch(w).events.length > 0));
     for (const worker of this.workers.list()) {
       // A configured organization replaces legacy individual execution. Keep
       // its history, but do not run a fourth, unbounded worker alongside peers.
@@ -237,6 +248,7 @@ export class EventRuntime {
   async close() {
     this.closed = true; this.watcher?.close(); for (const watcher of this.fileWatchers.values()) watcher.close(); clearInterval(this.fallback); clearTimeout(this.debounce);
     await Promise.all([...this.adapters.values()].map(adapter => adapter.close()));
+    await this.scanning;
     await Promise.all(this.running.values());
     this.workers.release(this.token); this.workers.close();
   }

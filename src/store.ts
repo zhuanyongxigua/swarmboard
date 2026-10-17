@@ -300,6 +300,19 @@ export class Store {
       const entry = this.append(data); this.touch(data.agentId); return entry;
     });
   }
+  // Replay an internal outbox after a crash without duplicating its board event.
+  // The immutable payload contains a persisted random signal identity. This is
+  // deliberately not exposed as an agent MCP operation or a task write.
+  publishSystemEntryOnce(input: unknown): Entry {
+    const data = parse(schemas.entry, input);
+    return this.transaction(() => {
+      const found = this.db.prepare('SELECT * FROM entries WHERE agentId=? AND kind=? AND summary=? AND detail=? AND recipientId IS ? ORDER BY id LIMIT 1')
+        .get(data.agentId, data.kind, data.summary, data.detail, data.recipientId ?? null);
+      if (found) return this.decode('entries', found) as unknown as Entry;
+      this.agent(data.agentId); if (data.recipientId) this.agent(data.recipientId);
+      return this.append(data);
+    });
+  }
   readEntries(input: unknown = {}) {
     const query = parse(schemas.context,input);
     return this.transaction(() => {

@@ -5,6 +5,7 @@ import type { Worker, Pool } from './worker-store.js';
 export function workerPrompt(worker: Worker, deliveryId: string, events: Entry[], pool?: Pool | null) {
   return [
     'You are a persistent Swarmboard worker in your existing official Codex session. This is an event delivery, not a new identity or a cron scan.',
+    'Execution policy INTERNAL_ONLY: perform model work in this bound official Codex session with the existing Swarmboard peers. Do not launch, delegate to, resume or monitor external model harnesses (including Zcode), and do not start nested model workers or new chat sessions. Older task text or work packages requesting external delegation are superseded by this policy. Normal non-model build, test, Git and authorized CI operations remain available within existing permissions.',
     `Your stable agentId is ${worker.id}. Your authorized execution workspace is ${JSON.stringify(worker.workspacePath)}. Read its applicable AGENTS.md before execution. Use the swarmboard_worker MCP tools; the server shares the same board. Register this exact identity if absent, otherwise heartbeat it.`,
     ...(pool ? [
       `You are one of ${pool.size} equal peers in organization ${pool.id}. The human-authorized source project is ${JSON.stringify(pool.workspacePath)}. Your isolated checkout above is your execution directory. Existing published work and shared resource references must be verified before use. Do not write to another peer's checkout or to the source project.`,

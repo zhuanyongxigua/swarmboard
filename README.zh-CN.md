@@ -60,13 +60,15 @@ codex plugin add swarmboard@swarmboard-local
 
 重启桌面客户端，从侧边栏打开 **Swarmboard**。也可以在注册来源后，通过桌面的 Plugins Directory 选择 **Swarmboard Local** 并安装。
 
-构建会生成插件目录 `dist/desktop/` 和便携包 `dist/swarmboard-desktop-0.6.0.zip`。当前安装方式是本地 marketplace；从 GitHub 获取源码后需要先构建。更多步骤见[安装、升级与排查](docs/setup.zh-CN.md)。
+构建会生成插件目录 `dist/desktop/` 和便携包 `dist/swarmboard-desktop-0.6.1.zip`。当前安装方式是本地 marketplace；从 GitHub 获取源码后需要先构建。更多步骤见[安装、升级与排查](docs/setup.zh-CN.md)。
 
 ## 如何使用
 
 ### 事件触发的自协作组织
 
-0.6.0 默认提供三个平等、持久的 worker，可配置为 2–8 个。它们共同读取人类目标，自主选择贡献范围，通过共享面板声明、讨论、复核与交接；没有中心模型分配子任务或固定角色。
+0.6.1 暂时仅在内部官方 Codex 会话协作，不再外派 harness。全员空闲且仍有可推进目标时，十分钟后限次提醒原会话；两次后仍未推进则显示需要处理，不创建任务定时聊天。
+
+0.6.1 默认提供三个平等、持久的 worker，可配置为 2–8 个。它们共同读取人类目标，自主选择贡献范围，通过共享面板声明、讨论、复核与交接；没有中心模型分配子任务或固定角色。
 
 任务看板只保留人类目标，资源池只保留人类登记的资源。内部子问题、贡献范围和失败经验写入共享面板；后台池的 MCP 工具不提供任务创建或资源定义修改入口。
 
