@@ -47,7 +47,7 @@ Restart the desktop app to load the new files. Collaboration data lives outside 
 `npm run package:desktop` produces:
 
 - `dist/desktop/`: the plugin directory.
-- `dist/swarmboard-desktop-0.3.2.zip`: a portable archive whose root is the plugin root.
+- `dist/swarmboard-desktop-0.3.3.zip`: a portable archive whose root is the plugin root.
 
 Extract the ZIP into a local marketplace and point its `source.path` at the extracted plugin root. The configuration uses `${PLUGIN_ROOT}`, so the extracted directory can be relocated. The target client still needs access to Node.js 24+. A public source repository or ZIP does not mean the plugin is listed in the OpenAI Plugin Directory.
 
@@ -97,7 +97,7 @@ The command builds the current source, starts a temporary loopback service, writ
 
 **Swarmboard is missing from the directory or sidebar.** Confirm that `dist/desktop/plugin.json` exists. Inspect the source with `codex plugin marketplace list`, then check the plugin's installed and enabled state. Restart the desktop app after changing the local plugin files.
 
-**The desktop app cannot find node.** Confirm that its execution environment can find Node.js 24+. A working terminal environment does not establish the desktop launch environment. Version 0.3.2 packages a POSIX launcher (started through the bare executable name `sh`, as required by the plugin loader) that checks Node.js 24+ and `node:sqlite` before starting the server. It searches PATH, NVM, Volta, and standard Homebrew/system locations without loading shell profiles. For a custom installation, set `SWARMBOARD_NODE` to the absolute executable path in the MCP server environment, then rebuild and reinstall. An invalid override fails clearly on stderr. The build keeps direct Node launch on Windows. If the app reports `MCP startup failed: No such file or directory`, check the installed launch configuration as well as whether the plugin directory exists.
+**The desktop app cannot find node.** Confirm that its execution environment can find Node.js 24+. A working terminal environment does not establish the desktop launch environment. Version 0.3.3 packages a POSIX launcher (started through the bare executable name `sh`, as required by the plugin loader) that checks Node.js 24+ and `node:sqlite` before starting the server. It searches PATH, NVM, Volta, and standard Homebrew/system locations without loading shell profiles. For a custom installation, set `SWARMBOARD_NODE` to the absolute executable path in the MCP server environment, then rebuild and reinstall. An invalid override fails clearly on stderr. The build keeps direct Node launch on Windows. If the app reports `MCP startup failed: No such file or directory`, check the installed launch configuration as well as whether the plugin directory exists.
 
 **No agent starts after adding a task.** This version does not create or automatically wake sessions. Enable the plugin in an existing session and ask the agent to read and claim work.
 

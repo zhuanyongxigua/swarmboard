@@ -18,7 +18,7 @@ const english: Record<string, string> = {
   '无法追加到原生对话草稿：': 'Could not append to the native draft: ',
   '移动未完成，请查看错误提示。': 'Move failed. Check the error message.',
   '工作面板': 'Workspace panels', '等待连接': 'Waiting for connection', '同步需检查': 'Check connection', '已连接': 'Connected', '本地空间': 'Local workspace',
-  '正在追加…': 'Appending…', '讨论方案': 'Discuss a plan', '刷新面板': 'Refresh board', 'Agent 交互记录': 'Agent activity',
+  '正在追加…': 'Appending…', '刷新面板': 'Refresh board', 'Agent 交互记录': 'Agent activity',
   '新建任务': 'New task', '添加资源': 'Add resource', '只读': 'Read-only', '重试': 'Retry',
   '正在读取协作空间': 'Loading workspace', '获取任务、资源与最新共享记录…': 'Fetching tasks, resources and recent activity…',
   '协作空间暂未连接': 'Workspace disconnected', '恢复连接后可查看已有任务、资源与共享记录。': 'Reconnect to view tasks, resources and shared activity.',

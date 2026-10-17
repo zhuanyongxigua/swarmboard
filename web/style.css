@@ -39,9 +39,6 @@ a { color: inherit; text-underline-offset: 3px; overflow-wrap: anywhere; }
 .connection { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .refresh-button { border: 0; background: transparent; color: var(--muted); font-size: 19px; padding: 0; width: 24px; height: 30px; }
 .workspace-header .refresh-button { margin-left: -20px; }
-.native-discuss { font-size: 12px; }
-.native-discuss:disabled { cursor: not-allowed; }
-.native-conversation-note { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--muted); font-size: 11px; padding: 7px 22px 0; }
 .native-failure { color: light-dark(#933c26, #e4ad9e); font-size: 12px; }
 .task-discussion { display: grid; gap: 8px; }
 .task-discussion-action { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -127,14 +124,12 @@ dialog::backdrop { background: light-dark(#0005, #0008); }
   .table-heading { display: none; }
   .workspace-header { flex-wrap: wrap; gap: 4px 15px; padding-top: 7px; }
   .tabs { order: 2; width: 100%; }
-  .native-discuss { margin-left: auto; }
   .connection { display: none; }
   .workspace-header .refresh-button { margin-left: 0; }
 }
 @media (max-width: 450px) {
   .workspace-header { flex-wrap: wrap; padding: 12px 15px 0; gap: 4px; }
   .workspace-header h1 { margin-right: auto; }
-  .native-conversation-note { padding-left: 15px; padding-right: 15px; }
   .workspace-header .refresh-button { margin-left: auto; order: 1; }
   .tabs { gap: 26px; order: 2; width: 100%; }
   .task-board { grid-template-columns: 1fr; padding: 0 15px 20px; }

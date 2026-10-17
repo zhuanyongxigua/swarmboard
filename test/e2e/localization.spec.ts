@@ -6,7 +6,7 @@ test('English preview supports real editing while Chinese remains the default', 
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
   await expect(page.getByRole('tab')).toHaveText(['Tasks', 'Resources', 'Shared board']);
   await expect(page.getByRole('heading', { name: 'To do', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Discuss a plan', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Discuss a plan', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'New task', exact: true }).click();
   const title = 'Keep user text 原样保留';
   await page.getByLabel('Title', { exact: true }).fill(title);

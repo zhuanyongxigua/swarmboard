@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from '@modelcontextprotocol/ext-apps';
 import './style.css';
-import { appendNativeDraft, nativeConversationUnavailableReason, planningPrompt, taskDiscussionPrompt } from './native-conversation.js';
+import { appendNativeDraft, nativeConversationUnavailableReason, taskDiscussionPrompt } from './native-conversation.js';
 
 type Task = {
   id: string; title: string; description: string; acceptanceCriteria: string;
@@ -142,7 +142,7 @@ function Workspace() {
     async function start() {
       try {
         if (window.parent !== window) {
-          const app = new App({ name: 'Swarmboard', version: '0.3.2' });
+          const app = new App({ name: 'Swarmboard', version: '0.3.3' });
           localBridge = app;
           app.ontoolresult = result => {
             try {
@@ -184,13 +184,12 @@ function Workspace() {
   };
   const usages = board?.usages.filter(usage => usage.active) ?? [];
 
-  async function discuss(task?: Task) {
+  async function discuss(task: Task) {
     if (!bridge || !board || nativeBusy.current || nativeUnavailable) return;
     nativeBusy.current = true; setNativePending(true); setNativeFeedback(''); setNativeFailed(false);
-    setNativeFeedbackTaskId(task?.id ?? null);
+    setNativeFeedbackTaskId(task.id);
     try {
-      await appendNativeDraft(bridge, task ? taskDiscussionPrompt(task)
-        : planningPrompt(board, tabs.find(item => item.id === tab)!.title));
+      await appendNativeDraft(bridge, taskDiscussionPrompt(task));
       if (mounted.current) setNativeFeedback(t("已追加到原生对话草稿，请检查后发送。"));
     } catch (error) {
       if (mounted.current) {
@@ -265,17 +264,9 @@ function Workspace() {
       <span className="connection" title={updated ? `${t('上次同步')} ${time(updated, true)}` : t("等待连接")}>
         {error ? t("同步需检查") : connected ? t("已连接") : t("本地空间")}
       </span>
-      <button className="secondary native-discuss" type="button" aria-describedby="native-conversation-help"
-        disabled={nativeDisabled} onClick={() => void discuss()}>{nativePending ? t("正在追加…") : t("讨论方案")}</button>
       <button className="refresh-button" type="button" aria-label={t("刷新面板")}
         disabled={refreshing} onClick={() => void refresh()}>↻</button>
     </header>
-    <div className="native-conversation-note">
-      <span id="native-conversation-help">{nativeHelp}</span>
-      {nativeFeedback && !editor && <span className={nativeFailed ? 'native-failure' : ''}
-        role={nativeFailed ? 'alert' : 'status'}>{nativeFeedback}</span>}
-    </div>
-
     <main id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
       <div className="panel-toolbar">
         <span className="subtle">{tab === 'tasks' ? `${board?.tasks.length ?? 0} ${t('个任务')}`

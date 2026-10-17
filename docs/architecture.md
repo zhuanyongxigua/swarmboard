@@ -37,9 +37,9 @@ Agent 心跳是会话活动信息。界面把超过两分钟未报告的会话�
 
 桌面 `global` 入口按 OpenAI 扩展协议使用带 composer 的会话布局，插件作为永久内容 Tab；`thread` 入口可在已有会话中打开看板。插件不自建聊天面板，也不控制宿主的左右布局、模型或审批模式。
 
-UI 只在用户点击讨论入口后调用 `ui/message`。必须同时收到宿主的 `message.text` 与 `experimental["openai/message"]` 能力声明，才使用 `_meta["openai/message"] = { target: "active", send: false }` 追加可编辑草稿。这样保留当前会话和已有草稿，不自动发送，也不隐式新建会话。宿主拒绝或连接失败时展示失败，不改用自动发送模式重试。独立 HTTP 预览不模拟原生会话。
+顶部不提供全局讨论按钮；任务详情保留“讨论此任务”。UI 只在用户点击任务讨论入口后调用 `ui/message`。必须同时收到宿主的 `message.text` 与 `experimental["openai/message"]` 能力声明，才使用 `_meta["openai/message"] = { target: "active", send: false }` 追加可编辑草稿。这样保留当前会话和已有草稿，不自动发送，也不隐式新建会话。宿主拒绝或连接失败时展示失败，不改用自动发送模式重试。独立 HTTP 预览不模拟原生会话。
 
-传入上下文只包含当前看板摘要或选中任务的有限已保存信息，作为数据与规划约定分开。规划提示与 `planning_partner` MCP prompt 要求先讨论、再预览任务，用户明确确认添加后才调用写入工具；这是 Agent 行为约定，不是对所有模型行为的服务端强制状态机。讨论入口本身只发送草稿请求，不写任务、资源或共享事件。
+传入上下文只包含选中任务的有限已保存信息，作为数据与规划约定分开。规划提示与 `planning_partner` MCP prompt 要求先讨论、再预览任务，用户明确确认添加后才调用写入工具；这是 Agent 行为约定，不是对所有模型行为的服务端强制状态机。讨论入口本身只发送草稿请求，不写任务、资源或共享事件。
 
 参考：[官方扩展指南](https://developers.openai.com/plugins/build/extensions)、[全局入口协议](https://github.com/openai/mcp-extensions/blob/main/docs/spec.md#global-entrypoint)、[消息扩展协议](https://github.com/openai/mcp-extensions/blob/main/docs/spec.md#prompt-target-and-send-behavior)。真实桌面布局与完整模型协作仍需宿主验收；模拟宿主测试只验证实际协议请求和隔离服务的业务结果。
 

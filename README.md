@@ -60,17 +60,17 @@ codex plugin add swarmboard@swarmboard-local
 
 Restart the desktop app and open **Swarmboard** from the sidebar. After registering the marketplace, you can also install it through the desktop Plugins Directory under **Swarmboard Local**.
 
-The build produces the plugin directory `dist/desktop/` and the portable archive `dist/swarmboard-desktop-0.3.2.zip`. Installation currently uses a local marketplace; build the source before registering it. See [installation, upgrades, and troubleshooting](docs/setup.md) for details.
+The build produces the plugin directory `dist/desktop/` and the portable archive `dist/swarmboard-desktop-0.3.3.zip`. Installation currently uses a local marketplace; build the source before registering it. See [installation, upgrades, and troubleshooting](docs/setup.md) for details.
 
 ## Usage
 
 ### Discuss a plan in the native conversation
 
-Use the discussion action in the board header to append a planning prompt to the **current native ChatGPT draft**. Review or edit it, then send it yourself. The board keeps its three tabs; chat history, model selection and approval settings belong to ChatGPT.
+Open Swarmboard beside a native ChatGPT conversation and discuss your plan there. The board keeps its three tabs; chat history, model selection and approval settings belong to ChatGPT. There is no separate chat interface inside the plugin.
 
-Discuss alternatives first. Ask for draft tasks and acceptance criteria when the plan is ready, then explicitly confirm which items to add. The discussion action itself creates no tasks, starts no workers and does not submit the message. Task details also offer a discussion action with that task's saved context.
+Discuss alternatives first. Ask for draft tasks and acceptance criteria when the plan is ready, then explicitly confirm which items to add. Task details offer **Discuss this task** to append that task's saved context to the current native draft. Review or edit it, then send it yourself. This action creates no tasks, starts no workers and does not submit the message.
 
-This requires a desktop host advertising the OpenAI message extension. Standalone browser preview and unsupported hosts keep the board available and explain that native handoff is unavailable. Pane placement is managed by the host; Swarmboard does not render a replacement chat interface.
+The task discussion shortcut requires a desktop host advertising the OpenAI message extension. Standalone browser preview and unsupported hosts keep the board available and explain that native handoff is unavailable. Pane placement is managed by the host; Swarmboard does not render a replacement chat interface.
 
 ### Add tasks and resources
 

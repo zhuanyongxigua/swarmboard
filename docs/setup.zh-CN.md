@@ -47,7 +47,7 @@ codex plugin list --marketplace swarmboard-local --json
 `npm run package:desktop` 生成：
 
 - `dist/desktop/`：插件目录。
-- `dist/swarmboard-desktop-0.3.2.zip`：ZIP 根目录即插件根目录。
+- `dist/swarmboard-desktop-0.3.3.zip`：ZIP 根目录即插件根目录。
 
 ZIP 可解压到自建的本地 marketplace，再让目录的 `source.path` 指向解压后的插件根目录。配置使用 `${PLUGIN_ROOT}`，解压目录可以移动；目标客户端仍需要可访问的 Node.js 24+。公开源码仓库和 ZIP 不代表已上架 OpenAI Plugin Directory。
 
@@ -97,7 +97,7 @@ npm run docs:screenshots
 
 **找不到 Swarmboard 来源或入口？** 确认 `dist/desktop/plugin.json` 存在，用 `codex plugin marketplace list` 检查来源，再回读插件安装和启用状态。修改目录内容后重启桌面客户端。
 
-**桌面提示找不到 node？** 终端能运行不代表桌面启动环境一致。0.3.2 的 macOS/Linux 便携包通过允许的裸命令 `sh` 调用启动器，在 PATH、NVM、Volta 和 Homebrew/系统常见位置查找 Node.js，并校验版本 24+ 与 `node:sqlite`；不加载 shell 配置、不修改系统 PATH。自定义安装可在 MCP 服务环境中设置 `SWARMBOARD_NODE` 为可执行文件的绝对路径，再重新构建和安装；无效覆盖值会在 stderr 给出明确错误。Windows 构建仍直接调用 `node`。遇到 `MCP startup failed: No such file or directory` 时，还应核对安装目录是否存在和实际启动配置。
+**桌面提示找不到 node？** 终端能运行不代表桌面启动环境一致。0.3.3 的 macOS/Linux 便携包通过允许的裸命令 `sh` 调用启动器，在 PATH、NVM、Volta 和 Homebrew/系统常见位置查找 Node.js，并校验版本 24+ 与 `node:sqlite`；不加载 shell 配置、不修改系统 PATH。自定义安装可在 MCP 服务环境中设置 `SWARMBOARD_NODE` 为可执行文件的绝对路径，再重新构建和安装；无效覆盖值会在 stderr 给出明确错误。Windows 构建仍直接调用 `node`。遇到 `MCP startup failed: No such file or directory` 时，还应核对安装目录是否存在和实际启动配置。
 
 **添加任务后没有 Agent 开始工作？** 本版本不创建或自动唤醒会话。先在已有会话中启用插件并让 Agent 读取、认领任务。
 
