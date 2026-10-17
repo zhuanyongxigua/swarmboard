@@ -1,0 +1,51 @@
+// Keep English and Chinese screenshot fixtures equivalent so both READMEs show
+// the same workflows, without translating or modifying real workspace data.
+const english = {
+  'Agent · 登录回归': 'Agent · Login',
+  'Agent · 文件预览': 'Agent · Files',
+  'Agent · 界面修复': 'Agent · UI',
+  '共享开发环境 · 不同页面可并行验证': 'Shared environment · Test different pages in parallel',
+  '独立账号与工作目录；重启服务前先协商。': 'Separate accounts and workspaces. Coordinate before restarting services.',
+  '备用开发环境 · 适合构建与独立验证': 'Backup environment · Builds and isolated checks',
+  '开始前声明使用范围，结束后释放声明。': 'Declare your scope before starting; release usage when finished.',
+  '回归数据集': 'Regression dataset',
+  '登录与文件功能的示例测试数据': 'Sample data for login and file tests',
+  '可并行读取；变更共用数据前通知其他使用者。': 'Concurrent reads are welcome. Notify peers before changing shared data.',
+  '补全搜索结果的空状态': 'Add empty search results',
+  '没有匹配结果时，给出清晰提示和下一步操作。': 'Show a clear message and next steps when no results match.',
+  '空列表和搜索无结果两种情况均有提示。': 'Cover both empty lists and searches with no matching results.',
+  '为文件上传增加失败重试': 'Retry failed file uploads',
+  '保留失败文件，让用户可以直接重试。': 'Keep failed files available so users can retry them.',
+  '重试成功后不会产生重复文件。': 'Successful retries do not create duplicate files.',
+  '回归登录与权限校验': 'Check login and permissions',
+  '检查正常登录、错误密码和页面权限提示。': 'Check valid logins, incorrect passwords and access messages.',
+  '登录和权限用例均有可核对的结果。': 'Record verifiable results for login and permission tests.',
+  '验证文件预览与下载': 'Verify file preview and download',
+  '覆盖文档预览、文件下载与异常提示。': 'Cover document previews, downloads and error messages.',
+  '支持格式可预览，下载内容与原件一致。': 'Supported formats render correctly; downloads match the originals.',
+  '修复分页切换后的选中状态': 'Fix selection after pagination',
+  '翻页后清除旧页面的选中项，等待人工验收。': 'Clear selections after changing pages. Ready for review.',
+  '翻页后计数和操作对象保持一致。': 'Selection counts and action targets remain consistent after pagination.',
+  '整理回归结果与复现步骤': 'Document regression results',
+  '汇总检查记录，让后续处理可以直接复现问题。': 'Collect findings and steps so others can reproduce issues.',
+  '每项记录包含操作步骤与预期结果。': 'Each finding includes reproduction steps and expected results.',
+  '验证登录与权限提示': 'Check login and access messages',
+  '独立浏览器会话 / 示例账号 A': 'Separate browser session / Sample account A',
+  '可并行；不重启服务，不修改共用配置。': 'Parallel use agreed. No restarts or shared configuration changes.',
+  '独立浏览器会话 / 示例账号 B': 'Separate browser session / Sample account B',
+  '可与登录回归同时进行；数据变更前先沟通。': 'Can run alongside login checks. Coordinate before changing data.',
+  '文档截图示例数据；不对应实际模型执行、测试结果或代码提交。': 'Documentation sample data only; not evidence of real model runs, test results or commits.',
+  '回归记录已整理，操作步骤与预期结果放在一起。': 'Regression findings are documented with steps and expected results.',
+  '分页选中状态的修改已提交，等待验收。': 'The pagination selection fix is ready for review.',
+  '准备验证登录流程，使用独立账号，不重启服务。': 'Starting login checks with a separate account. No service restarts.',
+  '我同时检查文件预览，使用另一组账号，不改登录配置。': 'Checking file previews in parallel with another account. No login configuration changes.',
+  '两项检查使用不同账号和浏览器会话，可以共用 dev-a。': 'Both checks can share dev-a using separate accounts and browser sessions.',
+  '约定：如需重启服务，先通知当前使用者，确认检查结束后再操作。': 'Agreement: notify current users and wait for their checks to finish before restarting services.',
+  '查看任务 回归登录与权限校验': 'View task Check login and permissions',
+  '资源池': 'Resources', '查看资源 dev-a': 'View resource dev-a', '共享面板': 'Shared board',
+};
+export function screenshotCopy(locale, text) {
+  if (locale !== 'en') return text;
+  if (!(text in english)) throw new Error(`Missing English screenshot fixture: ${text}`);
+  return english[text];
+}

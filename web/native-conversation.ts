@@ -1,5 +1,6 @@
 // Keep native conversation requests explicit and bounded so board data can be
 // discussed in the host draft without sending a message or changing the board.
+import { t } from './i18n.js';
 import type { App } from '@modelcontextprotocol/ext-apps';
 
 type TaskContext = {
@@ -12,12 +13,12 @@ type BoardContext = {
 };
 
 export function nativeConversationUnavailableReason(capabilities: unknown, platform?: unknown): string {
-  if (platform === 'mobile') return '移动端暂不支持追加原生对话草稿，请在 ChatGPT 桌面端打开。';
+  if (platform === 'mobile') return t("移动端暂不支持追加原生对话草稿，请在 ChatGPT 桌面端打开。");
   const host = capabilities as { experimental?: Record<string, unknown>; message?: { text?: unknown } } | undefined;
   const extension = host?.experimental?.['openai/message'];
   const text = host?.message?.text;
   if (!extension || typeof extension !== 'object' || !text || typeof text !== 'object') {
-    return '当前宿主不支持原生对话草稿追加，请在支持此功能的 ChatGPT 桌面端打开。';
+    return t("当前宿主不支持原生对话草稿追加，请在支持此功能的 ChatGPT 桌面端打开。");
   }
   return '';
 }
@@ -57,5 +58,5 @@ export async function appendNativeDraft(app: App, text: string): Promise<void> {
     _meta: { 'openai/message': { target: 'active', send: false } },
   };
   const result = await app.sendMessage(params);
-  if (result.isError) throw new Error('宿主未接受草稿追加请求，请在原生对话中检查后重试。');
+  if (result.isError) throw new Error(t("宿主未接受草稿追加请求，请在原生对话中检查后重试。"));
 }

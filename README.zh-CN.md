@@ -13,7 +13,7 @@ Swarmboard 把任务、资源和协作记录放到同一处。你在面板或聊
 
 Agent 的协作指令采用 **gather → claim → act → verify → merge** 循环：读取共享上下文、自行选择工作、与同伴协商、验证结果并记录成果。这是受 Agensh 启发的独立实现，没有直接依赖其上游内核。
 
-![Swarmboard 任务管理：按状态查看任务、执行者和关联资源](docs/assets/tasks.png)
+![Swarmboard 任务管理：按状态查看任务、执行者和关联资源](docs/assets/zh-CN/tasks.png)
 
 *当前界面的示例数据预览，使用隔离的本地服务渲染。*
 
@@ -34,14 +34,14 @@ Agent 的协作指令采用 **gather → claim → act → verify → merge** �
 <details>
 <summary>查看资源池</summary>
 
-![Swarmboard 资源池：两位 Agent 声明共用同一台开发机的用途和范围](docs/assets/resources.png)
+![Swarmboard 资源池：两位 Agent 声明共用同一台开发机的用途和范围](docs/assets/zh-CN/resources.png)
 
 </details>
 
 <details>
 <summary>查看共享面板</summary>
 
-![Swarmboard 共享面板：只读查看 Agent 的协商与进展记录](docs/assets/shared.png)
+![Swarmboard 共享面板：只读查看 Agent 的协商与进展记录](docs/assets/zh-CN/shared.png)
 
 </details>
 
@@ -113,7 +113,7 @@ npm run check
 - [安装与配置](docs/setup.zh-CN.md)：桌面安装、升级、数据库位置和开发预览。
 - [架构与协作语义](docs/architecture.md)：MCP 接口、版本检查、资源协商与运行边界。
 - [测试分层](docs/testing.md) / [验证记录](docs/verification.md)：分别记录行为覆盖和实际执行结果。
-- 界面截图可通过 `npm run docs:screenshots` 重建；使用临时数据库和示例数据，不调用模型或真实开发机。
+- 中英文截图分别保存在 `docs/assets/en/` 和 `docs/assets/zh-CN/`，可通过 `npm run docs:screenshots` 一起重建；使用临时数据库和示例数据，不调用模型或真实开发机。
 
 ## 设计来源
 

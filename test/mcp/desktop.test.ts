@@ -59,6 +59,17 @@ describe('portable desktop plugin', () => {
     const names = files(pluginRoot);
     expect(names).toEqual(expect.arrayContaining(['server/swarmboard.mjs', 'widget.html', 'skills/shared-worker/SKILL.md', 'BUILD.json']));
     expect(names.some(name => /(^|\/)(node_modules|\.env|\.git)(\/|$)|\.(sqlite|db)(-|$)/.test(name))).toBe(false);
+    // Documentation links must also work after moving and unpacking the plugin.
+    for (const [readme, language] of [['README.md', 'en'], ['README.zh-CN.md', 'zh-CN']]) {
+      const markdown = readFileSync(join(pluginRoot, readme!), 'utf8');
+      const images = [...markdown.matchAll(/!\[[^\]]*\]\((docs\/assets\/[^)]+)\)/g)].map(match => match[1]!);
+      expect(images).toHaveLength(3);
+      for (const image of images) {
+        expect(image.startsWith(`docs/assets/${language}/`)).toBe(true);
+        expect(existsSync(join(pluginRoot, image))).toBe(true);
+      }
+    }
+
     for (const name of names) expect(readFileSync(join(pluginRoot, name), 'utf8')).not.toMatch(/\/Users\/[^/]+\/|\/home\/runner\/work\//);
   });
   it('discovers native entrypoints and UI, collaborates, and persists after a clean process restart', async () => {

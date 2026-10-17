@@ -13,9 +13,9 @@ Swarmboard keeps tasks, resources, and collaboration records in one place. Add t
 
 Its shared-worker instructions use a **gather → claim → act → verify → merge** loop: agents read shared context, choose work, coordinate with peers, verify results, and record outcomes. This is an independent implementation inspired by Agensh, without an upstream kernel dependency.
 
-![Swarmboard task board showing status columns, assignees, and related resources](docs/assets/tasks.png)
+![Swarmboard task board showing status columns, assignees, and related resources](docs/assets/en/tasks.png)
 
-*Preview of the current UI with sample data. The interface shown is in Chinese.*
+*English UI preview with isolated sample data. [中文界面截图](README.zh-CN.md).*
 
 [Quick start](#quick-start) · [Usage](#usage) · [Installation and configuration](docs/setup.md) · [Architecture](docs/architecture.md)
 
@@ -34,14 +34,14 @@ Resources have no fixed exclusive/shared classification. Two agents might test d
 <details>
 <summary>View resources</summary>
 
-![Swarmboard resource pool showing two agents sharing a machine with separate usage scopes](docs/assets/resources.png)
+![Swarmboard resource pool showing two agents sharing a machine with separate usage scopes](docs/assets/en/resources.png)
 
 </details>
 
 <details>
 <summary>View the shared board</summary>
 
-![Swarmboard read-only shared board showing coordination messages and progress](docs/assets/shared.png)
+![Swarmboard read-only shared board showing coordination messages and progress](docs/assets/en/shared.png)
 
 </details>
 
@@ -115,7 +115,7 @@ npm run check
 - [Installation and configuration](docs/setup.md): desktop setup, upgrades, database paths, and development preview.
 - [Architecture and collaboration semantics](docs/architecture.md) (Chinese): MCP tools, version checks, resource negotiation, and runtime boundaries.
 - [Test layers](docs/testing.md) / [verification records](docs/verification.md) (Chinese): behavioral coverage and actual execution evidence.
-- Rebuild the UI screenshots with `npm run docs:screenshots`. It uses a temporary database and sample data, with no model calls or access to real development machines.
+- Rebuild both English and Chinese UI screenshots with `npm run docs:screenshots` (English preview: `?lang=en`; Chinese: `?lang=zh-CN`). It uses a temporary database and sample data, with no model calls or access to real development machines.
 
 ## Design references
 

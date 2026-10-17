@@ -33,9 +33,11 @@ for (const name of ['architecture.md', 'testing.md', 'verification.md', 'setup.m
   await cp(path.join(root, 'docs', name), path.join(destination, 'docs', name));
 }
 // Keep the README image links usable in the portable plugin as well as on GitHub.
-await mkdir(path.join(destination, 'docs/assets'), { recursive: true });
-for (const name of ['tasks.png', 'resources.png', 'shared.png']) {
-  await cp(path.join(root, 'docs/assets', name), path.join(destination, 'docs/assets', name));
+for (const language of ['en', 'zh-CN']) {
+  await mkdir(path.join(destination, 'docs/assets', language), { recursive: true });
+  for (const image of ['tasks.png', 'resources.png', 'shared.png']) {
+    await cp(path.join(root, 'docs/assets', language, image), path.join(destination, 'docs/assets', language, image));
+  }
 }
 // Preserve dependency license notices without shipping development dependencies or their source trees.
 const packageDirectories = new Set();
