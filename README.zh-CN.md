@@ -60,9 +60,17 @@ codex plugin add swarmboard@swarmboard-local
 
 重启桌面客户端，从侧边栏打开 **Swarmboard**。也可以在注册来源后，通过桌面的 Plugins Directory 选择 **Swarmboard Local** 并安装。
 
-构建会生成插件目录 `dist/desktop/` 和便携包 `dist/swarmboard-desktop-0.2.0.zip`。当前安装方式是本地 marketplace；从 GitHub 获取源码后需要先构建。更多步骤见[安装、升级与排查](docs/setup.zh-CN.md)。
+构建会生成插件目录 `dist/desktop/` 和便携包 `dist/swarmboard-desktop-0.3.0.zip`。当前安装方式是本地 marketplace；从 GitHub 获取源码后需要先构建。更多步骤见[安装、升级与排查](docs/setup.zh-CN.md)。
 
 ## 如何使用
+
+### 在原生会话里讨论方案
+
+点击看板顶部的 **讨论方案**，把规划提示词追加到**当前 ChatGPT 原生会话的草稿**。你可以检查、修改，再自行发送。看板仍保留三个 Tab；会话历史、模型选择和审批设置均由 ChatGPT 提供。
+
+先充分讨论方案；需要时让 Agent 整理任务草稿和验收条件，明确确认后再添加。讨论入口本身不会创建任务、启动 worker 或自动发送消息。任务详情中也可以通过 **讨论此任务** 带上该任务已保存的上下文。
+
+此功能要求桌面宿主声明支持 OpenAI 消息扩展。独立浏览器预览和不支持的宿主仍能使用看板，并显示原生会话入口不可用的说明。左右布局由宿主安排，Swarmboard 不自行渲染聊天界面。
 
 ### 添加任务和资源
 

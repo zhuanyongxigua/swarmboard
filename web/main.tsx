@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from '@modelcontextprotocol/ext-apps';
 import './style.css';
+import { appendNativeDraft, nativeConversationUnavailableReason, planningPrompt, taskDiscussionPrompt } from './native-conversation.js';
 
 type Task = {
   id: string; title: string; description: string; acceptanceCriteria: string;
@@ -104,6 +105,14 @@ function Workspace() {
   const [expandedResource, setExpandedResource] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState('');
+  const [nativeUnavailable, setNativeUnavailable] = useState(window.parent === window
+    ? 'HTTP 预览不提供原生对话，请在 ChatGPT 桌面端打开插件。'
+    : '正在连接原生对话宿主…');
+  const [nativePending, setNativePending] = useState(false);
+  const [nativeFeedback, setNativeFeedback] = useState('');
+  const [nativeFeedbackTaskId, setNativeFeedbackTaskId] = useState<string | null>(null);
+  const [nativeFailed, setNativeFailed] = useState(false);
+  const nativeBusy = useRef(false);
   const mounted = useRef(true);
   const dragged = useRef<Task | null>(null);
   const moving = useRef(false);
@@ -132,7 +141,7 @@ function Workspace() {
     async function start() {
       try {
         if (window.parent !== window) {
-          const app = new App({ name: 'Swarmboard', version: '0.2.0' });
+          const app = new App({ name: 'Swarmboard', version: '0.3.0' });
           localBridge = app;
           app.ontoolresult = result => {
             try {
@@ -142,17 +151,21 @@ function Workspace() {
               }
             } catch (error) { if (active) setError(message(error)); }
           };
+          app.onhostcontextchanged = () => {
+            if (active) setNativeUnavailable(nativeConversationUnavailableReason(app.getHostCapabilities(), app.getHostContext()?.platform));
+          };
           await app.connect();
           if (!active) return;
           bridge = app;
           setConnected(true);
+          setNativeUnavailable(nativeConversationUnavailableReason(app.getHostCapabilities(), app.getHostContext()?.platform));
         }
         await refresh();
         timer = setInterval(() => {
           if (document.visibilityState === 'visible') void refresh(true);
         }, 15000);
       } catch (error) {
-        if (active) { setLoading(false); setError(message(error)); }
+        if (active) { setLoading(false); setError(message(error)); setNativeUnavailable('原生对话连接未完成，请重新打开插件后重试。'); }
       }
     }
     void start();
@@ -170,6 +183,26 @@ function Workspace() {
   };
   const usages = board?.usages.filter(usage => usage.active) ?? [];
 
+  async function discuss(task?: Task) {
+    if (!bridge || !board || nativeBusy.current || nativeUnavailable) return;
+    nativeBusy.current = true; setNativePending(true); setNativeFeedback(''); setNativeFailed(false);
+    setNativeFeedbackTaskId(task?.id ?? null);
+    try {
+      await appendNativeDraft(bridge, task ? taskDiscussionPrompt(task)
+        : planningPrompt(board, tabs.find(item => item.id === tab)!.title));
+      if (mounted.current) setNativeFeedback('已追加到原生对话草稿，请检查后发送。');
+    } catch (error) {
+      if (mounted.current) {
+        setNativeFailed(true);
+        setNativeFeedback(`无法追加到原生对话草稿：${message(error)}`);
+      }
+    } finally {
+      nativeBusy.current = false;
+      if (mounted.current) setNativePending(false);
+    }
+  }
+  const nativeHelp = nativeUnavailable || '将讨论提示追加到原生对话草稿，由你检查后发送。';
+  const nativeDisabled = Boolean(nativeUnavailable || nativePending || !board);
   function changeTab(next: Tab) { setTab(next); }
   function tabKey(event: React.KeyboardEvent, index: number) {
     if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
@@ -231,9 +264,16 @@ function Workspace() {
       <span className="connection" title={updated ? `上次同步 ${time(updated, true)}` : '等待连接'}>
         {error ? '同步需检查' : connected ? '已连接' : '本地空间'}
       </span>
+      <button className="secondary native-discuss" type="button" aria-describedby="native-conversation-help"
+        disabled={nativeDisabled} onClick={() => void discuss()}>{nativePending ? '正在追加…' : '讨论方案'}</button>
       <button className="refresh-button" type="button" aria-label="刷新面板"
         disabled={refreshing} onClick={() => void refresh()}>↻</button>
     </header>
+    <div className="native-conversation-note">
+      <span id="native-conversation-help">{nativeHelp}</span>
+      {nativeFeedback && !editor && <span className={nativeFailed ? 'native-failure' : ''}
+        role={nativeFailed ? 'alert' : 'status'}>{nativeFeedback}</span>}
+    </div>
 
     <main id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
       <div className="panel-toolbar">
@@ -264,7 +304,10 @@ function Workspace() {
     {editor && <EditorDialog key={`${editor.type}-${editor.item?.id ?? 'new'}-${editor.item?.version ?? 0}`}
       editor={editor} name={name} usages={usages} resources={board?.resources ?? []}
       close={() => setEditor(null)} saved={() => { setEditor(null); setAnnouncement('修改已保存。'); void refresh(true); }}
-      failed={() => refresh(true)} reload={reloadEditor} />}
+      failed={() => refresh(true)} reload={reloadEditor}
+      nativeDisabled={nativeDisabled} nativeHelp={nativeHelp} nativePending={nativePending}
+      nativeFeedback={nativeFeedbackTaskId === editor.item?.id ? nativeFeedback : ''}
+      nativeFailed={nativeFailed} discuss={task => void discuss(task)} />}
   </div>;
 }
 
@@ -366,9 +409,12 @@ function Empty({ title, text, loading = false }: { title: string; text: string; 
   return <div className="empty" role={loading ? 'status' : undefined}><h2>{title}</h2><p>{text}</p></div>;
 }
 
-function EditorDialog({ editor, name, usages, resources, close, saved, failed, reload }: {
+function EditorDialog({ editor, name, usages, resources, close, saved, failed, reload,
+  nativeDisabled, nativeHelp, nativePending, nativeFeedback, nativeFailed, discuss }: {
   editor: Editor; name: (id: string) => string; usages: Usage[]; resources: Resource[];
   close: () => void; saved: () => void; failed: () => Promise<Board | null>; reload: () => Promise<boolean>;
+  nativeDisabled: boolean; nativeHelp: string; nativePending: boolean; nativeFeedback: string;
+  nativeFailed: boolean; discuss: (task: Task) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const first = useRef<HTMLInputElement>(null);
@@ -425,6 +471,14 @@ function EditorDialog({ editor, name, usages, resources, close, saved, failed, r
         <button type="button" className="close-button" aria-label="关闭编辑窗口" disabled={saving} onClick={close}>×</button></div>
       <div className="form-body">
         {isTask ? <>
+          {task && <div className="task-discussion">
+            <div className="task-discussion-action"><span className="subtle">已保存版本 v{task.version}</span>
+              <button type="button" className="secondary" aria-describedby="task-native-help"
+                disabled={nativeDisabled || saving} onClick={() => discuss(task)}>{nativePending ? '正在追加…' : '讨论此任务'}</button></div>
+            <p className="form-note" id="task-native-help">仅追加已保存的任务版本；未保存的修改不会带入对话。{nativeHelp}</p>
+            {nativeFeedback && <p className={nativeFailed ? 'native-failure' : 'form-note'}
+              role={nativeFailed ? 'alert' : 'status'}>{nativeFeedback}</p>}
+          </div>}
           <label>标题<input ref={first} name="title" required maxLength={500} defaultValue={task?.title} /></label>
           {task && <div className="form-columns">
             <label>状态<select name="status" defaultValue={task.status}>{Object.entries(statuses).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
