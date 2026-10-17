@@ -11,6 +11,11 @@ function session(onApproval?: () => void) {
   sessions.push(s); return s;
 }
 describe('official App Server session adapter', () => {
+  it('resumes a large-history thread with metadata only before submitting the next turn',async()=>{
+    const s=session(),id=await s.open({...worker,threadId:'large-history-thread'}),started=vi.fn();
+    expect(id).toBe('large-history-thread');await s.run(id,'next',started);expect(started).toHaveBeenCalledWith('turn-1');
+    expect(await s.inspect(id,'saved-turn','delivery')).toBe('completed');
+  });
   it('handles completion before the turn/start response and reopens the same thread', async () => {
     const s = session(), id = await s.open(worker), started = vi.fn();
     await s.run(id, 'early', started); expect(started).toHaveBeenCalledWith('turn-1');

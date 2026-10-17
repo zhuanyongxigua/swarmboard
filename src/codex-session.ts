@@ -43,7 +43,7 @@ export class CodexSession implements SessionAdapter {
       lines.on('line', line => { try { this.receive(JSON.parse(line)); } catch { /* Ignore non-protocol diagnostics. */ } });
       const failed = () => this.fail(new Error('Codex App Server disconnected; inspect the bound session before retrying'));
       this.child.once('error', failed); this.child.once('exit', failed); this.child.stdin.on('error', failed); this.child.stdout.on('error', failed);
-      await this.request('initialize', { clientInfo: { name: 'swarmboard-event-worker', title: 'Swarmboard event worker', version: '0.7.1' }, capabilities: { experimentalApi: true } });
+      await this.request('initialize', { clientInfo: { name: 'swarmboard-event-worker', title: 'Swarmboard event worker', version: '0.7.2' }, capabilities: { experimentalApi: true } });
       this.send({ method: 'initialized' });
     })();
   }
@@ -83,7 +83,7 @@ export class CodexSession implements SessionAdapter {
   async open(worker: Worker) {
     await this.start();
     const response = await this.request(worker.threadId ? 'thread/resume' : 'thread/start', {
-      ...(worker.threadId ? { threadId: worker.threadId } : {}), cwd: worker.workspacePath,
+      ...(worker.threadId ? { threadId: worker.threadId, excludeTurns: true } : {}), cwd: worker.workspacePath,
       sandbox: 'workspace-write', approvalPolicy: 'on-request',
     });
     if (!response.thread?.id || response.thread.cwd !== worker.workspacePath || worker.threadId && response.thread.id !== worker.threadId) throw new Error('Codex did not bind the expected workspace');

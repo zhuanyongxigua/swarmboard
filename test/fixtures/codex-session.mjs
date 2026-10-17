@@ -14,6 +14,8 @@ createInterface({ input: process.stdin }).on('line', line => {
   if (method === 'initialize') send({ id, result: {} });
   if (method === 'thread/start' || method === 'thread/resume') {
     if (params.sandbox !== 'workspace-write' || params.approvalPolicy !== 'on-request') { send({ id, error: { code: 400 } }); return; }
+    // Simulate unbounded history hydration stalling a metadata-only resume.
+    if (method === 'thread/resume' && params.threadId === 'large-history-thread' && params.excludeTurns !== true) return;
     send({ id, result: { thread: { id: params.threadId ?? 'persistent-thread', cwd: params.cwd } } });
   }
   if (method === 'thread/read') {
