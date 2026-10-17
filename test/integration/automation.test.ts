@@ -16,7 +16,7 @@ describe('native automation configuration and claiming', () => {
     const dir = mkdtempSync(join(tmpdir(), 'swarmboard-automation-')); const path = join(dir, 'board.sqlite');
     let store = new Store(path);
     try {
-      expect(store.readAutomation()).toMatchObject({ version: 0, state: 'off', desiredEnabled: false, automationId: null, intervalMinutes: 10 });
+      expect(store.readAutomation()).toMatchObject({ version: 0, state: 'off', desiredEnabled: true, automationId: null, intervalMinutes: 10 });
       const pending = store.prepareAutomation({ action: 'enable', expectedVersion: 0, workspacePath: dir, intervalMinutes: 5 });
       expect(pending).toMatchObject({ state: 'pending', actualStatus: null, automationId: null });
       expect(buildSetupPrompt(pending)).toContain('This is setup only');
@@ -95,7 +95,7 @@ describe('native automation configuration and claiming', () => {
       store.close(); store = new Store(path);
       expect(store.board()).toEqual(before); expect(store.board().tasks[0]?.id).toBe(task.id); expect(store.board().resources[0]?.id).toBe(resource.id);
       expect(store.readAutomation()).toMatchObject({ state: 'off', version: 0 });
-      expect(store.db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 3 });
+      expect(store.db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 4 });
     } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
   });
   it('turns unknown setup outcomes into durable read-only recovery and never permits a fresh creation retry', () => {
@@ -128,7 +128,7 @@ describe('native automation configuration and claiming', () => {
       expect(() => store.confirmAutomation({ ...fields, expectedVersion: original.version, requestId: original.requestId })).toThrow(/State changed/);
       expect(() => store.reconcileAutomation({ expectedVersion: recovery.version, requestId: recovery.requestId, outcome: 'found' })).toThrow(/requires its observed/);
       const recovered = store.reconcileAutomation({ ...fields, expectedVersion: recovery.version, requestId: recovery.requestId, outcome: 'found' });
-      expect(recovered).toMatchObject({ state: 'error', desiredEnabled: false, recoveryRequired: false, automationId: 'native-recovered', actualStatus: 'ACTIVE' });
+      expect(recovered).toMatchObject({ state: 'off', desiredEnabled: true, recoveryRequired: false, automationId: 'native-recovered', actualStatus: 'ACTIVE' });
       const pause = store.prepareAutomation({ action: 'pause', expectedVersion: recovered.version });
       expect(pause).toMatchObject({ setupMode: 'configure', automationId: 'native-recovered', desiredEnabled: false });
       const failed = store.failAutomationSetup({ expectedVersion: pause.version, requestId: pause.requestId, error: 'No native mutation happened', nativeOutcome: 'not-created' });
@@ -137,6 +137,59 @@ describe('native automation configuration and claiming', () => {
       expect(() => store.reconcileAutomation({ ...fields, automationId: 'another-id', expectedVersion: next.version, requestId: next.requestId, outcome: 'found' })).toThrow(/existing native automation/);
       expect(store.failAutomationSetup({ expectedVersion: next.version, requestId: next.requestId, error: 'Lookup unavailable', nativeOutcome: 'not-created' }).recoveryRequired).toBe(true);
     } finally { store.close(); }
+  });
+  it('initializes one projectless native schedule without settings and does not retry pending viewers', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'swarmboard-default-')); const path = join(dir, 'board.sqlite');
+    const first = new Store(path); const second = new Store(path);
+    try {
+      expect(first.readAutomation()).toMatchObject({ desiredEnabled: true, workspacePath: '', state: 'off' });
+      const winner = first.ensureAutomation(); const follower = second.ensureAutomation();
+      expect(winner.setupPrompt).toContain('projectId=null'); expect(winner.setupPrompt).toContain('Do not ask the user to choose a workspace, model, interval or enable switch');
+      expect(winner.config).toMatchObject({ state: 'pending', setupMode: 'configure', workspacePath: '' });
+      expect(follower).toEqual({ config: winner.config, setupPrompt: null });
+      expect(first.ensureAutomation()).toEqual(follower);
+      expect(() => first.confirmAutomation({ expectedVersion: winner.config.version, requestId: winner.config.requestId, automationId: 'global-native', status: 'ACTIVE', model: 'host-default', reasoningEffort: 'high' })).toThrow(/projectId/);
+      expect(() => first.confirmAutomation({ expectedVersion: winner.config.version, requestId: winner.config.requestId, automationId: 'global-native', status: 'ACTIVE', model: 'host-default', reasoningEffort: 'high', projectId: 'wrong-project' })).toThrow(/projectId=null/);
+      const active = first.confirmAutomation({ expectedVersion: winner.config.version, requestId: winner.config.requestId, automationId: 'global-native', status: 'ACTIVE', model: 'host-default', reasoningEffort: 'high', projectId: null });
+      expect(active.projectId).toBeNull(); expect(second.ensureAutomation({ retry: true }).setupPrompt).toBeNull();
+      const pause = first.prepareAutomation({ action: 'pause', expectedVersion: active.version });
+      first.confirmAutomation({ expectedVersion: pause.version, requestId: pause.requestId, automationId: 'global-native', status: 'PAUSED', model: 'host-default', reasoningEffort: 'high', projectId: null });
+      expect(second.ensureAutomation({ retry: true }).setupPrompt).toBeNull();
+    } finally { first.close(); second.close(); rmSync(dir, { recursive: true, force: true }); }
+  });
+  it('does not loop on errors, and explicit retry recovers unknown native outcomes before configuring', () => {
+    const store = new Store();
+    try {
+      const initial = store.ensureAutomation();
+      const failed = store.failAutomationSetup({ expectedVersion: initial.config.version, requestId: initial.config.requestId, error: 'Unknown dispatch outcome' });
+      expect(store.ensureAutomation()).toEqual({ config: failed, setupPrompt: null });
+      const recovery = store.ensureAutomation({ retry: true });
+      expect(recovery.config.setupMode).toBe('reconcile'); expect(recovery.setupPrompt).toContain('READ-ONLY native reconciliation');
+      expect(store.ensureAutomation().setupPrompt).toBeNull();
+      expect(() => store.reconcileAutomation({ expectedVersion: recovery.config.version, requestId: recovery.config.requestId, outcome: 'found', automationId: 'global-native', status: 'ACTIVE', model: 'host-default', reasoningEffort: 'high' })).toThrow(/requires its observed/);
+      const recovered = store.reconcileAutomation({ expectedVersion: recovery.config.version, requestId: recovery.config.requestId, outcome: 'found', automationId: 'global-native', status: 'ACTIVE', model: 'host-default', reasoningEffort: 'high', projectId: null });
+      expect(recovered).toMatchObject({ state: 'off', desiredEnabled: true, projectId: null, automationId: 'global-native' });
+      const resume = store.ensureAutomation(); expect(resume.config.setupMode).toBe('configure'); expect(resume.config.automationId).toBe('global-native');
+      const definite = store.failAutomationSetup({ expectedVersion: resume.config.version, requestId: resume.config.requestId, error: 'Native tool unavailable before mutation', nativeOutcome: 'not-created' });
+      expect(store.ensureAutomation().setupPrompt).toBeNull();
+      expect(store.ensureAutomation({ retry: true }).config).toMatchObject({ setupMode: 'configure', recoveryRequired: false, version: definite.version + 1 });
+    } finally { store.close(); }
+  });
+  it('migrates a version-3 off configuration once without discarding its task or native identity', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'swarmboard-default-migration-')); const path = join(dir, 'board.sqlite'); let store = new Store(path);
+    try {
+      const task = store.createTask({ title: 'Retained legacy task' }); const old = { ...store.readAutomation(), desiredEnabled: false, state: 'off', automationId: 'legacy-native', actualStatus: 'PAUSED', projectId: 'legacy-project', workspacePath: dir, version: 7 };
+      store.db.prepare('UPDATE automation_config SET config=? WHERE id=1').run(JSON.stringify(old)); store.db.exec('PRAGMA user_version=3'); store.close(); store = new Store(path);
+      const migrated = store.readAutomation(); expect(migrated).toMatchObject({ desiredEnabled: true, automationId: 'legacy-native', actualStatus: 'PAUSED', workspacePath: dir, version: 8 });
+      expect(store.board().tasks[0]?.id).toBe(task.id); store.close(); store = new Store(path); expect(store.readAutomation()).toEqual(migrated);
+      const pending = store.prepareAutomation({ action: 'pause', expectedVersion: migrated.version }); store.confirmAutomation({ expectedVersion: pending.version, requestId: pending.requestId, automationId: 'legacy-native', status: 'PAUSED', model: 'host-default', reasoningEffort: 'high', projectId: 'legacy-project' });
+      store.close(); store = new Store(path); expect(store.readAutomation().desiredEnabled).toBe(false); expect(store.ensureAutomation().setupPrompt).toBeNull();
+    } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+  });
+  it('gives global workers explicit target checks and ends empty boards before registering identities', () => {
+    const prompt = buildWorkerPrompt('', 'board-default');
+    expect(prompt).toContain('board-global projectless'); expect(prompt).toContain('Never assume the session’s starting directory'); expect(prompt).toContain('BEFORE agent_register'); expect(prompt).toContain('concrete missing-fact blocker'); expect(prompt).toContain('board-default');
+    expect(buildWorkerPrompt('/legacy', 'board-old')).toContain('Use only that workspace as the working directory');
   });
   it('keeps setup and worker prompts bounded and prevents implicit or disabled execution', () => {
     const store = new Store();

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
-import { automationSchemas, canonicalWorkspace, defaultAutomationConfig, type AutomationConfig } from './automation.js';
+import { automationSchemas, buildSetupPrompt, canonicalWorkspace, defaultAutomationConfig, type AutomationConfig } from './automation.js';
 
 export class AppError extends Error {
   constructor(public code: string, message: string, public status = 400) { super(message); }
@@ -67,7 +67,7 @@ export class Store {
       // Separate desktop MCP processes must inspect and apply migrations under the same write lock.
       this.transaction(() => {
         const version = Number((this.db.prepare('PRAGMA user_version').get() as {user_version: number}).user_version);
-        if (version > 3) throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500);
+        if (version > 4) throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500);
         if (version === 0) this.db.exec(`
           CREATE TABLE agents(id TEXT PRIMARY KEY, name TEXT NOT NULL, lastSeenAt TEXT NOT NULL);
           CREATE TABLE tasks(id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, acceptanceCriteria TEXT NOT NULL, status TEXT NOT NULL, assignee TEXT REFERENCES agents(id), version INTEGER NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
@@ -83,6 +83,11 @@ export class Store {
         if (version < 2) this.db.exec('ALTER TABLE usages ADD COLUMN version INTEGER NOT NULL DEFAULT 1; PRAGMA user_version = 2;');
         if (version < 3) this.db.exec("CREATE TABLE IF NOT EXISTS automation_config(id INTEGER PRIMARY KEY CHECK(id=1), config TEXT NOT NULL); CREATE TABLE IF NOT EXISTS automation_bindings(taskId TEXT PRIMARY KEY REFERENCES tasks(id),agentId TEXT NOT NULL REFERENCES agents(id),threadId TEXT NOT NULL,automationId TEXT NOT NULL,automationVersion INTEGER NOT NULL,createdAt TEXT NOT NULL); PRAGMA user_version = 3;");
         this.db.prepare('INSERT OR IGNORE INTO automation_config(id,config) VALUES(1,?)').run(JSON.stringify({ ...defaultAutomationConfig, boardId: randomUUID() }));
+        if (version < 4) {
+          const config = this.readAutomation();
+          if (config.state === 'off' && !config.desiredEnabled) this.saveAutomation({ ...config, desiredEnabled: true, version: config.version + 1, updatedAt: new Date().toISOString() });
+          this.db.exec('PRAGMA user_version = 4;');
+        }
       });
     } catch (error) { this.db.close(); throw error; }
   }
@@ -127,20 +132,30 @@ export class Store {
     this.db.prepare('INSERT INTO automation_config(id,config) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET config=excluded.config').run(JSON.stringify(config));
     return config;
   }
+  private prepareAutomationLocked(data: z.infer<typeof automationSchemas.prepare>): AutomationConfig {
+    const before = this.readAutomation();
+    this.checkVersion(before.version, data.expectedVersion);
+    const recovery = data.action === 'reconcile' || before.state === 'pending' || before.recoveryRequired;
+    if (recovery) return this.saveAutomation({ ...before, version: before.version + 1, state: 'pending', setupMode: 'reconcile', recoveryRequired: true, requestId: randomUUID(), lastError: '', updatedAt: new Date().toISOString() });
+    if (data.action === 'pause' && !before.automationId) throw new AppError('AUTOMATION_NOT_CONFIGURED', 'No native automation has been confirmed; inspect any pending setup before retrying', 409);
+    let workspacePath = before.workspacePath;
+    if (data.action === 'enable' && (data.workspacePath ?? before.workspacePath)) {
+      try { workspacePath = canonicalWorkspace(data.workspacePath ?? before.workspacePath); }
+      catch { throw new AppError('INVALID_WORKSPACE', 'Select an existing absolute workspace directory'); }
+    }
+    return this.saveAutomation({ ...before, version: before.version + 1, state: 'pending', setupMode: 'configure', recoveryRequired: false, desiredEnabled: data.action === 'enable', workspacePath, intervalMinutes: data.action === 'enable' ? data.intervalMinutes ?? before.intervalMinutes : before.intervalMinutes, requestId: randomUUID(), lastError: '', updatedAt: new Date().toISOString() });
+  }
   prepareAutomation(input: unknown): AutomationConfig {
     const data = parse(automationSchemas.prepare, input);
+    return this.transaction(() => this.prepareAutomationLocked(data));
+  }
+  ensureAutomation(input: unknown = {}) {
+    const { retry } = parse(automationSchemas.ensure, input);
     return this.transaction(() => {
       const before = this.readAutomation();
-      this.checkVersion(before.version, data.expectedVersion);
-      const recovery = data.action === 'reconcile' || before.state === 'pending' || before.recoveryRequired;
-      if (recovery) return this.saveAutomation({ ...before, version: before.version + 1, state: 'pending', setupMode: 'reconcile', recoveryRequired: true, requestId: randomUUID(), lastError: '', updatedAt: new Date().toISOString() });
-      if (data.action === 'pause' && !before.automationId) throw new AppError('AUTOMATION_NOT_CONFIGURED', 'No native automation has been confirmed; inspect any pending setup before retrying', 409);
-      let workspacePath = before.workspacePath;
-      if (data.action === 'enable') {
-        try { workspacePath = canonicalWorkspace(data.workspacePath ?? before.workspacePath); }
-        catch { throw new AppError('INVALID_WORKSPACE', 'Select an existing absolute workspace directory'); }
-      }
-      return this.saveAutomation({ ...before, version: before.version + 1, state: 'pending', setupMode: 'configure', recoveryRequired: false, desiredEnabled: data.action === 'enable', workspacePath, intervalMinutes: data.action === 'enable' ? data.intervalMinutes ?? before.intervalMinutes : before.intervalMinutes, requestId: randomUUID(), lastError: '', updatedAt: new Date().toISOString() });
+      if (before.state === 'active' || !before.desiredEnabled || (!retry && (before.state === 'pending' || before.state === 'error'))) return { config: before, setupPrompt: null };
+      const config = this.prepareAutomationLocked({ action: before.recoveryRequired || before.state === 'pending' ? 'reconcile' : 'enable', expectedVersion: before.version });
+      return { config, setupPrompt: buildSetupPrompt(config) };
     });
   }
   confirmAutomation(input: unknown): AutomationConfig {
@@ -149,6 +164,7 @@ export class Store {
       const before = this.readAutomation();
       this.checkVersion(before.version, data.expectedVersion);
       if (before.state !== 'pending' || before.requestId !== data.requestId || before.setupMode !== 'configure' || before.recoveryRequired) throw new AppError('AUTOMATION_REQUEST_CONFLICT', 'Setup request is no longer pending or requires recovery', 409);
+      if (!before.workspacePath && data.projectId !== null) throw new AppError('AUTOMATION_PROJECT_MISMATCH', 'The board-global native schedule must use projectId=null', 409);
       if (data.status !== (before.desiredEnabled ? 'ACTIVE' : 'PAUSED')) throw new AppError('AUTOMATION_STATUS_MISMATCH', 'Native status does not match the requested action', 409);
       if (before.automationId && before.automationId !== data.automationId) throw new AppError('AUTOMATION_ID_MISMATCH', 'Update the existing native automation; do not create a duplicate', 409);
       return this.saveAutomation({ ...before, version: before.version + 1, state: data.status === 'ACTIVE' ? 'active' : 'off', automationId: data.automationId, actualStatus: data.status, model: data.model, reasoningEffort: data.reasoningEffort, projectId: data.projectId, setupMode: null, recoveryRequired: false, requestId: null, lastError: '', updatedAt: new Date().toISOString() });
@@ -170,12 +186,12 @@ export class Store {
       this.checkVersion(before.version, data.expectedVersion);
       if (before.state !== 'pending' || before.setupMode !== 'reconcile' || before.requestId !== data.requestId) throw new AppError('AUTOMATION_REQUEST_CONFLICT', 'Recovery request is no longer pending', 409);
       if (data.outcome === 'found') {
-        if (!data.automationId || !data.status || !data.model || !data.reasoningEffort || !data.projectId) throw new AppError('VALIDATION_ERROR', 'A found native automation requires its observed ID, status, model, reasoning effort and project');
+        if (!data.automationId || !data.status || !data.model || !data.reasoningEffort || data.projectId === undefined) throw new AppError('VALIDATION_ERROR', 'A found native automation requires its observed ID, status, model, reasoning effort and project');
         if (before.automationId && before.automationId !== data.automationId) throw new AppError('AUTOMATION_ID_MISMATCH', 'Reconcile the existing native automation; multiple identities need manual inspection', 409);
-        return this.saveAutomation({ ...before, version: before.version + 1, state: 'error', desiredEnabled: false, setupMode: null, recoveryRequired: false, requestId: null, automationId: data.automationId, actualStatus: data.status, model: data.model, reasoningEffort: data.reasoningEffort, projectId: data.projectId, lastError: 'Native automation recovered. Explicitly enable or pause it to finish setup.', updatedAt: new Date().toISOString() });
+        return this.saveAutomation({ ...before, version: before.version + 1, state: 'off', setupMode: null, recoveryRequired: false, requestId: null, automationId: data.automationId, actualStatus: data.status, model: data.model, reasoningEffort: data.reasoningEffort, projectId: data.projectId ?? null, lastError: '', updatedAt: new Date().toISOString() });
       }
-      if (data.automationId || data.status || data.model || data.reasoningEffort || data.projectId) throw new AppError('VALIDATION_ERROR', 'An absent result cannot contain native automation fields');
-      return this.saveAutomation({ ...before, version: before.version + 1, state: 'off', desiredEnabled: false, setupMode: null, recoveryRequired: false, requestId: null, automationId: null, actualStatus: null, model: null, reasoningEffort: null, projectId: null, lastError: '', updatedAt: new Date().toISOString() });
+      if (data.automationId || data.status || data.model || data.reasoningEffort || Object.hasOwn(data, 'projectId')) throw new AppError('VALIDATION_ERROR', 'An absent result cannot contain native automation fields');
+      return this.saveAutomation({ ...before, version: before.version + 1, state: 'off', setupMode: null, recoveryRequired: false, requestId: null, automationId: null, actualStatus: null, model: null, reasoningEffort: null, projectId: null, lastError: '', updatedAt: new Date().toISOString() });
     });
   }
   createTask(input: unknown): Task {

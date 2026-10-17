@@ -60,17 +60,19 @@ codex plugin add swarmboard@swarmboard-local
 
 Restart the desktop app and open **Swarmboard** from the sidebar. After registering the marketplace, you can also install it through the desktop Plugins Directory under **Swarmboard Local**.
 
-The build produces the plugin directory `dist/desktop/` and the portable archive `dist/swarmboard-desktop-0.4.0.zip`. Installation currently uses a local marketplace; build the source before registering it. See [installation, upgrades, and troubleshooting](docs/setup.md) for details.
+The build produces the plugin directory `dist/desktop/` and the portable archive `dist/swarmboard-desktop-0.4.1.zip`. Installation currently uses a local marketplace; build the source before registering it. See [installation, upgrades, and troubleshooting](docs/setup.md) for details.
 
 ## Usage
 
-### Automatically claim tasks
+### Automatic task claiming
 
-Open **Auto-claim** in the board header, select an existing local desktop project's absolute directory and a check interval, then choose **Enable in a new conversation**. The plugin opens a separate native setup conversation, which uses the host's official automation tools to configure a standalone scheduled job. The current chat and its draft are not used for task execution.
+Automatic claiming is built in and enabled by default. Open Swarmboard in a supported local desktop host; it prepares the native scheduler automatically. There is no mode switch, settings dialog, model picker or workspace field. The host uses its configured model and an internal check interval. Execution targets come from the task and available resources rather than one project-wide directory.
 
-Auto-claim is off by default. The panel stays pending until the setup agent reports a successful native scheduler result; a sent message alone never means it is active. Each scheduled run checks the saved configuration, atomically claims one available task, coordinates resource usage and submits verified work for review. Pausing blocks new automatic claims while the host pause request is being confirmed. Running workers stop at a safe boundary according to the worker instructions; the pause action does not terminate their processes. Pending or uncertain results must be reconciled through a read-only native lookup before another setup can create a job.
+First-time setup may open a native setup conversation. Once the host confirms its standalone scheduled automation, future runs no longer depend on that conversation. Each run atomically claims one available task, coordinates resource usage and submits verified work for review. If no work is available, it exits without registering a worker or changing the board.
 
-This uses the same native scheduler approach as [Codex Taskboard](https://github.com/chuspeeism/dashi-taskboard), through official host tools rather than CDP injection. It requires a local Codex execution environment with native automation tools and Swarmboard MCP available. Browser preview cannot enable it. Authentication stays with the host; Swarmboard neither starts a custom model process nor handles subscription tokens. This scheduled workflow is an initial execution layer, not a reproduction of Agensh's complete event-driven runtime.
+Setup is never shown as complete just because a message was sent. Pending or uncertain setup cannot create duplicate jobs; read-only reconciliation is required. A short error explains missing host capabilities or a failed setup; the normal refresh action retries it. Browser preview remains a board preview and does not start native automation.
+
+This uses the native scheduler approach of [Codex Taskboard](https://github.com/chuspeeism/dashi-taskboard) through official host tools, without CDP injection. Authentication stays in the host. The scheduled workflow does not reproduce Agensh's complete event-driven runtime.
 
 ### Discuss a plan in the native conversation
 
@@ -111,7 +113,7 @@ and release your resource-use declarations.
 
 Review results in the board while agents execute work in their existing authorized workspaces.
 
-**Adding a task does not automatically start or wake an agent.** Open a session and ask it to join first. Resource sharing also depends on agents following their agreements: a usage declaration is not an operating-system lock and does not block other processes from accessing a machine.
+**Posted tasks are picked up by the native scheduled automation once initialization succeeds.** The desktop host must remain running. You can also connect existing agent sessions. Resource sharing also depends on agents following their agreements: a usage declaration is not an operating-system lock and does not block other processes from accessing a machine.
 
 ## Development and documentation
 

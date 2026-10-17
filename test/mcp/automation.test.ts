@@ -10,9 +10,15 @@ afterEach(async () => { await client.close(); await server.close(); });
 const tool = (name: string, args: Record<string, unknown> = {}) => client.callTool({ name, arguments: args });
 const data = (result: Awaited<ReturnType<typeof tool>>) => result.structuredContent as Record<string, any>;
 describe('native automation MCP contract', () => {
+  it('ensures the default global schedule with no user configuration and accepts an explicit null project', async () => {
+    const first = data(await tool('automation_ensure')); expect(first.config).toMatchObject({ state: 'pending', desiredEnabled: true, workspacePath: '' }); expect(first.setupPrompt).toContain('projectId=null');
+    expect(data(await tool('automation_ensure')).setupPrompt).toBeNull();
+    const active = data(await tool('automation_confirm', { expectedVersion: first.config.version, requestId: first.config.requestId, automationId: 'global-native', status: 'ACTIVE', model: 'host-default', reasoningEffort: 'high', projectId: null }));
+    expect(active).toMatchObject({ state: 'active', projectId: null }); expect(data(await tool('automation_ensure', { retry: true })).setupPrompt).toBeNull();
+  });
   it('advertises and completes revision-checked setup without changing board tasks or events', async () => {
     const advertised = await client.listTools();
-    expect(advertised.tools.map(item => item.name)).toEqual(expect.arrayContaining(['automation_read', 'automation_prepare', 'automation_claim', 'automation_confirm', 'automation_setup_failed']));
+    expect(advertised.tools.map(item => item.name)).toEqual(expect.arrayContaining(['automation_ensure', 'automation_read', 'automation_prepare', 'automation_claim', 'automation_confirm', 'automation_setup_failed']));
     const before = data(await tool('board_read'));
     const prepared = data(await tool('automation_prepare', { action: 'enable', expectedVersion: 0, workspacePath: tmpdir(), intervalMinutes: 10 }));
     expect(prepared.config.state).toBe('pending'); expect(prepared.setupPrompt).toContain('official native automation_update');

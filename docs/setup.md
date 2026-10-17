@@ -47,7 +47,7 @@ Restart the desktop app to load the new files. Collaboration data lives outside 
 `npm run package:desktop` produces:
 
 - `dist/desktop/`: the plugin directory.
-- `dist/swarmboard-desktop-0.4.0.zip`: a portable archive whose root is the plugin root.
+- `dist/swarmboard-desktop-0.4.1.zip`: a portable archive whose root is the plugin root.
 
 Extract the ZIP into a local marketplace and point its `source.path` at the extracted plugin root. The configuration uses `${PLUGIN_ROOT}`, so the extracted directory can be relocated. The target client still needs access to Node.js 24+. A public source repository or ZIP does not mean the plugin is listed in the OpenAI Plugin Directory.
 
@@ -99,12 +99,12 @@ The command builds the current source, starts a temporary loopback service, writ
 
 **The desktop app cannot find node.** Confirm that its execution environment can find Node.js 24+. A working terminal environment does not establish the desktop launch environment. Version 0.4.0 packages a POSIX launcher (started through the bare executable name `sh`, as required by the plugin loader) that checks Node.js 24+ and `node:sqlite` before starting the server. It searches PATH, NVM, Volta, and standard Homebrew/system locations without loading shell profiles. For a custom installation, set `SWARMBOARD_NODE` to the absolute executable path in the MCP server environment, then rebuild and reinstall. An invalid override fails clearly on stderr. The build keeps direct Node launch on Windows. If the app reports `MCP startup failed: No such file or directory`, check the installed launch configuration as well as whether the plugin directory exists.
 
-**No agent starts after adding a task.** This version does not create or automatically wake sessions. Enable the plugin in an existing session and ask the agent to read and claim work.
+**No work starts after adding a task.** Check the automatic initialization error and the native scheduler status. Scheduled runs require the desktop host and local Swarmboard tools.
 
 **Does the absence of usage declarations mean a machine is idle?** No. Declarations and heartbeats describe collaboration records. Verify the actual resource state separately.
 
-## Native automatic claiming
+## Default automatic claiming
 
-Add the target local project to ChatGPT Desktop before enabling **Auto-claim**. Its absolute directory must match exactly one saved local project. The new setup conversation needs the host automation tools and Swarmboard tools; if either is unavailable it must report failure instead of claiming activation. Model and reasoning settings come from the native configuration. Keep the desktop host running for scheduled execution.
+Open the plugin in a local desktop host with native automation tools and Swarmboard MCP available. Automatic initialization creates or restores one board-specific standalone native schedule. No manual project binding is required; a fresh board uses a projectless native job and resolves authorized execution targets from its tasks/resources. Legacy project mappings remain supported internally.
 
-Use the panel to request pause. For pending or uncertain setup, choose **Check native status** first; reconciliation only reads the native scheduler and requires another explicit enable or pause afterward. Configuration revisions prevent stale callbacks from replacing a newer request. Swarmboard stores the native automation ID and last reported status; it does not independently read the host scheduler. Changes made directly in host settings may therefore require reconciliation in the native setup conversation.
+The first setup uses a native conversation and the host's configured model. It must report the actual scheduler result before any automatic claims are allowed. Pending/unknown outcomes are reconciled read-only rather than blindly retried. The normal board refresh retries a failed setup; periodic UI refresh only reads state and cannot spawn repeated setup chats. Keep the host running for scheduled execution.

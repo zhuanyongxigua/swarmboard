@@ -15,6 +15,21 @@ const originalDraft = 'Keep my existing native draft.';
 async function simulatedHost(page: Page, mode: HostMode = 'supported') {
   const client = new Client({ name: 'native-draft-contract-host', version: '1.0.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:4318/mcp')));
+  // This suite tests task-context handoff; default automatic startup has its own fixture suite.
+  async function seedTool(name: string, args: Record<string, unknown> = {}) {
+    const result = await client.callTool({ name, arguments: args });
+    expect(result.isError, JSON.stringify(result)).not.toBe(true);
+    return result.structuredContent as { version: number; state: string; recoveryRequired: boolean; requestId: string; setupMode: string; config?: { version: number; requestId: string } };
+  }
+  let config = await seedTool('automation_read');
+  if (config.state === 'pending' || config.recoveryRequired) {
+    const prepared = await seedTool('automation_prepare', { action: 'reconcile', expectedVersion: config.version });
+    config = await seedTool('automation_reconcile', { expectedVersion: prepared.config!.version, requestId: prepared.config!.requestId, outcome: 'absent' });
+  }
+  if (config.state !== 'active') {
+    const prepared = await seedTool('automation_prepare', { action: 'enable', expectedVersion: config.version });
+    await seedTool('automation_confirm', { expectedVersion: prepared.config!.version, requestId: prepared.config!.requestId, automationId: 'discussion-fixture-native', status: 'ACTIVE', model: 'fixture-model', reasoningEffort: 'high', projectId: null });
+  }
   const calls: string[] = [];
   let forbiddenApiCalls = 0;
   await page.exposeFunction('hostCallTool', async (params: { name: string; arguments?: Record<string, unknown> }) => {
@@ -86,7 +101,7 @@ test('discussion appends a native draft only after a click and leaves persisted 
     expect(text).toContain(task.acceptanceCriteria);
     expect(text).not.toContain('Unsaved changes must stay out of the native draft');
     expect(await host.submitted()).toEqual([]);
-    expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read')).toBe(true);
+    expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read' || name === 'automation_ensure')).toBe(true);
     expect(host.forbiddenApiCalls()).toBe(0);
     expect(await (await request.get('/api/board')).json()).toEqual(before);
   } finally { await host.close(); }
@@ -127,7 +142,7 @@ test('mobile host cannot append a draft even when it advertises native messaging
     expect(await host.messages()).toEqual([]);
     expect(await host.submitted()).toEqual([]);
     await expect(page.getByLabel('Simulated native composer')).toHaveValue(originalDraft);
-    expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read')).toBe(true);
+    expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read' || name === 'automation_ensure')).toBe(true);
     expect(host.forbiddenApiCalls()).toBe(0);
     expect(await (await request.get('/api/board')).json()).toEqual(before);
   } finally { await host.close(); }
@@ -148,7 +163,7 @@ for (const mode of ['denied', 'rpc-error'] as const) {
       expect((await host.messages())[0]).toMatchObject({ _meta: { 'openai/message': { target: 'active', send: false } } });
       expect(await host.submitted()).toEqual([]);
       await expect(page.getByLabel('Simulated native composer')).toHaveValue(originalDraft);
-      expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read')).toBe(true);
+      expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read' || name === 'automation_ensure')).toBe(true);
       expect(host.forbiddenApiCalls()).toBe(0);
       expect(await (await request.get('/api/board')).json()).toEqual(before);
     } finally { await host.close(); }

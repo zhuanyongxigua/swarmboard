@@ -1,31 +1,38 @@
-// Verify native setup dispatch and persisted status with an isolated real service, never real host schedules.
+// Verify built-in auto-claim initialization with isolated HTTP MCP databases, never real host schedules.
 import { test, expect, type Page } from '@playwright/test';
-import { realpathSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { startServer } from '../../src/app.js';
 import type { AutomationConfig } from '../../src/automation.js';
 
 type Mode = 'supported' | 'unsupported' | 'mobile' | 'denied' | 'rpc-error';
 type NativeMessage = { role: string; content: { type: string; text?: string }[]; _meta?: { 'openai/message'?: { target?: string; send?: boolean } } };
 const originalDraft = 'My existing discussion draft.';
 async function simulatedHost(page: Page, mode: Mode = 'supported', english = false) {
+  await page.clock.install();
+  const directory = mkdtempSync(join(tmpdir(), 'swarmboard-auto-ui-'));
+  const server = await startServer({ port: 0, dbPath: join(directory, 'board.sqlite') });
+  const beforeBoard = server.store.board();
   const client = new Client({ name: 'auto-claim-simulated-host', version: '1.0.0' });
-  await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:4318/mcp')));
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${server.url}/mcp`)));
   const calls: { name: string; arguments?: Record<string, unknown> }[] = [];
+  const messages: NativeMessage[] = [];
+  await page.exposeFunction('recordAutomaticMessage', (message: NativeMessage) => { messages.push(message); });
   await page.exposeFunction('automationHostCall', async (params: { name: string; arguments?: Record<string, unknown> }) => {
     calls.push(params); return client.callTool(params);
   });
   await page.route('**/automation-host', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><body>
 <label>Native draft<textarea id="draft">${originalDraft}</textarea></label><script>
-window.setupMessages=[];
 window.addEventListener('message',async(event)=>{
  const m=event.data;if(m?.jsonrpc!=='2.0'||m.id===undefined)return;
  let result;
  if(m.method==='ui/initialize')result={protocolVersion:m.params.protocolVersion,hostInfo:{name:'Test host',version:'1'},hostCapabilities:{serverTools:{},${mode === 'unsupported' ? '' : 'experimental:{"openai/message":{}},message:{text:{}}'}},hostContext:{theme:'light',displayMode:'fullscreen',platform:${JSON.stringify(mode === 'mobile' ? 'mobile' : 'desktop')}}};
  else if(m.method==='tools/call')result=await window.automationHostCall(m.params);
  else if(m.method==='ui/message'){
-  window.setupMessages.push(m.params);
+  await window.recordAutomaticMessage(m.params);
   if(${JSON.stringify(mode)}==='rpc-error'){event.source.postMessage({jsonrpc:'2.0',id:m.id,error:{code:-32000,message:'Simulated native setup transport failure'}},'*');return;}
   result=${mode === 'denied' ? '{isError:true}' : '{}'};
  }else{event.source.postMessage({jsonrpc:'2.0',id:m.id,error:{code:-32601,message:'Unknown simulated method'}},'*');return;}
@@ -39,125 +46,123 @@ window.addEventListener('message',async(event)=>{
     expect(result.isError, JSON.stringify(result)).not.toBe(true);
     return (result.structuredContent ?? JSON.parse((result.content as { text: string }[])[0].text)) as T;
   }
-  return { frame, calls, tool, rawTool: (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: args }), close: () => client.close(), messages: () => page.evaluate(() => (window as unknown as { setupMessages: NativeMessage[] }).setupMessages) };
+  return {
+    frame, calls, messages, tool, beforeBoard, board: () => server.store.board(),
+    rawTool: (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: args }),
+    close: async () => { await page.goto('about:blank'); await client.close(); await server.close(); rmSync(directory, { recursive: true, force: true }); },
+  };
 }
 
-test('explicit auto-claim setup uses a new native conversation and waits for persisted host confirmations', async ({ page }) => {
+async function assertCompactHeader(frame: ReturnType<Page['frameLocator']>, english = false) {
+  await expect(frame.getByRole('tab')).toHaveText(english ? ['Tasks', 'Resources', 'Shared board'] : ['任务管理', '资源池', '共享面板']);
+  await expect(frame.getByRole('banner').getByRole('button')).toHaveCount(1);
+  await expect(frame.getByRole('banner').getByRole('button', { name: english ? 'Refresh board' : '刷新面板' })).toBeVisible();
+  await expect(frame.getByRole('button', { name: /自动认领|Auto-claim|讨论方案/ })).toHaveCount(0);
+  await expect(frame.getByRole('dialog')).toHaveCount(0);
+  await expect(frame.getByRole('switch')).toHaveCount(0);
+}
+
+test('opening a supported host initializes once in a new conversation without extra controls or premature activation', async ({ page }) => {
   const host = await simulatedHost(page);
   try {
-    const initial = await host.tool<AutomationConfig>('automation_read');
-    expect(initial).toMatchObject({ state: 'off', desiredEnabled: false, actualStatus: null, intervalMinutes: 10 });
-    await host.frame.getByRole('button', { name: '自动认领', exact: true }).click();
-    const dialog = host.frame.getByRole('dialog', { name: '自动认领', exact: true });
-    await expect(dialog.getByText('未启用', { exact: true })).toBeVisible();
-    await expect(dialog.getByLabel('检查间隔')).toHaveValue('10');
-    expect(await host.messages()).toEqual([]);
-    expect(host.calls.every(call => ['board_read', 'automation_read'].includes(call.name))).toBe(true);
-    await expect(page.getByLabel('Native draft')).toHaveValue(originalDraft);
-    await dialog.getByLabel('工作目录').fill('relative/path');
-    await expect(dialog.getByRole('button', { name: '在新会话中启用' })).toBeDisabled();
-    await dialog.getByLabel('工作目录').fill(realpathSync(tmpdir()));
-    await dialog.getByLabel('检查间隔').selectOption('5');
-    await dialog.getByRole('button', { name: '在新会话中启用' }).click();
-    await expect(dialog.getByText('等待宿主确认启用', { exact: true })).toBeVisible();
-    await expect.poll(async () => (await host.messages()).length).toBe(1);
-    const wire = (await host.messages())[0];
-    expect(wire).toMatchObject({ role: 'user', _meta: { 'openai/message': { target: 'new', send: true } } });
-    expect(wire.content[0].text).toContain('automation_update');
-    expect(wire.content[0].text).toContain(realpathSync(tmpdir()));
-    await expect(page.getByLabel('Native draft')).toHaveValue(originalDraft);
+    await assertCompactHeader(host.frame);
+    await expect.poll(() => host.messages.length).toBe(1);
+    await expect(host.frame.getByText('正在初始化自动认领，等待宿主确认。', { exact: true })).toBeVisible();
+    expect(host.messages[0]).toMatchObject({ role: 'user', _meta: { 'openai/message': { target: 'new', send: true } } });
+    expect(host.messages[0].content[0].text).toContain('automation_update');
     let config = await host.tool<AutomationConfig>('automation_read');
-    expect(config).toMatchObject({ state: 'pending', actualStatus: null, desiredEnabled: true, intervalMinutes: 5 });
-    await expect(dialog.getByRole('button', { name: '核对宿主状态' })).toBeEnabled();
+    expect(config).toMatchObject({ state: 'pending', desiredEnabled: true, actualStatus: null, workspacePath: '', projectId: null });
+    await expect(page.getByLabel('Native draft')).toHaveValue(originalDraft);
+    expect(host.calls.filter(call => call.name === 'automation_ensure').map(call => call.arguments)).toEqual([{ retry: false }]);
+    expect(host.board()).toEqual(host.beforeBoard);
+
+    const reads = host.calls.filter(call => call.name === 'board_read').length;
+    await page.clock.fastForward(16000);
+    await expect.poll(() => host.calls.filter(call => call.name === 'board_read').length).toBeGreaterThan(reads);
+    expect(host.messages).toHaveLength(1);
+    expect(host.calls.filter(call => call.name === 'automation_ensure')).toHaveLength(1);
+    await page.reload();
+    await expect.poll(() => host.calls.filter(call => call.name === 'automation_ensure').length).toBe(2);
+    expect(host.messages).toHaveLength(1);
+    expect((await host.tool<AutomationConfig>('automation_read')).requestId).toBe(config.requestId);
+
     const stale = config;
-    await dialog.getByRole('button', { name: '核对宿主状态' }).click();
-    await expect(dialog.getByText('等待核对宿主状态', { exact: true })).toBeVisible();
+    await host.frame.getByRole('button', { name: '刷新面板', exact: true }).click();
+    await expect.poll(() => host.messages.length).toBe(2);
+    await expect(host.frame.getByText('正在核对自动认领状态。', { exact: true })).toBeVisible();
     config = await host.tool<AutomationConfig>('automation_read');
     expect(config).toMatchObject({ state: 'pending', setupMode: 'reconcile', recoveryRequired: true, actualStatus: null });
-    expect(config.version).toBeGreaterThan(stale.version); expect(config.requestId).not.toBe(stale.requestId);
-    expect((await host.messages())[1].content[0].text).toContain('READ-ONLY native reconciliation');
-    expect((await host.rawTool('automation_confirm', { expectedVersion: stale.version, requestId: stale.requestId, automationId: 'stale-schedule', status: 'ACTIVE', model: 'simulated-model', reasoningEffort: 'low', projectId: 'simulated-project' })).isError).toBe(true);
+    expect(config.requestId).not.toBe(stale.requestId);
+    expect(host.messages[1].content[0].text).toContain('READ-ONLY native reconciliation');
+    expect((await host.rawTool('automation_confirm', { expectedVersion: stale.version, requestId: stale.requestId, automationId: 'stale-schedule', status: 'ACTIVE', model: 'simulated-model', reasoningEffort: 'low', projectId: null })).isError).toBe(true);
     await host.tool('automation_reconcile', { expectedVersion: config.version, requestId: config.requestId, outcome: 'absent' });
-    await dialog.getByRole('button', { name: '刷新状态' }).click();
-    await expect(dialog.getByText('未启用', { exact: true })).toBeVisible();
-    await dialog.getByRole('button', { name: '在新会话中启用' }).click();
-    await expect(dialog.getByText('等待宿主确认启用', { exact: true })).toBeVisible();
+    const ensures = host.calls.filter(call => call.name === 'automation_ensure').length;
+    await page.clock.fastForward(16000);
+    expect(host.calls.filter(call => call.name === 'automation_ensure')).toHaveLength(ensures);
+    expect(host.messages).toHaveLength(2);
+    await host.frame.getByRole('button', { name: '刷新面板', exact: true }).click();
+    await expect.poll(() => host.messages.length).toBe(3);
     config = await host.tool<AutomationConfig>('automation_read');
-    await host.tool('automation_confirm', { expectedVersion: config.version, requestId: config.requestId, automationId: 'simulated-schedule', status: 'ACTIVE', model: 'simulated-model', reasoningEffort: 'low', projectId: 'simulated-project' });
-    await dialog.getByRole('button', { name: '刷新状态' }).click();
-    await expect(dialog.getByText('已启用', { exact: true })).toBeVisible();
-    await dialog.getByRole('button', { name: '在新会话中暂停' }).click();
-    await expect(dialog.getByText('等待宿主确认暂停', { exact: true })).toBeVisible();
-    config = await host.tool<AutomationConfig>('automation_read');
-    expect(config).toMatchObject({ state: 'pending', desiredEnabled: false, actualStatus: 'ACTIVE' });
-    await expect(dialog.getByText('配置会话最后报告：运行中', { exact: false })).toBeVisible();
-    expect(await host.messages()).toHaveLength(4);
-    await host.tool('automation_confirm', { expectedVersion: config.version, requestId: config.requestId, automationId: 'simulated-schedule', status: 'PAUSED', model: 'simulated-model', reasoningEffort: 'low', projectId: 'simulated-project' });
-    await dialog.getByRole('button', { name: '刷新状态' }).click();
-    await expect(dialog.getByText('未启用', { exact: true })).toBeVisible();
-    await expect(dialog.getByText('配置会话最后报告：已暂停', { exact: false })).toBeVisible();
-    expect(host.calls.filter(call => call.name === 'automation_prepare').map(call => call.arguments?.action)).toEqual(['enable', 'reconcile', 'enable', 'pause']);
-    expect(host.calls.some(call => ['task_claim', 'task_update', 'automation_confirm'].includes(call.name))).toBe(false);
+    await host.tool('automation_confirm', { expectedVersion: config.version, requestId: config.requestId, automationId: 'simulated-schedule', status: 'ACTIVE', model: 'simulated-model', reasoningEffort: 'low', projectId: null });
+    await host.frame.getByRole('button', { name: '刷新面板', exact: true }).click();
+    await expect(host.frame.locator('.automation-notice')).toHaveCount(0);
+    expect(host.messages).toHaveLength(3);
+    expect(host.board()).toEqual(host.beforeBoard);
+    await assertCompactHeader(host.frame);
   } finally { await host.close(); }
 });
 
 for (const mode of ['denied', 'rpc-error'] as const) {
-  test(`auto-claim ${mode} records setup failure without falsely confirming native status`, async ({ page }) => {
+  test(`automatic initialization ${mode} records failure and never retries from polling or reload`, async ({ page }) => {
     const host = await simulatedHost(page, mode);
     try {
-      const before = await host.tool<AutomationConfig>('automation_read');
-      await host.frame.getByRole('button', { name: '自动认领', exact: true }).click();
-      const dialog = host.frame.getByRole('dialog');
-      await dialog.getByLabel('工作目录').fill(realpathSync(tmpdir()));
-      await dialog.getByRole('button', { name: '在新会话中启用' }).click();
-      await expect(dialog.getByText('配置失败', { exact: true })).toBeVisible();
-      await expect(dialog.getByRole('alert')).toContainText(mode === 'denied' ? '宿主未接受自动认领配置请求' : 'Simulated native setup transport failure');
-      const after = await host.tool<AutomationConfig>('automation_read');
-      expect(after.state).toBe('error'); expect(after.actualStatus).toBe(before.actualStatus);
-      expect(after.recoveryRequired).toBe(true);
-      await expect(dialog.getByRole('button', { name: '核对宿主状态' })).toBeEnabled();
+      await expect(host.frame.getByRole('alert')).toContainText(mode === 'denied' ? '宿主未接受自动认领配置请求' : 'Simulated native setup transport failure');
+      const failed = await host.tool<AutomationConfig>('automation_read');
+      expect(failed).toMatchObject({ state: 'error', actualStatus: null, recoveryRequired: true });
+      expect(host.messages).toHaveLength(1);
       expect(host.calls.filter(call => call.name === 'automation_setup_failed')).toHaveLength(1);
-      expect(host.calls.some(call => call.name === 'automation_confirm')).toBe(false);
-      expect(await host.messages()).toHaveLength(1);
+        await page.clock.fastForward(31000);
+      expect(host.messages).toHaveLength(1);
+      await page.reload();
+      await expect.poll(() => host.calls.filter(call => call.name === 'automation_ensure').length).toBe(2);
+      expect(host.messages).toHaveLength(1);
+      expect((await host.tool<AutomationConfig>('automation_read')).version).toBe(failed.version);
+      await host.frame.getByRole('button', { name: '刷新面板', exact: true }).click();
+      await expect.poll(() => host.messages.length).toBe(2);
+      expect(host.messages[1].content[0].text).toContain('READ-ONLY native reconciliation');
+      expect((await host.tool<AutomationConfig>('automation_read')).actualStatus).toBe(null);
       await expect(page.getByLabel('Native draft')).toHaveValue(originalDraft);
-      const recovery = await host.tool<{ config: AutomationConfig }>('automation_prepare', { action: 'reconcile', expectedVersion: after.version });
-      await host.tool('automation_reconcile', { expectedVersion: recovery.config.version, requestId: recovery.config.requestId, outcome: 'absent' });
+      expect(host.board()).toEqual(host.beforeBoard);
+      await assertCompactHeader(host.frame);
     } finally { await host.close(); }
   });
 }
 
 for (const mode of ['unsupported', 'mobile'] as const) {
-  test(`${mode} host disables auto-claim actions and keeps the board usable`, async ({ page }) => {
+  test(`${mode} host keeps tasks usable without sending or initializing unsupported native automation`, async ({ page }) => {
     const host = await simulatedHost(page, mode);
     try {
-      const before = await host.tool<AutomationConfig>('automation_read');
-      await host.frame.getByRole('button', { name: '自动认领', exact: true }).click();
-      const dialog = host.frame.getByRole('dialog');
-      await expect(dialog.getByText('自动认领需要支持原生消息的桌面宿主。')).toBeVisible();
-      await expect(dialog.getByLabel('工作目录')).toBeDisabled();
-      await expect(dialog.getByRole('button', { name: '在新会话中启用' })).toBeDisabled();
-      await dialog.getByRole('button', { name: '关闭自动认领设置' }).click();
+      await expect(host.frame.getByText('当前宿主不支持自动认领，任务与资源仍可使用。')).toBeVisible();
+      expect(host.calls.every(call => ['board_read', 'automation_read'].includes(call.name))).toBe(true);
+      expect(host.messages).toEqual([]);
+      expect(await host.tool<AutomationConfig>('automation_read')).toMatchObject({ state: 'off', desiredEnabled: true, actualStatus: null, version: 0 });
       await host.frame.getByRole('tab', { name: '资源池', exact: true }).click();
       await expect(host.frame.getByRole('button', { name: '添加资源', exact: true })).toBeEnabled();
-      expect(await host.messages()).toEqual([]);
-      expect(host.calls.every(call => ['board_read', 'automation_read'].includes(call.name))).toBe(true);
-      expect(await host.tool<AutomationConfig>('automation_read')).toEqual(before);
+      await assertCompactHeader(host.frame);
     } finally { await host.close(); }
   });
 }
 
-test('English auto-claim settings are localized and standalone preview cannot configure a host schedule', async ({ page }) => {
+test('English initialization is localized while standalone preview stays clean and has no auto-claim controls', async ({ page }) => {
   const host = await simulatedHost(page, 'supported', true);
   try {
-    await host.frame.getByRole('button', { name: 'Auto-claim', exact: true }).click();
-    const dialog = host.frame.getByRole('dialog', { name: 'Auto-claim' });
-    await expect(dialog.getByLabel('Workspace path')).toBeVisible();
-    await expect(dialog.getByLabel('Check interval')).toBeVisible();
-    await expect(dialog.getByRole('button', { name: /Enable in new conversation|Check native status/ })).toBeVisible();
-    expect(await host.messages()).toEqual([]);
+    await expect(host.frame.getByText('Initializing auto-claim; awaiting native confirmation.', { exact: true })).toBeVisible();
+    await assertCompactHeader(host.frame, true);
+    expect(host.messages).toHaveLength(1);
   } finally { await host.close(); }
   await page.goto('/');
-  await page.getByRole('button', { name: '自动认领', exact: true }).click();
-  await expect(page.getByRole('dialog').getByRole('button', { name: '在新会话中启用' })).toBeDisabled();
-  await expect(page.getByText('自动认领需要支持原生消息的桌面宿主。')).toBeVisible();
+  await expect(page.getByRole('banner').getByRole('button')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: /自动认领|Auto-claim/ })).toHaveCount(0);
+  await expect(page.locator('.automation-notice')).toHaveCount(0);
+  await expect(page.getByRole('tab')).toHaveText(['任务管理', '资源池', '共享面板']);
 });

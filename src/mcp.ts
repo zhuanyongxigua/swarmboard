@@ -12,7 +12,7 @@ type DisplayModeMetadata = { availableDisplayModes: ('inline' | 'fullscreen')[];
 
 export const BOARD_RESOURCE_URI = 'ui://swarmboard/board.html';
 export function createMcpServer(store: Store, widgetPath: string) {
-  const server = new McpServer({name:'swarmboard',version:'0.4.0'});
+  const server = new McpServer({name:'swarmboard',version:'0.4.1'});
   registerAppResource(server, 'swarmboard-ui', BOARD_RESOURCE_URI, {}, async () => ({
     contents: [{uri:BOARD_RESOURCE_URI,mimeType:RESOURCE_MIME_TYPE,text:readFileSync(widgetPath,'utf8'),_meta:{ui:{prefersBorder:false,csp:{connectDomains:[],resourceDomains:[]}},'openai/ui':{availableDisplayModes:['inline','fullscreen'],preferredDisplayMode:'fullscreen'} satisfies DisplayModeMetadata}}],
   }));
@@ -25,9 +25,10 @@ export function createMcpServer(store: Store, widgetPath: string) {
     return {isError:true,content:[{type:'text' as const,text:JSON.stringify({error:{code:known ? error.code : 'INTERNAL_ERROR',message:known ? error.message : 'Unable to complete operation'}})}]};
   }
   const operations = [
+    ['automation_ensure','Ensure the built-in default automatic-claim schedule is initialized. Only one caller receives a native setup prompt; pending work is never duplicated. Explicit retry recovers uncertain outcomes before any new creation.',automationSchemas.ensure,(input:unknown)=>store.ensureAutomation(input),false],
     ['automation_read','Read native auto-claim setup intent and the last host status reported by its setup conversation. This service does not independently inspect native automations.',z.object({}).strict(),()=>store.readAutomation(),true],
     ['automation_prepare','Prepare an explicitly authorized native standalone auto-claim schedule or pause. Returns a setupPrompt to send to a NEW native conversation; does not start any agent or mark the schedule active.',automationSchemas.prepare,(input:unknown)=>{const config=store.prepareAutomation(input);return {config,setupPrompt:buildSetupPrompt(config)};},false],
-    ['automation_reconcile','Record an authoritative read-only native schedule lookup for a pending recovery request. Found records stay inactive on this board until explicit enable/pause; absence permits a later new setup.',automationSchemas.reconcile,(input:unknown)=>store.reconcileAutomation(input),false],
+    ['automation_reconcile','Record an authoritative read-only native schedule lookup for a pending recovery request. Found records stay inactive until the built-in ensure flow finishes setup; authoritative absence permits a later setup.',automationSchemas.reconcile,(input:unknown)=>store.reconcileAutomation(input),false],
     ['automation_claim','Atomically claim one todo task only while the confirmed native automation is active at the expected configuration version. Records the caller-reported native thread binding; use this for scheduled workers instead of task_claim.',automationSchemas.claim,(input:unknown)=>store.claimAutomationTask(input),false],
     ['automation_confirm','After inspecting a successful official native automation_update result, record its actual ID, status, model and project against the pending request revision. This is caller-reported host state, not independent verification.',automationSchemas.confirm,(input:unknown)=>store.confirmAutomation(input),false],
     ['automation_setup_failed','Record failed or uncertain native schedule setup against its pending revision. Retains the last reported native status; no native schedule is modified.',automationSchemas.failed,(input:unknown)=>store.failAutomationSetup(input),false],

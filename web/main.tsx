@@ -105,9 +105,9 @@ function Workspace() {
   const [connected, setConnected] = useState(false);
   const [updated, setUpdated] = useState('');
   const [editor, setEditor] = useState<Editor | null>(null);
-  const [automationOpen, setAutomationOpen] = useState(false);
   const [automation, setAutomation] = useState<AutomationConfig | null>(null);
-  const [automationReadError, setAutomationReadError] = useState('');
+  const [automationError, setAutomationError] = useState('');
+  const automationBusy = useRef(false);
   const [expandedResource, setExpandedResource] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState('');
@@ -127,11 +127,42 @@ function Workspace() {
     if (!bridge) return;
     try {
       const config = await operation<AutomationConfig>('automation_read');
-      if (mounted.current) { setAutomation(config); setAutomationReadError(''); }
+      if (mounted.current) { setAutomation(current => !current || config.version >= current.version ? config : current); setAutomationError(''); }
     } catch (error) {
-      if (mounted.current) setAutomationReadError(message(error));
+      if (mounted.current) setAutomationError(message(error));
     }
   }, []);
+
+  const ensureAutomation = useCallback(async (retry = false) => {
+    const app = bridge;
+    if (!app || automationBusy.current || nativeConversationUnavailableReason(app.getHostCapabilities(), app.getHostContext()?.platform)) return;
+    automationBusy.current = true;
+    let prepared: AutomationConfig | undefined;
+    try {
+      const result = unpack(await app.callServerTool({ name: 'automation_ensure', arguments: { retry } })) as {
+        config: AutomationConfig; setupPrompt: string | null;
+      };
+      if (mounted.current) {
+        setAutomation(current => !current || result.config.version >= current.version ? result.config : current);
+        setAutomationError('');
+      }
+      if (result.setupPrompt) {
+        prepared = result.config;
+        await startNativeAutomationSetup(app, result.setupPrompt);
+      }
+    } catch (error) {
+      const detail = message(error);
+      if (mounted.current) setAutomationError(detail);
+      if (prepared?.requestId) {
+        try {
+          const config = unpack(await app.callServerTool({ name: 'automation_setup_failed', arguments: {
+            expectedVersion: prepared.version, requestId: prepared.requestId, error: detail,
+          } })) as AutomationConfig;
+          if (mounted.current) setAutomation(current => !current || config.version >= current.version ? config : current);
+        } catch { await readAutomation(); }
+      }
+    } finally { automationBusy.current = false; }
+  }, [readAutomation]);
 
   const refresh = useCallback(async (quiet = false): Promise<Board | null> => {
     if (!quiet) setRefreshing(true);
@@ -158,7 +189,7 @@ function Workspace() {
     async function start() {
       try {
         if (window.parent !== window) {
-          const app = new App({ name: 'Swarmboard', version: '0.4.0' });
+          const app = new App({ name: 'Swarmboard', version: '0.4.1' });
           localBridge = app;
           app.ontoolresult = result => {
             try {
@@ -181,6 +212,7 @@ function Workspace() {
         timer = setInterval(() => {
           if (document.visibilityState === 'visible') void refresh(true);
         }, 15000);
+        if (active) await ensureAutomation();
       } catch (error) {
         if (active) { setLoading(false); setError(message(error)); setNativeUnavailable(t("原生对话连接未完成，请重新打开插件后重试。")); }
       }
@@ -191,14 +223,7 @@ function Workspace() {
       if (timer) clearInterval(timer);
       if (bridge === localBridge) bridge = null;
     };
-  }, [refresh]);
-
-  useEffect(() => {
-    if (!automationOpen || !connected) return;
-    void readAutomation();
-    const timer = setInterval(() => { if (document.visibilityState === 'visible') void readAutomation(); }, 3000);
-    return () => clearInterval(timer);
-  }, [automationOpen, connected, readAutomation]);
+  }, [refresh, ensureAutomation]);
 
   const name = (id: string) => id === 'human' ? t("空间管理者") : board?.agents.find(agent => agent.id === id)?.name ?? id;
   const stale = (id: string) => {
@@ -206,6 +231,10 @@ function Workspace() {
     return Boolean(agent && Date.now() - Date.parse(agent.lastSeenAt) > 120000);
   };
   const usages = board?.usages.filter(usage => usage.active) ?? [];
+  const autoUnavailable = Boolean(automation?.desiredEnabled && nativeUnavailable);
+  const autoError = automationError || (automation?.state === 'error' ? automation.lastError : '');
+  async function manualRefresh() { await refresh(); await ensureAutomation(true); }
+
 
   async function discuss(task: Task) {
     if (!bridge || !board || nativeBusy.current || nativeUnavailable) return;
@@ -287,10 +316,13 @@ function Workspace() {
       <span className="connection" title={updated ? `${t('上次同步')} ${time(updated, true)}` : t("等待连接")}>
         {error ? t("同步需检查") : connected ? t("已连接") : t("本地空间")}
       </span>
-      <button className="secondary automation-button" type="button" onClick={() => setAutomationOpen(true)}>{t("自动认领")}</button>
       <button className="refresh-button" type="button" aria-label={t("刷新面板")}
-        disabled={refreshing} onClick={() => void refresh()}>↻</button>
+        disabled={refreshing} onClick={() => void manualRefresh()}>↻</button>
     </header>
+    {autoUnavailable ? <p className="automation-notice" role="status">{t("当前宿主不支持自动认领，任务与资源仍可使用。")}</p>
+      : autoError ? <p className="automation-notice" role="alert">{t("自动认领初始化未完成：")}{autoError}</p>
+        : automation?.state === 'pending' ? <p className="automation-notice" role="status">{automation.setupMode === 'reconcile'
+          ? t("正在核对自动认领状态。") : t("正在初始化自动认领，等待宿主确认。")}</p> : null}
     <main id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
       <div className="panel-toolbar">
         <span className="subtle">{tab === 'tasks' ? `${board?.tasks.length ?? 0} ${t('个任务')}`
@@ -317,9 +349,6 @@ function Workspace() {
               : <SharedFeed board={board} name={name} openTask={openTask} openResource={openResource} />}
     </main>
     <div className="sr-only" aria-live="polite">{announcement}</div>
-    {automationOpen && <AutomationDialog config={automation} readError={automationReadError}
-      unavailable={nativeUnavailable} read={readAutomation} close={() => setAutomationOpen(false)}
-      changed={config => setAutomation(config)} />}
     {editor && <EditorDialog key={`${editor.type}-${editor.item?.id ?? 'new'}-${editor.item?.version ?? 0}`}
       editor={editor} name={name} usages={usages} resources={board?.resources ?? []}
       close={() => setEditor(null)} saved={() => { setEditor(null); setAnnouncement(t("修改已保存。")); void refresh(true); }}
@@ -328,92 +357,6 @@ function Workspace() {
       nativeFeedback={nativeFeedbackTaskId === editor.item?.id ? nativeFeedback : ''}
       nativeFailed={nativeFailed} discuss={task => void discuss(task)} />}
   </div>;
-}
-
-function AutomationDialog({ config, readError, unavailable, read, close, changed }: {
-  config: AutomationConfig | null; readError: string; unavailable: string; read: () => Promise<void>;
-  close: () => void; changed: (config: AutomationConfig) => void;
-}) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const initialized = useRef(false);
-  const busy = useRef(false);
-  const [workspacePath, setWorkspacePath] = useState('');
-  const [intervalMinutes, setIntervalMinutes] = useState(10);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    dialog.current?.showModal();
-    return () => { if (previous?.isConnected) previous.focus(); };
-  }, []);
-  useEffect(() => {
-    if (!config || initialized.current) return;
-    initialized.current = true;
-    setWorkspacePath(config.workspacePath); setIntervalMinutes(config.intervalMinutes);
-  }, [config]);
-  const blocked = Boolean(unavailable || readError || !config || pending);
-  const recovery = Boolean(config && (config.recoveryRequired || config.state === 'pending'));
-  const fieldsLocked = blocked || recovery;
-  const isAbsolute = /^(?:\/|[A-Za-z]:[\\/]|\\\\[^\\]+\\)/.test(workspacePath.trim());
-  async function setup(action: 'enable' | 'pause' | 'reconcile') {
-    if (!bridge || !config || blocked || busy.current || (recovery && action !== 'reconcile')) return;
-    if (action === 'enable' && !isAbsolute) { setError(t("请输入工作目录的绝对路径。")); return; }
-    busy.current = true; setPending(true); setError(''); setNotice('');
-    let prepared: AutomationConfig | undefined;
-    try {
-      const result = await operation<{ config: AutomationConfig; setupPrompt: string }>('automation_prepare', {
-        action, expectedVersion: config.version,
-        ...(action === 'enable' ? { workspacePath: workspacePath.trim(), intervalMinutes } : {}),
-      });
-      prepared = result.config; changed(result.config);
-      await startNativeAutomationSetup(bridge, result.setupPrompt);
-      setNotice(t("配置请求已发送到新原生会话，等待宿主确认；消息发送成功不代表自动认领已启用或暂停。"));
-    } catch (error) {
-      const detail = message(error);
-      setError(detail);
-      if (prepared?.requestId) {
-        try {
-          changed(await operation<AutomationConfig>('automation_setup_failed', {
-            expectedVersion: prepared.version, requestId: prepared.requestId, error: detail,
-          }));
-        } catch { await read(); }
-      } else { await read(); }
-    } finally { busy.current = false; setPending(false); }
-  }
-  const status = !config ? t("尚未读取状态") : config.state === 'pending'
-    ? config.setupMode === 'reconcile' ? t("等待核对宿主状态") : config.desiredEnabled ? t("等待宿主确认启用") : t("等待宿主确认暂停")
-    : config.state === 'error' ? t("配置失败") : config.state === 'active' ? t("已启用") : t("未启用");
-  return <dialog ref={dialog} className="automation-dialog" aria-labelledby="automation-title"
-    onCancel={event => { if (pending) event.preventDefault(); else close(); }}
-    onClick={event => { if (event.target === dialog.current && !pending) close(); }}>
-    <form onSubmit={event => { event.preventDefault(); void setup(recovery ? 'reconcile' : 'enable'); }}>
-      <div className="dialog-header"><h2 id="automation-title">{t("自动认领")}</h2>
-        <button className="close-button" type="button" aria-label={t("关闭自动认领设置")} disabled={pending} onClick={close}>×</button></div>
-      <div className="form-body">
-        <div className="automation-status" role="status"><span>{t("状态")}</span><strong>{status}</strong></div>
-        {config?.actualStatus && <p className="form-note">{t("配置会话最后报告：")}{config.actualStatus === 'ACTIVE' ? t("运行中") : t("已暂停")}
-          {config.automationId && <span className="automation-id">{config.automationId}</span>}</p>}
-        <p className="form-note">{t("通过新原生会话配置宿主定时自动化，独立认领待办任务。默认关闭，不占用当前会话草稿。")}</p>
-        <p className="form-note">{t("工作目录必须已添加为桌面应用中的本地项目。")}</p>
-        <label>{t("工作目录")}<input name="workspacePath" placeholder="/path/to/project" autoComplete="off"
-          value={workspacePath} disabled={fieldsLocked} onChange={event => setWorkspacePath(event.target.value)} /></label>
-        <label>{t("检查间隔")}<select name="intervalMinutes" value={intervalMinutes} disabled={fieldsLocked}
-          onChange={event => setIntervalMinutes(Number(event.target.value))}>
-          {[5, 10, 15, 30, 60].map(value => <option key={value} value={value}>{value} {t("分钟")}</option>)}
-        </select></label>
-        {recovery && <p className="form-note">{t("先检查之前的配置会话。核对仅查询宿主，不会创建或修改自动化；核对完成后再明确启用或暂停。")}</p>}
-        {unavailable && <p className="form-note">{t("自动认领需要支持原生消息的桌面宿主。")}</p>}
-        {(error || readError || config?.lastError) && <div className="error dialog-error" role="alert"><span>{error || readError || config?.lastError}</span></div>}
-        {notice && <p className="form-note" role="status">{notice}</p>}
-      </div>
-      <div className="dialog-actions">
-        <button className="secondary" type="button" disabled={pending || Boolean(unavailable)} onClick={() => void read()}>{t("刷新状态")}</button>
-        {config?.automationId && <button className="secondary" type="button" disabled={fieldsLocked || config.actualStatus !== 'ACTIVE'} onClick={() => void setup('pause')}>{t("在新会话中暂停")}</button>}
-        <button className="primary" type="submit" disabled={blocked || (!recovery && !isAbsolute)}>{pending ? t("正在发送…") : recovery ? t("核对宿主状态") : config?.actualStatus === 'ACTIVE' ? t("在新会话中更新") : t("在新会话中启用")}</button>
-      </div>
-    </form>
-  </dialog>;
 }
 
 function TaskBoard({ board, usages, name, stale, movingId, open, dragStart, dragEnd, dragOver, drop }: {
