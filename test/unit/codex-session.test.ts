@@ -11,6 +11,18 @@ function session(onApproval?: () => void) {
   sessions.push(s); return s;
 }
 describe('official App Server session adapter', () => {
+  it('binds, names and reads back a new peer before submitting model work',async()=>{
+    const s=session(),bound=vi.fn();const id=await s.open({...worker,name:'Swarmboard peer 4'},bound);
+    expect(bound).toHaveBeenCalledWith(id);await s.run(id,'require-named-session',()=>{});
+  });
+  it('preserves a human title when resuming an existing peer',async()=>{
+    const s=session(),bound=vi.fn();const id=await s.open({...worker,name:'Swarmboard peer 4',threadId:'custom-name-thread'},bound);
+    expect(bound).toHaveBeenCalledWith(id);await s.run(id,'require-custom-name',()=>{});
+  });
+  it.each(['name-failure-thread','name-timeout-thread','unverified-name-thread'])('retains a bound session and surfaces presentation failure for %s before model execution',async threadId=>{
+    const s=session(),bound=vi.fn();await expect(s.open({...worker,name:'Swarmboard peer 4',threadId},bound)).rejects.toThrow(/presentation/);
+    expect(bound).toHaveBeenCalledWith(threadId);
+  });
   it('resumes a large-history thread with metadata only before submitting the next turn',async()=>{
     const s=session(),id=await s.open({...worker,threadId:'large-history-thread'}),started=vi.fn();
     expect(id).toBe('large-history-thread');await s.run(id,'next',started);expect(started).toHaveBeenCalledWith('turn-1');

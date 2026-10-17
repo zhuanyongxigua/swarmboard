@@ -233,7 +233,10 @@ export class EventRuntime {
     const adapter = this.session(worker);
     let submitted = false;
     try {
-      const threadId = await adapter.open(worker);
+      const threadId = await adapter.open(worker, threadId => {
+        if (this.closed || !this.workers.owns(this.token)) throw new Error('Runtime owner changed before session binding');
+        this.workers.save({ ...this.workers.get(worker.id), threadId });
+      });
       if (this.closed || !this.workers.owns(this.token)) throw new Error('Runtime owner changed before delivery');
       let current = this.workers.get(worker.id);
       const pool = worker.poolId ? this.workers.pool() : null;

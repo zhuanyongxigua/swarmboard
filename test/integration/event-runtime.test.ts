@@ -25,6 +25,14 @@ function session() {
   return { adapter, prompts };
 }
 describe('event-driven persistent workers', () => {
+  it('retains the bound thread across presentation failure and resumes it instead of creating a duplicate',async()=>{
+    let fail=true,created=0;const runs:string[]=[];
+    const adapter:SessionAdapter={open:async(w,bound)=>{const id=w.threadId??'thread-'+(++created);bound?.(id);if(fail)throw new Error('Session presentation registration failed');return id;},run:async(id)=>{runs.push(id);},close:async()=>{}};
+    const f=fixture(adapter),worker=f.runtime.register({name:'Peer',workspacePath:f.dir});f.store.createTask({title:'Goal'});await f.runtime.scan();
+    await vi.waitFor(()=>expect(f.runtime.workers.get(worker.id)).toMatchObject({status:'error',threadId:'thread-1'}));expect(runs).toEqual([]);
+    fail=false;f.runtime.update({id:worker.id,expectedVersion:worker.version,enabled:true});await f.runtime.scan();
+    await vi.waitFor(()=>expect(f.runtime.workers.get(worker.id).status).toBe('idle'));expect(created).toBe(1);expect(runs).toEqual(['thread-1']);
+  });
   it('wakes across independent database connections without waiting for the recovery timer and reuses its session', async () => {
     const { adapter, prompts } = session(); const f = fixture(adapter);
     const worker = f.runtime.register({ name: 'Builder', workspacePath: f.dir }); f.runtime.start();

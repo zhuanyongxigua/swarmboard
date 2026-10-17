@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline';
 import { existsSync } from 'node:fs';
 import type { Worker } from './worker-store.js';
 export interface SessionAdapter {
-  open(worker: Worker): Promise<string>;
+  open(worker: Worker, onBound?: (threadId: string) => void): Promise<string>;
   run(threadId: string, prompt: string, onStarted: (turnId: string) => void): Promise<void>;
   inspect?(threadId: string, turnId: string | null, deliveryId: string): Promise<'completed' | 'failed' | 'active' | 'unknown'>;
   close(): Promise<void>;
@@ -80,14 +80,26 @@ export class CodexSession implements SessionAdapter {
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); } this.pending.clear();
     for (const p of this.turns.values()) p.reject(new UncertainDelivery(error.message)); this.turns.clear();
   }
-  async open(worker: Worker) {
+  async open(worker: Worker, onBound?: (threadId: string) => void) {
     await this.start();
     const response = await this.request(worker.threadId ? 'thread/resume' : 'thread/start', {
       ...(worker.threadId ? { threadId: worker.threadId, excludeTurns: true } : {}), cwd: worker.workspacePath,
       sandbox: 'workspace-write', approvalPolicy: 'on-request',
     });
     if (!response.thread?.id || response.thread.cwd !== worker.workspacePath || worker.threadId && response.thread.id !== worker.threadId) throw new Error('Codex did not bind the expected workspace');
-    return response.thread.id as string;
+    const threadId = response.thread.id as string;
+    // Keep the identity before presentation RPCs: a retry must resume this
+    // thread even if its naming acknowledgement or readback is lost.
+    onBound?.(threadId);
+    const title = response.thread.name || (worker.name || 'Swarmboard worker').replace(/^Swarmboard peer /, 'Swarmboard · peer ');
+    try {
+      if (!response.thread.name) await this.request('thread/name/set', { threadId, name: title });
+      const saved = await this.request('thread/read', { threadId, includeTurns: false });
+      if (saved.thread?.id !== threadId || saved.thread.cwd !== worker.workspacePath || saved.thread.name !== title) throw new Error('Session metadata mismatch');
+    } catch {
+      throw new Error('Session presentation registration failed; the bound thread is retained. Inspect its name and retry this worker.');
+    }
+    return threadId;
   }
   async run(threadId: string, prompt: string, onStarted: (turnId: string) => void) {
     const response = await this.request('turn/start', { threadId, input: [{ type: 'text', text: prompt }] });
