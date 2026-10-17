@@ -14,9 +14,9 @@ export interface Liveness {
 export class PoolLiveness {
   constructor(private board: Store, private workers: WorkerStore, private idleMs: number) {}
   private tasks(pool: Pool) { return this.board.board().tasks.filter(t => !pool.taskIds.length || pool.taskIds.includes(t.id)); }
-  sync(pool: Pool | null, now: number, queuedOrBusy: boolean) {
+  sync(pool: Pool | null, now: number, queuedOrBusy: boolean, awaitingGoalIds: string[] = []) {
     if (!pool) return;
-    const tasks = this.tasks(pool);
+    const tasks = this.tasks(pool).filter(t => !awaitingGoalIds.includes(t.id));
     // Only a goal revision or an explicit human pool control resets the retry
     // budget. Heartbeats, acknowledgements and self-reported facts do not prove
     // forward progress and cannot keep a stranded goal alive indefinitely.
@@ -24,7 +24,7 @@ export class PoolLiveness {
     let value: Liveness = this.workers.liveness() ?? { fingerprint, attempts: 0, idleSince: null, state: 'inactive', pending: null };
     if (value.fingerprint !== fingerprint) value = { fingerprint, attempts: 0, idleSince: null, state: 'inactive', pending: null };
     const peers = pool.memberIds.map(id => this.workers.get(id));
-    const eligible = pool.enabled && pool.state === 'active' && peers.length > 0 && peers.every(w => w.enabled && w.status === 'idle');
+    const eligible = tasks.some(t => ['todo','in_progress'].includes(t.status)) && pool.enabled && pool.state === 'active' && peers.length > 0 && peers.every(w => w.enabled && w.status === 'idle');
     if (!eligible || queuedOrBusy) {
       this.workers.saveLiveness({ ...value, idleSince: null, state: value.state === 'attention' ? 'attention' : 'inactive' }); return;
     }
@@ -38,7 +38,7 @@ export class PoolLiveness {
           summary: attention ? 'IDLE_ATTENTION: goals remain idle after two recovery attempts' : 'IDLE_RECOVERY: inspect stranded human goals and continue useful work',
           detail: JSON.stringify({ signalId: randomUUID(), goalIds: tasks.filter(t => ['todo', 'in_progress'].includes(t.status)).map(t => t.id),
             instruction: attention ? 'Human attention needed. No further automatic idle nudges until a goal revision or explicit pool resume. Task states remain unchanged.'
-              : 'INTERNAL_ONLY. Read current goals and shared evidence. Choose useful authorized work with existing peers. If truly waiting on a missing prerequisite or acceptance, publish the concrete blocker and use blocked/in_review through the agreed delivery contact. Do not merely acknowledge this message, poll, invent success, launch external harnesses or create tasks. Do not reply to the runtime identity.' }),
+              : 'INTERNAL_ONLY. Read current goals and shared evidence. Choose useful authorized work with existing peers. If truly waiting on a missing prerequisite or acceptance, publish the concrete blocker and use blocked/in_review as an active participant. Do not merely acknowledge this message, poll, invent success, launch external harnesses or create tasks. Do not reply to the runtime identity.' }),
           ...(recipientId ? { recipientId } : {}),
         } };
         // Persist first, publish once, then confirm: either crash window is

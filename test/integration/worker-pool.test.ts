@@ -52,7 +52,7 @@ describe('equal peer organization', () => {
     f.board.publishEntry({ agentId: workers[0]!.id, taskId: goal.id, kind: 'FAIL', summary: 'Counterexample peers must learn' });
     await f.runtime.scan(); await vi.waitFor(() => expect(f.turns).toHaveLength(6));
     expect(f.turns.filter(t => t.worker !== workers[0]!.id).some(t => t.prompt.includes('Counterexample peers must learn'))).toBe(true);
-    expect(f.board.board().tasks).toHaveLength(1); expect(f.board.board().tasks[0]).toMatchObject({ id: goal.id, assignee: null, status: 'todo' });
+    expect(f.board.board().tasks).toHaveLength(1); expect(f.board.board().tasks[0]).toMatchObject({ id: goal.id, assignee: null, participants: workers.map(w => w.id).sort(), status: 'in_progress' });
     expect(f.board.board().resources).toHaveLength(0);
     expect(f.turns[0]!.prompt).toContain('No coordinator, fixed role');
     expect(f.turns[0]!.prompt).toContain('NEVER create task cards');
@@ -103,6 +103,6 @@ describe('equal peer organization', () => {
       expect(existsSync(join(worker.workspacePath, '.git', 'config'))).toBe(true);
       expect(existsSync(join(worker.workspacePath, 'fixture.txt'))).toBe(true); expect(existsSync(join(worker.workspacePath, '.env'))).toBe(false);
     }
-    expect(() => f.runtime.configurePool({ workspacePath: f.dir, expectedVersion: 1 })).toThrow(/persistent members/);
+    expect(() => f.runtime.configurePool({ workspacePath: f.dir, taskIds: [f.board.board().tasks[0]!.id], expectedVersion: 1 })).toThrow(/bound organization/);
   });
 });

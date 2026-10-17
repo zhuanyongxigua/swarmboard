@@ -60,15 +60,15 @@ codex plugin add swarmboard@swarmboard-local
 
 Restart the desktop app and open **Swarmboard** from the sidebar. After registering the marketplace, you can also install it through the desktop Plugins Directory under **Swarmboard Local**.
 
-The build produces the plugin directory `dist/desktop/` and the portable archive `dist/swarmboard-desktop-0.6.2.zip`. Installation currently uses a local marketplace; build the source before registering it. See [installation, upgrades, and troubleshooting](docs/setup.md) for details.
+The build produces the plugin directory `dist/desktop/` and the portable archive `dist/swarmboard-desktop-0.7.0.zip`. Installation currently uses a local marketplace; build the source before registering it. See [installation, upgrades, and troubleshooting](docs/setup.md) for details.
 
 ## Usage
 
 ### Self-organizing event workers
 
-Version 0.6.2 currently keeps model execution in bound official Codex sessions without external harness delegation. Actionable goals left idle for ten minutes trigger at most two durable nudges to existing peers; continued inactivity becomes visible as needing attention, without per-task cron chats.
+Version 0.7.0 currently keeps model execution in bound official Codex sessions without external harness delegation. Actionable goals left idle for ten minutes trigger at most two durable nudges to existing peers; continued inactivity becomes visible as needing attention, without per-task cron chats.
 
-Version 0.6.2 runs three equal persistent peers by default (configurable from 2 to 8) for a human-authorized project. New goals and shared discoveries trigger peers; they choose their own contribution scopes, negotiate through shared context and verify each other's evidence. No central model assigns subtasks or fixed roles. Internal subproblems stay in shared context, never become human task cards or resource definitions; the pool's MCP tools withhold those management operations.
+Version 0.7.0 runs three equal persistent peers by default (initial size configurable from 1 to 128, default member budget 8) for a human-authorized project. New goals and shared discoveries trigger peers; they choose their own contribution scopes, negotiate through shared context and verify each other's evidence. No central model assigns subtasks or fixed roles. Scoped CLAIMs join shared goals without reserving them. Peers can request more equal members within the budget while retaining original identities and sessions. Durable, SHA-bound GitLab pipeline subscriptions notify all relevant members without model polling. Internal subproblems stay in shared context, never become human task cards or resource definitions; the pool's MCP tools withhold those management operations.
 
 Bind the project once through `pool_configure` (see [setup and recovery](docs/event-workers.md), Chinese). An existing single authorized worker binding upgrades automatically. Peers get isolated Git checkouts and reuse session identities. No native scheduled conversations are created. The recovery scan reads durable events without model calls, except for the bounded stranded-goal nudges described above.
 

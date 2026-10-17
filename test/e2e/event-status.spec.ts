@@ -56,3 +56,30 @@ test('distinguishes idle members from executing peers and supports bounded recov
   expect(commands).toEqual([{ expectedVersion: 7, enabled: true }]);
   await expect(page.locator('.task-card')).toHaveCount(before);
 });
+
+test('grows the same organization with its current version and shows durable CI waiting or failure', async ({ page }) => {
+  const pool = { id:'same-organization', workspacePath:'/synthetic/project', taskIds:['human-goal'], size:3, maxSize:5, enabled:true, version:8, state:'active', error:'' };
+  const ciWatches = [{id:'ci',pipelineId:100,sha:'a'.repeat(40),state:'watching',error:''}];
+  const commands: unknown[]=[];
+  await page.route('**/api/runtime',route=>route.fulfill({json:{mode:'events',workers:[],error:'',pool,ciWatches}}));
+  await page.route('**/api/pool/configure',route=>{
+    commands.push(route.request().postDataJSON());pool.size++;pool.version++;
+    return route.fulfill({json:pool});
+  });
+  await page.goto('/');await expect(page.getByRole('status')).toContainText('等待 CI 结果，完成后通知全体成员');
+  await page.getByRole('button',{name:'增加成员',exact:true}).click();
+  expect(commands).toEqual([{workspacePath:'/synthetic/project',taskIds:['human-goal'],size:4,maxSize:5,expectedVersion:8}]);
+  ciWatches[0].state='error';ciWatches[0].error='GitLab lookup needs attention';
+  await page.getByRole('button',{name:'刷新面板'}).click();await expect(page.getByRole('alert')).toContainText('CI #100: GitLab lookup needs attention');
+  await expect(page.getByRole('status')).not.toContainText('等待 CI 结果，完成后通知全体成员');
+});
+
+test('shows all shared-goal participants instead of a single assignee', async ({ page, request }) => {
+  const post=async(path:string,data:unknown)=>{const response=await request.post(path,{data});expect(response.ok()).toBe(true);return response.json();};
+  const a=await post('/api/agents',{name:'Shared peer A'}),b=await post('/api/agents',{name:'Shared peer B'});
+  const task=await post('/api/tasks',{title:'Multiple peers on one goal'});
+  for(const agent of [a,b])await post('/api/entries',{agentId:agent.id,taskId:task.id,kind:'CLAIM',summary:'Independent contribution'});
+  await page.goto('/');const card=page.locator('.task-card').filter({hasText:task.title});await expect(card).toContainText('参与者 2');
+  await page.getByRole('button',{name:'查看任务 '+task.title,exact:true}).click();
+  await expect(page.getByRole('dialog')).toContainText('Shared peer A');await expect(page.getByRole('dialog')).toContainText('Shared peer B');
+});

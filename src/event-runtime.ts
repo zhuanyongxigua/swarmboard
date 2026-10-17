@@ -9,16 +9,19 @@ import { CodexSession, UncertainDelivery, type SessionAdapter } from './codex-se
 import { workerPrompt } from './worker-prompt.js';
 import { WorkerPool } from './worker-pool.js';
 import { PoolLiveness } from './pool-liveness.js';
+import { PipelineEvents, type PipelineReader } from './pipeline-events.js';
 
 export interface RuntimeOptions {
   databasePath: string; serverEntry: string;
   adapter?: (worker: Worker) => SessionAdapter;
   fallbackMs?: number; debounceMs?: number; keepAlive?: boolean; autoPool?: boolean;
   now?: () => number; idleMs?: number;
+  pipelineReader?: PipelineReader;
 }
 export class EventRuntime {
   readonly workers: WorkerStore;
   readonly pool: WorkerPool;
+  readonly ci: PipelineEvents;
   private liveness: PoolLiveness;
   private scanning?: Promise<void>;
   private token = randomUUID();
@@ -34,6 +37,7 @@ export class EventRuntime {
     this.workers = new WorkerStore(options.databasePath === ':memory:' ? ':memory:' : options.databasePath + '.runtime.sqlite');
     this.pool = new WorkerPool(this.workers, board, options.databasePath);
     this.liveness = new PoolLiveness(board, this.workers, options.idleMs ?? 10 * 60 * 1000);
+    this.ci = new PipelineEvents(board, this.workers, options.pipelineReader, options.now, () => !this.closed && this.workers.owns(this.token));
   }
   start() {
     // Previously registered workspace bindings are already human-authorized.
@@ -83,12 +87,15 @@ export class EventRuntime {
     this.debounce.unref();
   }
   status() {
-    return { mode: 'events' as const, owner: this.workers.owner(), workers: this.workers.list(), pool: this.workers.pool(), activity: this.liveness.activity(this.workers.pool()), error: this.lastError };
+    const activity = this.liveness.activity(this.workers.pool());
+    if (activity.state === 'idle' && this.ci.hasPending()) activity.state = 'waiting';
+    return { mode: 'events' as const, owner: this.workers.owner(), workers: this.workers.list(), pool: this.workers.pool(), activity, ciWatches: this.ci.list(), error: this.lastError };
   }
   hasWorkers() { return this.workers.list().length > 0 || this.workers.pool() !== null; }
   configurePool(input: unknown) { const pool = this.pool.configure(input); this.notify(); return pool; }
   controlPool(input: unknown) { const pool = this.pool.control(input); this.notify(); return pool; }
   register(input: unknown) {
+    if (this.workers.pool()) throw new Error('Add members through the existing organization instead of registering an unattached worker');
     const worker = this.workers.register(input);
     this.board.registerAgent({ agentId: worker.id, name: worker.name });
     this.notify(); return worker;
@@ -124,7 +131,7 @@ export class EventRuntime {
     if (!entry.taskId || worker.taskIds.length && !worker.taskIds.includes(entry.taskId)) return false;
     const task = this.board.db.prepare('SELECT status,assignee FROM tasks WHERE id=?').get(entry.taskId);
     // Facts about an owned task can unblock it; unrelated chatter never wakes every model.
-    if (task?.assignee === worker.id) return ['FACT', 'FAIL', 'PATCH_SUMMARY', 'OBSERVED'].includes(entry.kind);
+    if (this.board.db.prepare('SELECT 1 FROM task_participants WHERE taskId=? AND agentId=? AND active=1').get(entry.taskId, worker.id)) return ['FACT', 'FAIL', 'PATCH_SUMMARY', 'OBSERVED'].includes(entry.kind);
     return task?.status === 'todo' && !task.assignee && entry.kind === 'OBSERVED';
   }
   private batch(worker: Worker) {
@@ -152,11 +159,13 @@ export class EventRuntime {
   }
   private async scanOnce() {
     if (this.closed || !this.hasWorkers() || !this.workers.acquire(this.token, process.pid)) return;
+    await this.ci.poll(this.options.now?.() ?? Date.now());
+    if (this.closed || !this.workers.owns(this.token)) return;
     const before = this.workers.pool();
     const busy = !!before && before.memberIds.some(id => this.running.has(id) || ['running', 'uncertain'].includes(this.workers.get(id).status));
     const pool = this.pool.sync(busy);
     const pending = busy || !!pool?.memberIds.some(id => { const batch = this.batch(this.workers.get(id)); return batch.events.length > 0 || batch.hasMore; });
-    this.liveness.sync(pool, this.options.now?.() ?? Date.now(), pending);
+    this.liveness.sync(pool, this.options.now?.() ?? Date.now(), pending, this.ci.list().filter(w => w.state === 'watching').map(w => w.taskId));
     for (const worker of this.workers.list()) {
       // A configured organization replaces legacy individual execution. Keep
       // its history, but do not run a fourth, unbounded worker alongside peers.

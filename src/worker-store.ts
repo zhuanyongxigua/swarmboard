@@ -36,6 +36,7 @@ export class WorkerStore {
       CREATE TABLE IF NOT EXISTS runtime_owner(id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL, pid INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS worker_pool(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS pool_liveness(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS peer_requests(poolId TEXT,workerId TEXT,requestId TEXT,reason TEXT,PRIMARY KEY(poolId,workerId,requestId));
     `);
   }
   close() { this.db.close(); }
@@ -114,7 +115,22 @@ export class WorkerStore {
   owner() { return this.db.prepare('SELECT pid FROM runtime_owner WHERE id=1').get() ?? null; }
   pool(): Pool | null {
     const row = this.db.prepare('SELECT data FROM worker_pool WHERE id=1').get();
-    return row ? JSON.parse(String(row.data)) as Pool : null;
+    if (!row) return null;
+    const pool = JSON.parse(String(row.data)) as Pool;
+    return { ...pool, maxSize: pool.maxSize ?? Math.max(pool.size, 8) };
+  }
+  requestPeer(input: unknown) {
+    const data = parse(peerRequestSchema, input);
+    return this.transaction(() => {
+      const pool = this.pool();
+      if (!pool?.enabled || ['completed','stopped','stopping'].includes(pool.state)) throw new AppError('POOL_STOPPED', 'The organization is stopped', 409);
+      const worker = this.get(data.workerId);
+      if (!worker.enabled || !pool.memberIds.includes(worker.id)) throw new AppError('NOT_MEMBER', 'Only an enabled organization member may request a peer', 403);
+      if (this.db.prepare('SELECT 1 FROM peer_requests WHERE poolId=? AND workerId=? AND requestId=?').get(pool.id, worker.id, data.requestId)) return pool;
+      if (pool.size >= pool.maxSize) throw new AppError('PEER_BUDGET', 'The human-configured member budget is exhausted', 409);
+      this.db.prepare('INSERT INTO peer_requests VALUES(?,?,?,?)').run(pool.id, worker.id, data.requestId, data.reason);
+      return this.savePool({ ...pool, size: pool.size + 1, version: pool.version + 1 });
+    });
   }
   liveness(): Liveness | null {
     const row = this.db.prepare('SELECT data FROM pool_liveness WHERE id=1').get();
@@ -133,16 +149,18 @@ export class WorkerStore {
       const current = this.pool();
       if (!current || current.id !== pool.id || current.workspacePath !== pool.workspacePath) throw new AppError('VERSION_CONFLICT', 'Pool configuration changed', 409);
       return this.savePool({ ...pool, enabled: current.enabled, version: current.version,
+        size: current.size, maxSize: current.maxSize, taskIds: current.taskIds,
         state: current.version === pool.version ? pool.state : current.state });
     });
   }
 }
 
 export interface Pool {
-  id: string; version: number; workspacePath: string; size: number; taskIds: string[];
+  id: string; version: number; workspacePath: string; size: number; maxSize: number; taskIds: string[];
   enabled: boolean; memberIds: string[]; state: 'ready' | 'active' | 'waiting' | 'completed' | 'stopping' | 'stopped' | 'error'; error: string;
 }
 export const poolSchemas = {
-  configure: z.object({ workspacePath: z.string().max(4096), size: z.number().int().min(2).max(8).default(3), taskIds: z.array(z.string().min(1).max(128)).max(200).default([]), expectedVersion: z.number().int().nonnegative().default(0) }).strict(),
+  configure: z.object({ workspacePath: z.string().max(4096), size: z.number().int().min(1).max(128).default(3), maxSize: z.number().int().min(1).max(128).optional(), taskIds: z.array(z.string().min(1).max(128)).max(200).default([]), expectedVersion: z.number().int().nonnegative().default(0) }).strict(),
   control: z.object({ expectedVersion: z.number().int().positive(), enabled: z.boolean() }).strict(),
 };
+export const peerRequestSchema = z.object({ workerId: z.string().min(1), requestId: z.string().min(1).max(128), reason: z.string().trim().min(1).max(2000) }).strict();

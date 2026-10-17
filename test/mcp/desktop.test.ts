@@ -65,14 +65,26 @@ describe('portable desktop plugin', () => {
     try {
       const names = (await client.listTools()).tools.map(t => t.name);
       for (const name of ['task_create','resource_create','resource_update','pool_configure','pool_control']) expect(names).not.toContain(name);
+      expect(names).toEqual(expect.arrayContaining(['pipeline_watch','peer_request']));
+      const spoof = await client.callTool({name:'context_publish',arguments:{agentId:'other-peer',taskId:goal.id,kind:'CLAIM',summary:'Impersonation'}});
+      expect(spoof.isError).toBe(true);expect(JSON.stringify(spoof.content)).toContain('BOUND_IDENTITY');
+      const humanBypass = await client.callTool({name:'task_update',arguments:{id:goal.id,expectedVersion:1,status:'done'}});
+      expect(humanBypass.isError).toBe(true);expect(JSON.stringify(humanBypass.content)).toContain('NOT_PARTICIPANT');
+      await call(client, 'context_publish', {agentId:member.id,taskId:goal.id,kind:'CLAIM',summary:'A scoped useful check'});
+      const joined = await call<Board>(client,'board_read');expect(joined.tasks[0]!.participants).toEqual([member.id]);
+      const requested = await call<{size:number}>(client,'peer_request',{requestId:'one',reason:'Independent evidence remains'});
+      expect(requested.size).toBe(4);
+      expect(await call(client,'peer_request',{requestId:'one',reason:'Retry same request'})).toMatchObject({size:4});
       await call(client, 'board_read');
       const fact = board.publishEntry({ agentId: 'other-peer', taskId: goal.id, kind: 'FACT', summary: 'New evidence while the turn is active' });
       const response = await client.callTool({ name: 'board_read', arguments: {} });
       expect(JSON.stringify((response.content as unknown[]).slice(1))).toContain(fact.summary);
       expect(JSON.stringify(((await client.callTool({ name: 'board_read', arguments: {} })).content as unknown[]).slice(1))).not.toContain(fact.summary);
-      new WorkerPool(state, board, path).control({ expectedVersion: 1, enabled: false });
+      new WorkerPool(state, board, path).control({ expectedVersion: state.pool()!.version, enabled: false });
       const stopped = await client.callTool({ name: 'task_claim', arguments: { id: goal.id, agentId: member.id, expectedVersion: goal.version } });
       expect(stopped.isError).toBe(true); expect(JSON.stringify(stopped.content)).toContain('POOL_STOPPING');
+      const stoppedClaim = await client.callTool({name:'context_publish',arguments:{agentId:member.id,taskId:goal.id,kind:'CLAIM',summary:'Must not join while stopped'}});
+      expect(stoppedClaim.isError).toBe(true);expect(JSON.stringify(stoppedClaim.content)).toContain('POOL_STOPPING');
       expect(board.board().tasks).toHaveLength(1); expect(board.board().resources).toHaveLength(0);
     } finally { await close(client); state.close(); board.close(); }
   });

@@ -22,9 +22,16 @@ export class WorkerPool {
       if (this.workers.list().some(w => !w.poolId && ['running', 'uncertain'].includes(w.status))) throw new AppError('LEGACY_WORK_ACTIVE', 'Finish or reconcile the existing individual delivery before starting a peer pool', 409);
       const before = this.workers.pool();
       if ((before?.version ?? 0) !== data.expectedVersion) throw new AppError('VERSION_CONFLICT', 'Pool changed; read runtime_read', 409);
-      if (before && (before.memberIds.length || ['active', 'stopping'].includes(before.state))) throw new AppError('POOL_BOUND', 'The pool already has persistent members; stop/resume it rather than replacing their workspaces', 409);
+      if (before && (before.memberIds.length || ['active', 'stopping'].includes(before.state))) {
+        if (workspacePath !== before.workspacePath || JSON.stringify([...new Set(data.taskIds)].sort()) !== JSON.stringify(before.taskIds)) throw new AppError('POOL_BOUND', 'Do not replace a bound organization project or subscriptions', 409);
+        const maxSize = data.maxSize ?? Math.max(before.maxSize, data.size);
+        if (data.size < before.size || maxSize < data.size) throw new AppError('PEER_BUDGET', 'Keep existing members and a budget covering the requested size', 409);
+        return this.workers.savePool({ ...before, size: data.size, maxSize, version: before.version + 1 });
+      }
+      const maxSize = data.maxSize ?? Math.max(data.size, 8);
+      if (maxSize < data.size) throw new AppError('PEER_BUDGET', 'Member budget must cover initial members');
       const pool: Pool = { id: before?.id ?? randomUUID(), version: (before?.version ?? 0) + 1,
-        workspacePath, size: data.size, taskIds: [...new Set(data.taskIds)].sort(), enabled: true,
+        workspacePath, size: data.size, maxSize, taskIds: [...new Set(data.taskIds)].sort(), enabled: true,
         memberIds: [], state: 'ready', error: '' };
       return this.workers.savePool(pool);
     });
@@ -89,8 +96,8 @@ export class WorkerPool {
     else if (tasks.length && tasks.every(t => ['done', 'canceled'].includes(t.status))) state = busy ? 'stopping' : 'completed';
     else if (tasks.some(t => ['todo', 'in_progress'].includes(t.status))) state = 'active';
     else state = tasks.length ? 'waiting' : 'ready';
-    if (state === 'active' && pool.memberIds.length < pool.size) {
-      pool = this.workers.checkpointPool({ ...pool, state: 'active' });
+    if ((state === 'active' || state === 'waiting' && pool.memberIds.length > 0) && pool.memberIds.length < pool.size) {
+      pool = this.workers.checkpointPool({ ...pool, state });
       try { pool = this.ensureMembers(pool); } catch { state = 'error'; pool = { ...pool, error: 'Unable to prepare isolated peer workspaces; no task was executed' }; }
     }
     if (pool.state !== state) pool = this.workers.checkpointPool({ ...pool, state, error: state === 'error' ? pool.error : '' });

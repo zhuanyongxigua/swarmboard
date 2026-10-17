@@ -1,6 +1,6 @@
 // Kill independent runtime processes at execution boundaries and compare their
 // durable checkpoints with a separate, non-deduplicating side-effect ledger.
-import { fork, type ChildProcess } from 'node:child_process';
+import { fork, execFileSync, type ChildProcess } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { once } from 'node:events';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
@@ -73,6 +73,21 @@ function fixture(pool = false) {
 }
 
 describe.skipIf(process.platform === 'win32')('real process fault recovery', () => {
+  it.each(['before-signal', 'after-signal'])('recovers one CI result after SIGKILL at %s and wakes every original peer once', async gate => {
+    const f = fixture(true);
+    execFileSync('git',['init',f.dir],{stdio:'ignore'});execFileSync('git',['-C',f.dir,'remote','add','origin','https://gitlab.example.invalid/group/project.git']);
+    f.board.createTask({title:'CI-gated synthetic goal'});
+    const first=await f.spawn();await first.request('start',{gate});
+    await until(()=>f.count()===3&&f.idle(),Boolean,'initial peers idle');
+    const identities=f.workers.list().map(w=>[w.id,w.threadId]);
+    await first.request('watch-ci');await until(()=>existsSync(f.ledger.location()+'.signal-gate'),Boolean,'CI outbox boundary');
+    await first.kill();const second=await f.spawn();await second.request('start');
+    await until(()=>f.count()===6&&f.idle(),Boolean,'all peers receive CI result');
+    const signals=f.board.board().entries.filter(e=>e.summary.startsWith('PIPELINE_RESULT'));
+    expect(signals).toHaveLength(1);expect(f.effects().filter(e=>e.eventId===signals[0]!.id)).toHaveLength(3);
+    expect(f.workers.list().map(w=>[w.id,w.threadId])).toEqual(identities);
+    await second.request('scan');expect(f.count()).toBe(6);expect(f.board.board().tasks[0]!.status).toBe('todo');
+  });
   it.each(['before-signal', 'after-signal'])('recovers one idle wakeup after SIGKILL at %s without creating new sessions or duplicate messages', async gate => {
     const f = fixture(true); f.board.createTask({ title: 'Stranded human goal' });
     const first = await f.spawn(); await first.request('start', { gate });

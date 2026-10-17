@@ -7,6 +7,7 @@ import { defaultDatabasePath, defaultWidgetPath } from './paths.js';
 import { Store } from './store.js';
 import { EventRuntime } from './event-runtime.js';
 import { WorkerStore } from './worker-store.js';
+import { PipelineEvents } from './pipeline-events.js';
 
 export interface StdioOptions { dbPath?: string; widgetPath?: string }
 
@@ -23,7 +24,7 @@ export async function startStdioServer(options: StdioOptions = {}) {
   let updateCursor = peerState && workerId ? (peerState.get(workerId).deliveryCursor ?? peerState.get(workerId).cursor) : 0;
   const mayAct = () => {
     const pool = peerState?.pool();
-    if (!pool?.enabled) return false;
+    if (!pool?.enabled || !workerId || !pool.memberIds.includes(workerId) || !peerState!.get(workerId).enabled) return false;
     const tasks = store.board().tasks.filter(t => !pool.taskIds.length || pool.taskIds.includes(t.id));
     return tasks.some(t => !['done', 'canceled'].includes(t.status));
   };
@@ -31,9 +32,9 @@ export async function startStdioServer(options: StdioOptions = {}) {
     const pool = peerState?.pool(); if (!pool) return undefined;
     const events = store.readEntries({ after: updateCursor, limit: 100 }); updateCursor = events.cursor;
     const items = events.items.filter(e => e.agentId !== workerId && (!e.taskId || !pool.taskIds.length || pool.taskIds.includes(e.taskId)) && (!e.recipientId || e.recipientId === workerId));
-    return { control: mayAct() ? 'continue-if-useful' : 'stop-after-safe-boundary', items, hasMore: events.hasMore };
+    return { control: mayAct() ? 'continue-if-useful' : 'stop-after-safe-boundary', organization: { memberIds: pool.memberIds, size: pool.size, maxSize: pool.maxSize }, items, hasMore: events.hasMore };
   };
-  const server = createMcpServer(store, widgetPath, runtime, { poolMember, ...(peerState ? { sharedUpdates, mayAct } : {}) });
+  const server = createMcpServer(store, widgetPath, runtime, { poolMember, ...(peerState ? { sharedUpdates, mayAct, peers: peerState, workerId, ci: new PipelineEvents(store, peerState) } : {}) });
   const transport = new StdioServerTransport();
   let closing: Promise<void> | undefined;
   const close = () => closing ??= (async () => {

@@ -31,6 +31,7 @@ const wait = (key: string) => new Promise<void>(resolve => { waiting.set(key, re
 const runtime = new EventRuntime(board, {
   databasePath, serverEntry: 'never-start-a-real-model', keepAlive: true, fallbackMs: 100, debounceMs: 5,
   now: () => now, idleMs: 100,
+  pipelineReader: async watch => ({ sha: watch.sha, status: 'success' }),
   adapter: worker => ({
     open: async (w: Worker) => w.threadId ?? 'synthetic-thread-' + w.id,
     run: async (threadId, prompt, started) => {
@@ -74,6 +75,8 @@ process.on('message', (message: { id: number; command: string; gate?: Gate; outc
     if (message.command === 'start') {
       gate = message.gate ?? 'none'; outcome = message.outcome ?? 'completed';
       if (!started) { runtime.start(); started = true; }
+    } else if (message.command === 'watch-ci') {
+      runtime.ci.register({ taskId: board.board().tasks[0]!.id, pipelineId: 100, sha: 'a'.repeat(40) }); runtime.notify();
     } else if (message.command === 'advance') { now += message.ms ?? 100; runtime.notify(); }
     else if (message.command === 'notify') { for (let n = 0; n < 30; n++) runtime.notify(); }
     else if (message.command === 'drain') { gate = 'none'; for (const finish of waiting.values()) finish(); waiting.clear(); }

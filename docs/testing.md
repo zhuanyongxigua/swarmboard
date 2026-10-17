@@ -77,3 +77,9 @@ SWARMBOARD_FAULT_ROUNDS=30 npx vitest run test/integration/process-recovery.test
 `idle-recovery.test.ts` 使用隔离 SQLite、可控时钟和会话替身，检查十分钟边界、单个既有 peer 轮换提醒、两次预算、重启保留、普通消息不重置预算、目标修订重置、忙碌／停止／审批／未知执行／blocked／in_review／完成时不盲目唤醒，以及 4001 条无关历史跨页积压时先读完队列再计空闲。`process-recovery.test.ts` 在信号持久化后、看板追加前与追加后两个真实进程边界实际 SIGKILL，核对重启后仅一条信号和一次消费，原成员和 threadId 不变。它们不证明真实模型能自行解决所有阻塞。
 
 浏览器回归分别检查成员数／执行数、真实空闲状态、下次检查时间、耗尽后的可见提醒及版本化重新检查。内部模型执行策略通过每轮固定提示和 skill 交付，不将行为约定描述为对恶意拥有 Shell 的客户端的强制隔离。
+
+## 共享目标、扩容与 CI 订阅
+
+shared-organization 检查多参与者更新/退出、局部 CLAIM、不增加人类卡片、原组织扩容、原会话复用、跨连接请求去重和预算。SQLite 检查 v4 负责人升级后任务版本与追加历史不变。便携包用真实子 MCP 拒绝伪造身份与省略 agentId 的管理越权。浏览器检查多参与者、扩容版本与 CI 等待/失败。
+
+pipeline-events 使用受控 provider 检查运行期间不调用模型、重启后全员通知、迟到结果、SHA 校验、暂停/完成、脱敏失败和 outbox。真实 OS 进程用例在 CI 信号发布前/后 SIGKILL，重启后断言一个共享事件、每个原成员一次接收、身份不变。替身不证明真实 GitLab 登录/网络、模型协作或业务合入；真实 provider 只读和显式模型验收另行记录。

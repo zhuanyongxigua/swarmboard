@@ -43,6 +43,10 @@ export function createApp(options: AppOptions = {}) {
     try { if (!options.runtime) throw new AppError('RUNTIME_UNAVAILABLE', 'Event runtime is not active in this preview', 503); res.json(options.runtime.controlPool(req.body)); }
     catch (error) { next(error); }
   });
+  app.post('/api/pool/configure', (req,res,next) => {
+    try { if (!options.runtime) throw new AppError('RUNTIME_UNAVAILABLE', 'Event runtime is not active in this preview', 503); res.json(options.runtime.configurePool(req.body)); }
+    catch (error) { next(error); }
+  });
   app.get('/api/board',(_req,res)=>res.json(store.board()));
   const route = (method:'post'|'patch',path:string,operation:(req:Request)=>unknown)=>app[method](path,(req,res,next)=>{try{res.json(operation(req));}catch(error){next(error);}});
   route('post','/api/tasks',req=>store.createTask(req.body));
