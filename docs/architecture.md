@@ -43,15 +43,13 @@ Agent 心跳是会话活动信息。界面把超过两分钟未报告的会话�
 
 参考：[官方扩展指南](https://developers.openai.com/plugins/build/extensions)、[全局入口协议](https://github.com/openai/mcp-extensions/blob/main/docs/spec.md#global-entrypoint)、[消息扩展协议](https://github.com/openai/mcp-extensions/blob/main/docs/spec.md#prompt-target-and-send-behavior)。真实桌面布局与完整模型协作仍需宿主验收；模拟宿主测试只验证实际协议请求和隔离服务的业务结果。
 
-## 默认原生自动认领
+## 事件工作会话与兼容调度
 
-自动认领是默认行为，界面只保留三个 Tab。首次连接支持的桌面宿主时调用 `automation_ensure`：在 SQLite 写锁内判断初始化是否需要启动，只向一个调用者返回配置提示；并发页面、重连和周期刷新不会重复发起新原生会话。手动刷新才会重试失败或核对不确定结果。默认启用意图与宿主实际确认状态分开，不能把默认启用等同于调度已成功。
+事件执行通过 [事件工作会话](event-workers.md) 接入：运行时监听已提交的任务与消息，持久化每个 worker 的目录、会话和投递检查点，经官方本地 Codex App Server 接口续接同一会话。空队列不启动模型；忙碌期间的消息排队到下一回合。多 MCP 进程共享同一事件流，以单执行进程防止重复投递；30 秒扫描只负责漏事件恢复。
 
-首次配置通过 `ui/message`（新会话、发送）让原生 Agent 使用官方自动化工具建立该看板唯一的 standalone cron。新看板使用 `projectId:null`，不要求用户填写工作目录、模型或间隔。模型沿用宿主设置；worker 依据任务和资源说明确定授权执行目标、读取目标 AGENTS.md 并协商资源。旧版工作目录绑定保留内部兼容。
+原有宿主 cron 保留兼容；有启用的事件 worker 时不再初始化 cron，旧 cron 原子领取被拒绝。暂停原宿主自动化仍通过官方工具执行并回读，不修改宿主 SQLite。未登记事件 worker 的安装沿用原初始化协议及状态核验。worker 的明确工作目录、工具权限和人工审批仍独立于任务数据；未知投递结果必须核查，不盲目重放。
 
-配置采用版本和请求标识；未知结果持久化恢复标记，后续只能先只读核对原自动化。确认是可信原生会话对工具结果的回报，不是服务独立查验宿主。未确认、失败或恢复期间，原子自动认领工具拒绝认领。任务与原生会话绑定在同一事务保存。空任务板不登记空 worker 或写共享记录。
-
-宿主调度的各轮会话不依赖初始化会话持续运行。当前每轮最多认领一个任务，尚未实现完整 Agensh 的中途事件投递、worker 常驻与自动恢复。服务不调用 Electron/CDP 内部接口、不启动 app-server、不处理模型凭据。
+此版本实现了本地事件投递、持久会话和同伴消息续接，尚未实现 Agensh 的中途工具结果注入和跨机器路由。服务不读取模型凭据、不调用私有 Electron/CDP 接口。运行与验收契约见 [事件工作会话](event-workers.md)。
 
 ## 与 Agensh 的关系
 
@@ -77,7 +75,7 @@ HTTP 服务保留作开发预览及其他 MCP 客户端接入。可选 `BOARD_TO
 
 参考：[原生扩展](https://developers.openai.com/plugins/build/extensions)、[本地 marketplace](https://developers.openai.com/plugins/build/plugins)、[桌面本地 MCP](https://developers.openai.com/plugins/deploy/desktop-only)。
 
-服务不读取订阅登录文件，不接管 OAuth，不调用模型 API，不创建模型 worker 进程。自动认领会话由宿主定时自动化创建与运行；其他 Agent 的持续运行与唤醒由其原有客户端决定。声明不是系统锁，也不会强制阻止绕过协作约定的直接资源操作。
+服务不读取订阅登录文件，不接管 OAuth，不直接调用模型 API。明确登记的事件 worker 由官方 Codex CLI 维护模型执行和权限；其他 harness 的唤醒仍须各自的已验证适配器。声明不是系统锁，也不会强制阻止绕过协作约定的直接资源操作。
 
 ## 桌面启动环境
 

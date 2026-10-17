@@ -60,19 +60,23 @@ codex plugin add swarmboard@swarmboard-local
 
 重启桌面客户端，从侧边栏打开 **Swarmboard**。也可以在注册来源后，通过桌面的 Plugins Directory 选择 **Swarmboard Local** 并安装。
 
-构建会生成插件目录 `dist/desktop/` 和便携包 `dist/swarmboard-desktop-0.4.1.zip`。当前安装方式是本地 marketplace；从 GitHub 获取源码后需要先构建。更多步骤见[安装、升级与排查](docs/setup.zh-CN.md)。
+构建会生成插件目录 `dist/desktop/` 和便携包 `dist/swarmboard-desktop-0.5.0.zip`。当前安装方式是本地 marketplace；从 GitHub 获取源码后需要先构建。更多步骤见[安装、升级与排查](docs/setup.zh-CN.md)。
 
 ## 如何使用
 
-### 默认自动认领
+### 自动认领与兼容调度
 
-自动认领是默认行为。在支持本地执行的桌面宿主中打开 Swarmboard 后，插件自动初始化原生调度，不提供开关、配置框、模型选择或统一工作目录。模型沿用宿主设置，检查间隔由内部处理；具体执行位置来自任务和可用资源。
+登记事件 worker 后，新任务与消息即时触发并复用会话，执行范围由登记的工作目录和任务订阅约束。未登记事件 worker 的安装保留兼容的原生定时认领；该路径沿用宿主模型和内部检查间隔，不提供额外的配置面板。
 
 首次初始化可能打开宿主原生配置会话。宿主确认独立定时自动化后，后续运行不依赖该会话。每轮原子认领一个可执行任务、协调资源，验证后交到待验收；没有可执行任务时直接结束，不登记空 worker 或改动看板。
 
 消息发送成功不代表初始化成功。待确认或结果不确定时，必须先只读核对宿主记录，避免重复创建。宿主不支持或初始化失败时显示简短错误，可用原有刷新按钮重试。独立浏览器预览不启动原生自动化。
 
-沿用 [Codex Taskboard](https://github.com/chuspeeism/dashi-taskboard) 的宿主定时自动化方式，通过官方工具接入，不进行 CDP 注入。登录和订阅认证留在宿主中；这仍不是完整 Agensh 事件运行时。
+沿用 [Codex Taskboard](https://github.com/chuspeeism/dashi-taskboard) 的宿主定时自动化方式，通过官方工具接入，不进行 CDP 注入。登录和订阅认证留在宿主中；兼容定时路径与下面的事件工作会话分开；两者均不宣称完整复现 Agensh。
+
+### 事件工作会话
+
+0.5.0 支持新任务与消息唤醒持久 Codex 会话；忙碌时排队，后续复用同一会话。登记 worker 时明确工作目录与任务范围，运行时沿用正常权限和人工审批，30 秒扫描仅作恢复。已有事件 worker 时优先于兼容 cron。登记、暂停与不确定投递恢复见[事件工作会话](docs/event-workers.md)。
 
 ### 在原生会话里讨论方案
 

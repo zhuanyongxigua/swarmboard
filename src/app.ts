@@ -5,8 +5,9 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { AppError, Store } from './store.js';
 import { createMcpServer } from './mcp.js';
 import { defaultDatabasePath, defaultWidgetPath } from './paths.js';
+import type { EventRuntime } from './event-runtime.js';
 
-export interface AppOptions { store?: Store; dbPath?: string; widgetPath?: string; boardToken?: string }
+export interface AppOptions { store?: Store; dbPath?: string; widgetPath?: string; boardToken?: string; runtime?: EventRuntime }
 export interface ServerOptions extends AppOptions { port?: number; host?: string }
 export function createApp(options: AppOptions = {}) {
   const store = options.store ?? new Store(options.dbPath ?? defaultDatabasePath());
@@ -37,6 +38,7 @@ export function createApp(options: AppOptions = {}) {
   app.get('/health',(_req,res)=>res.json({ok:true}));
   app.use(express.json({limit:'128kb'}));
   app.get('/',(_req,res,next)=>res.sendFile(widgetPath,error=>{if(error)next(new AppError('UI_NOT_BUILT','Build the UI before opening the board',503));}));
+  app.get('/api/runtime', (_req,res) => res.json(options.runtime?.status() ?? {mode:'events',workers:[],error:''}));
   app.get('/api/board',(_req,res)=>res.json(store.board()));
   const route = (method:'post'|'patch',path:string,operation:(req:Request)=>unknown)=>app[method](path,(req,res,next)=>{try{res.json(operation(req));}catch(error){next(error);}});
   route('post','/api/tasks',req=>store.createTask(req.body));
@@ -53,7 +55,7 @@ export function createApp(options: AppOptions = {}) {
   route('patch','/api/usages/:id',req=>store.updateUsage(String(req.params.id),req.body));
   route('post','/api/usages/:id/release',req=>store.releaseUsage(String(req.params.id),req.body));
   app.post('/mcp',async(req,res,next)=>{
-    const mcp = createMcpServer(store,widgetPath);
+    const mcp = createMcpServer(store,widgetPath,options.runtime);
     const transport = new StreamableHTTPServerTransport({sessionIdGenerator:undefined});
     res.on('close',()=>{void transport.close();void mcp.close();});
     try {await mcp.connect(transport);await transport.handleRequest(req,res,req.body);}catch(error){if(!res.headersSent)next(error);}

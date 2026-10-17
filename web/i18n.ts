@@ -2,6 +2,7 @@
 // the existing Chinese desktop default; ?lang=en selects the English preview.
 export const locale = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('lang') === 'en' ? 'en' : 'zh-CN';
 const english: Record<string, string> = {
+  '事件协作': 'Event collaboration', '个工作会话': 'worker sessions',
   '当前宿主不支持自动认领，任务与资源仍可使用。': 'Auto-claim is unavailable in this host. Tasks and resources are still available.',
   '自动认领初始化未完成：': 'Auto-claim initialization incomplete: ',
   '正在核对自动认领状态。': 'Checking native auto-claim status.',

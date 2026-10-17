@@ -101,7 +101,7 @@ test('discussion appends a native draft only after a click and leaves persisted 
     expect(text).toContain(task.acceptanceCriteria);
     expect(text).not.toContain('Unsaved changes must stay out of the native draft');
     expect(await host.submitted()).toEqual([]);
-    expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read' || name === 'automation_ensure')).toBe(true);
+    expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read' || name === 'automation_ensure' || name === 'runtime_read')).toBe(true);
     expect(host.forbiddenApiCalls()).toBe(0);
     expect(await (await request.get('/api/board')).json()).toEqual(before);
   } finally { await host.close(); }
@@ -142,7 +142,7 @@ test('mobile host cannot append a draft even when it advertises native messaging
     expect(await host.messages()).toEqual([]);
     expect(await host.submitted()).toEqual([]);
     await expect(page.getByLabel('Simulated native composer')).toHaveValue(originalDraft);
-    expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read' || name === 'automation_ensure')).toBe(true);
+    expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read' || name === 'automation_ensure' || name === 'runtime_read')).toBe(true);
     expect(host.forbiddenApiCalls()).toBe(0);
     expect(await (await request.get('/api/board')).json()).toEqual(before);
   } finally { await host.close(); }
@@ -163,7 +163,7 @@ for (const mode of ['denied', 'rpc-error'] as const) {
       expect((await host.messages())[0]).toMatchObject({ _meta: { 'openai/message': { target: 'active', send: false } } });
       expect(await host.submitted()).toEqual([]);
       await expect(page.getByLabel('Simulated native composer')).toHaveValue(originalDraft);
-      expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read' || name === 'automation_ensure')).toBe(true);
+      expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read' || name === 'automation_ensure' || name === 'runtime_read')).toBe(true);
       expect(host.forbiddenApiCalls()).toBe(0);
       expect(await (await request.get('/api/board')).json()).toEqual(before);
     } finally { await host.close(); }
