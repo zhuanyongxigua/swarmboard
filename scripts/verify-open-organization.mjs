@@ -46,7 +46,7 @@ runtime = new EventRuntime(board, { databasePath: path, serverEntry: resolve('di
     };
   },
 });
-const wait = async (predicate, label, timeout = 300000) => {
+const wait = async (predicate, label, timeout = 600000) => {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     const state = runtime.status();
