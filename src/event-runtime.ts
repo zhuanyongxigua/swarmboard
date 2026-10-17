@@ -130,18 +130,20 @@ export class EventRuntime {
   private batch(worker: Worker) {
     const result: Entry[] = [];
     let cursor = worker.cursor;
+    let hasMore = false;
     // Read bounded pages, retaining a cursor even when an event is irrelevant.
     for (let page = 0; page < 20; page++) {
       const entries = this.board.readEntries({ after: cursor, limit: 200 });
+      hasMore = entries.hasMore;
       for (const entry of entries.items) {
         cursor = entry.id;
         if (this.relevant(worker, entry)) result.push(entry);
-        if (result.length >= 50) return { events: result, cursor };
+        if (result.length >= 50) return { events: result, cursor, hasMore: true };
       }
       cursor = entries.cursor;
       if (!entries.hasMore || result.length >= 50) break;
     }
-    return { events: result, cursor };
+    return { events: result, cursor, hasMore };
   }
   async scan() {
     if (this.scanning) return this.scanning;
@@ -153,7 +155,8 @@ export class EventRuntime {
     const before = this.workers.pool();
     const busy = !!before && before.memberIds.some(id => this.running.has(id) || ['running', 'uncertain'].includes(this.workers.get(id).status));
     const pool = this.pool.sync(busy);
-    this.liveness.sync(pool, this.options.now?.() ?? Date.now(), busy || this.workers.list().some(w => w.poolId === pool?.id && this.batch(w).events.length > 0));
+    const pending = busy || !!pool?.memberIds.some(id => { const batch = this.batch(this.workers.get(id)); return batch.events.length > 0 || batch.hasMore; });
+    this.liveness.sync(pool, this.options.now?.() ?? Date.now(), pending);
     for (const worker of this.workers.list()) {
       // A configured organization replaces legacy individual execution. Keep
       // its history, but do not run a fourth, unbounded worker alongside peers.

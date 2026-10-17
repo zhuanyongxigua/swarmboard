@@ -43,7 +43,7 @@ export class CodexSession implements SessionAdapter {
       lines.on('line', line => { try { this.receive(JSON.parse(line)); } catch { /* Ignore non-protocol diagnostics. */ } });
       const failed = () => this.fail(new Error('Codex App Server disconnected; inspect the bound session before retrying'));
       this.child.once('error', failed); this.child.once('exit', failed); this.child.stdin.on('error', failed); this.child.stdout.on('error', failed);
-      await this.request('initialize', { clientInfo: { name: 'swarmboard-event-worker', title: 'Swarmboard event worker', version: '0.6.1' }, capabilities: { experimentalApi: true } });
+      await this.request('initialize', { clientInfo: { name: 'swarmboard-event-worker', title: 'Swarmboard event worker', version: '0.6.2' }, capabilities: { experimentalApi: true } });
       this.send({ method: 'initialized' });
     })();
   }

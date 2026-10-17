@@ -84,4 +84,14 @@ describe('internal peer idle recovery', () => {
     expect(f.board.board().cursor).toBe(cursor); expect(f.runtime.workers.liveness()!.pending).toBeNull();
     expect(f.runtime.status().activity.watchdog.attempts).toBe(1);
   });
+  it('drains a paginated unrelated backlog before declaring the organization idle', async () => {
+    const f = fixture(); await f.settle();
+    f.board.registerAgent({ agentId: 'outside-recipient', name: 'Outside this organization' });
+    for (let n = 0; n < 4001; n++) f.board.publishEntry({ agentId: 'outside-recipient', recipientId: 'outside-recipient', kind: 'MESSAGE', summary: 'Unrelated history ' + n });
+    f.tick(); await f.settle();
+    expect(f.turns).toHaveLength(3);
+    expect(f.runtime.status().activity.watchdog.attempts).toBe(0);
+    f.tick(99); await f.settle(); expect(f.turns).toHaveLength(3);
+    f.tick(1); await f.settle(); expect(f.turns).toHaveLength(4);
+  });
 });

@@ -47,7 +47,7 @@ codex plugin list --marketplace swarmboard-local --json
 `npm run package:desktop` 生成：
 
 - `dist/desktop/`：插件目录。
-- `dist/swarmboard-desktop-0.6.1.zip`：ZIP 根目录即插件根目录。
+- `dist/swarmboard-desktop-0.6.2.zip`：ZIP 根目录即插件根目录。
 
 ZIP 可解压到自建的本地 marketplace，再让目录的 `source.path` 指向解压后的插件根目录。配置使用 `${PLUGIN_ROOT}`，解压目录可以移动；目标客户端仍需要可访问的 Node.js 24+。公开源码仓库和 ZIP 不代表已上架 OpenAI Plugin Directory。
 
