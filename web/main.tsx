@@ -308,7 +308,7 @@ function Workspace() {
     return true;
   }
 
-  return <div className="workspace">
+  return <div className="workspace" data-panel={tab}>
     <header className="workspace-header">
       <h1>Swarmboard</h1>
       <nav className="tabs" role="tablist" aria-label={t("工作面板")}>
@@ -331,7 +331,7 @@ function Workspace() {
       : autoError ? <p className="automation-notice" role="alert">{t("自动认领初始化未完成：")}{autoError}</p>
         : automation?.state === 'pending' ? <p className="automation-notice" role="status">{automation.setupMode === 'reconcile'
           ? t("正在核对自动认领状态。") : t("正在初始化自动认领，等待宿主确认。")}</p> : null}
-    <main id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
+    <main id={`panel-${tab}`} className={tab === 'tasks' ? 'task-panel' : undefined} role="tabpanel" aria-labelledby={`tab-${tab}`}>
       <div className="panel-toolbar">
         <span className="subtle">{tab === 'tasks' ? `${board?.tasks.length ?? 0} ${t('个任务')}`
           : tab === 'resources' ? `${board?.resources.length ?? 0} ${t('项资源')}` : t("Agent 交互记录")}</span>
@@ -375,7 +375,7 @@ function TaskBoard({ board, usages, name, stale, movingId, open, dragStart, drag
 }) {
   const order = ['todo', 'in_progress', 'in_review', 'done'];
   for (const task of board.tasks) if (!order.includes(task.status)) order.push(task.status);
-  return <div className="task-board" aria-label={t("任务状态看板")} style={{ '--column-count': order.length } as React.CSSProperties}>
+  return <div className="task-board" role="region" tabIndex={0} aria-label={t("任务状态看板")} style={{ '--column-count': order.length } as React.CSSProperties}>
     {order.map(status => {
       const tasks = board.tasks.filter(task => task.status === status);
       return <section className="task-column" key={status} aria-label={statuses[status] ?? status}
@@ -388,13 +388,12 @@ function TaskBoard({ board, usages, name, stale, movingId, open, dragStart, drag
             return <button type="button" key={task.id} className="task-card" draggable={movingId === null}
               data-task-id={task.id} aria-label={`${t('查看任务')} ${task.title}`} disabled={movingId === task.id}
               onClick={() => open(task)} onDragStart={event => dragStart(event, task)} onDragEnd={dragEnd}>
-              <span className="task-id" title={task.id}>{shortId(task.id)}</span>
-              <span className="task-title">{task.title}</span>
-              {task.description && <span className="task-excerpt">{task.description}</span>}
+              <span className="task-title" title={task.title}>{task.title}</span>
+              {task.description && <span className="task-excerpt">{task.description.replace(/\b[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}\b/gi, shortId)}</span>}
               <span className="task-footer">
-                <span>{task.assignee ? name(task.assignee) : t("未认领")}
+                <span title={task.assignee ? name(task.assignee) : undefined}>{task.assignee ? name(task.assignee) : t("未认领")}
                   {task.assignee && stale(task.assignee) && <span className="stale"> {t("· 最近未报告")}</span>}</span>
-                <span>{related.length ? related.join(locale === 'en' ? ', ' : '、') : t("暂无活跃资源声明")}</span>
+                {related.length > 0 && <span title={related.join(locale === 'en' ? ', ' : '、')}>{related.join(locale === 'en' ? ', ' : '、')}</span>}
               </span>
             </button>;
           }) : <p className="column-empty">{t("暂无任务")}</p>}
