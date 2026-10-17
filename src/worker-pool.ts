@@ -17,21 +17,25 @@ export class WorkerPool {
       if (!isAbsolute(data.workspacePath) || !statSync(data.workspacePath).isDirectory()) throw new Error();
       workspacePath = realpathSync(data.workspacePath);
     } catch { throw new AppError('INVALID_WORKSPACE', 'Select an existing authorized absolute project directory'); }
-    for (const id of data.taskIds) if (!this.board.db.prepare('SELECT id FROM tasks WHERE id=?').get(id)) throw new AppError('NOT_FOUND', 'Subscribed human task not found', 404);
+    for (const id of data.taskIds ?? []) if (!this.board.db.prepare('SELECT id FROM tasks WHERE id=?').get(id)) throw new AppError('NOT_FOUND', 'Subscribed human task not found', 404);
     return this.workers.transaction(() => {
       if (this.workers.list().some(w => !w.poolId && ['running', 'uncertain'].includes(w.status))) throw new AppError('LEGACY_WORK_ACTIVE', 'Finish or reconcile the existing individual delivery before starting a peer pool', 409);
       const before = this.workers.pool();
       if ((before?.version ?? 0) !== data.expectedVersion) throw new AppError('VERSION_CONFLICT', 'Pool changed; read runtime_read', 409);
+      const taskIds = [...new Set(data.taskIds ?? before?.taskIds ?? [])].sort();
       if (before && (before.memberIds.length || ['active', 'stopping'].includes(before.state))) {
-        if (workspacePath !== before.workspacePath || JSON.stringify([...new Set(data.taskIds)].sort()) !== JSON.stringify(before.taskIds)) throw new AppError('POOL_BOUND', 'Do not replace a bound organization project or subscriptions', 409);
+        const widening = before.taskIds.length > 0 && data.taskIds?.length === 0;
+        if (workspacePath !== before.workspacePath || JSON.stringify(taskIds) !== JSON.stringify(before.taskIds) && !widening) throw new AppError('POOL_BOUND', 'Do not replace a bound organization project or narrow its subscriptions', 409);
         const maxSize = data.maxSize ?? Math.max(before.maxSize, data.size);
         if (data.size < before.size || maxSize < data.size) throw new AppError('PEER_BUDGET', 'Keep existing members and a budget covering the requested size', 409);
-        return this.workers.savePool({ ...before, size: data.size, maxSize, version: before.version + 1 });
+        const scopeRefresh = widening ? { id: randomUUID(), previousTaskIds: before.taskIds } : before.scopeRefresh;
+        if (widening) this.workers.replaceMemberSubscriptions(before.id, taskIds);
+        return this.workers.savePool({ ...before, size: data.size, maxSize, taskIds, scopeRefresh, version: before.version + 1 });
       }
       const maxSize = data.maxSize ?? Math.max(data.size, 8);
       if (maxSize < data.size) throw new AppError('PEER_BUDGET', 'Member budget must cover initial members');
       const pool: Pool = { id: before?.id ?? randomUUID(), version: (before?.version ?? 0) + 1,
-        workspacePath, size: data.size, maxSize, taskIds: [...new Set(data.taskIds)].sort(), enabled: true,
+        workspacePath, size: data.size, maxSize, taskIds, enabled: true,
         memberIds: [], state: 'ready', error: '' };
       return this.workers.savePool(pool);
     });
@@ -90,6 +94,20 @@ export class WorkerPool {
   }
   sync(busy: boolean) {
     let pool = this.workers.pool(); if (!pool) return null;
+    if (pool.enabled && pool.scopeRefresh) {
+      const refresh = pool.scopeRefresh;
+      const agentId = `pool-events:${pool.id}`;
+      if (!this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(agentId)) this.board.registerAgent({ agentId, name: 'Swarmboard organization events' });
+      // Read after the scope commit: an older scan may have advanced its cursor
+      // past a new goal while configuration was still in flight.
+      const goals = this.board.board().tasks.filter(t => !refresh.previousTaskIds.includes(t.id) && !['done', 'canceled'].includes(t.status));
+      for (const { id: taskId } of goals) this.board.publishSystemEntryOnce({ kind: 'OBSERVED', agentId, taskId,
+        summary: 'BOARD_SCOPE_EXPANDED', detail: JSON.stringify({ signalId: `${refresh.id}:${taskId}`,
+          message: 'The organization follows all human goals. Read current shared work and choose useful contributions within the authorized project. Peers negotiate their own scopes and priorities.' }) });
+      // The sidecar outbox is acknowledged only after idempotent board writes.
+      this.workers.clearScopeRefresh(refresh.id);
+      pool = this.workers.pool()!;
+    }
     const tasks = this.board.board().tasks.filter(t => !pool!.taskIds.length || pool!.taskIds.includes(t.id));
     let state: Pool['state'];
     if (!pool.enabled) state = busy ? 'stopping' : 'stopped';

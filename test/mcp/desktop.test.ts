@@ -80,12 +80,20 @@ describe('portable desktop plugin', () => {
       const response = await client.callTool({ name: 'board_read', arguments: {} });
       expect(JSON.stringify((response.content as unknown[]).slice(1))).toContain(fact.summary);
       expect(JSON.stringify(((await client.callTool({ name: 'board_read', arguments: {} })).content as unknown[]).slice(1))).not.toContain(fact.summary);
+      const extraGoals = [board.createTask({ title: 'New goal during an active peer turn' }), board.createTask({ title: 'Another simultaneous goal' })];
+      const newGoals = await client.callTool({ name: 'agent_heartbeat', arguments: { agentId: member.id } });
+      for (const extra of extraGoals) expect(JSON.stringify((newGoals.content as unknown[]).slice(1))).toContain(extra.id);
+      for (const extra of extraGoals) {
+        await call(client, 'context_publish', { agentId: member.id, taskId: extra.id, kind: 'CLAIM', summary: 'A scope chosen while other goals remain unfinished' });
+        board.publishEntry({ agentId: 'other-peer', taskId: extra.id, kind: 'CLAIM', summary: 'An independently negotiated complementary scope' });
+        expect(board.board().tasks.find(t => t.id === extra.id)!.participants).toEqual(expect.arrayContaining([member.id, 'other-peer']));
+      }
       new WorkerPool(state, board, path).control({ expectedVersion: state.pool()!.version, enabled: false });
       const stopped = await client.callTool({ name: 'task_claim', arguments: { id: goal.id, agentId: member.id, expectedVersion: goal.version } });
       expect(stopped.isError).toBe(true); expect(JSON.stringify(stopped.content)).toContain('POOL_STOPPING');
       const stoppedClaim = await client.callTool({name:'context_publish',arguments:{agentId:member.id,taskId:goal.id,kind:'CLAIM',summary:'Must not join while stopped'}});
       expect(stoppedClaim.isError).toBe(true);expect(JSON.stringify(stoppedClaim.content)).toContain('POOL_STOPPING');
-      expect(board.board().tasks).toHaveLength(1); expect(board.board().resources).toHaveLength(0);
+      expect(board.board().tasks).toHaveLength(3); expect(board.board().resources).toHaveLength(0);
     } finally { await close(client); state.close(); board.close(); }
   });
   it('ships a self-contained local stdio plugin without runtime state or private paths', () => {

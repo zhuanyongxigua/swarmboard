@@ -23,6 +23,85 @@ function fixture() {
   return { dir, board, runtime, turns, closed, finishes, hold: (value: boolean) => { hold = value; } };
 }
 describe('equal peer organization', () => {
+  it('widens a running selected-goal organization and catches up excluded goals in every original session', async () => {
+    const f=fixture(); const first=f.board.createTask({title:'First goal'});
+    const pool=f.runtime.configurePool({workspacePath:f.dir,taskIds:[first.id]});
+    await f.runtime.scan(); await vi.waitFor(()=>expect(f.turns).toHaveLength(3));
+    await vi.waitFor(()=>expect(f.runtime.workers.list().every(w=>w.status==='idle')).toBe(true));
+    const bindings=f.runtime.workers.list().map(w=>[w.id,w.threadId]);
+    const missed=f.board.createTask({title:'Previously excluded goal'});await f.runtime.scan();
+    expect(f.turns).toHaveLength(3);expect(f.runtime.workers.list().every(w=>w.cursor>=f.board.board().cursor)).toBe(true);
+    const staleWorkers=f.runtime.workers.list();
+    f.runtime.configurePool({workspacePath:f.dir,taskIds:[],expectedVersion:pool.version});
+    const late=f.board.createTask({title:'Created during the subscription transition'});
+    // Simulate the late checkpoint of a scan that read the old subscription.
+    for(const worker of staleWorkers)f.runtime.workers.save({...worker,cursor:f.board.board().cursor});
+    await f.runtime.scan();await vi.waitFor(()=>expect(f.turns).toHaveLength(6));
+    await vi.waitFor(()=>expect(f.runtime.workers.list().every(w=>w.status==='idle')).toBe(true));
+    for(const [id] of bindings)for(const goal of [missed,late])expect(f.turns.filter(t=>t.worker===id).at(-1)?.prompt).toContain(goal.id);
+    expect(f.runtime.workers.list().map(w=>[w.id,w.threadId])).toEqual(bindings);
+    expect(f.runtime.workers.list().every(w=>w.taskIds.length===0)).toBe(true);
+    expect(f.board.board().tasks).toHaveLength(3);expect(f.board.board().resources).toHaveLength(0);
+    const count=f.board.board().entries.filter(e=>e.summary==='BOARD_SCOPE_EXPANDED').length;
+    await f.runtime.scan();expect(f.board.board().entries.filter(e=>e.summary==='BOARD_SCOPE_EXPANDED')).toHaveLength(count);
+    expect(()=>f.runtime.configurePool({workspacePath:f.dir,taskIds:[first.id],expectedVersion:pool.version+1})).toThrow(/bound organization/);
+  });
+  it('delivers new goals to idle peers while a busy peer keeps both goals queued without a human-goal barrier', async () => {
+    const f=fixture(); f.runtime.configurePool({workspacePath:f.dir}); const first=f.board.createTask({title:'Goal A'});
+    f.hold(true);await f.runtime.scan();await vi.waitFor(()=>expect(f.finishes.size).toBe(3));
+    const workers=f.runtime.workers.list();const busy=workers[0]!;const bindings=workers.map(w=>[w.id,w.threadId]);
+    f.hold(false);for(const w of workers.slice(1))f.finishes.get(w.id)!();
+    await vi.waitFor(()=>expect(f.runtime.workers.get(workers[1]!.id).status).toBe('idle'));
+    const second=f.board.createTask({title:'Goal B'});const third=f.board.createTask({title:'Goal C'});
+    await f.runtime.scan();await vi.waitFor(()=>expect(f.turns).toHaveLength(5));
+    expect(f.runtime.workers.get(busy.id).status).toBe('running');
+    for(const w of workers.slice(1)){const prompt=f.turns.filter(t=>t.worker===w.id).at(-1)!.prompt;expect(prompt).toContain(second.id);expect(prompt).toContain(third.id);}
+    // One peer may join several unfinished goals; each goal may have several peers.
+    for(const w of workers)for(const goal of [first,second,third])f.board.publishEntry({agentId:w.id,taskId:goal.id,kind:'CLAIM',summary:'Independently chosen scope'});
+    expect(f.board.board().tasks.every(t=>t.participants.length===3&&t.status==='in_progress')).toBe(true);
+    f.finishes.get(busy.id)!();await vi.waitFor(()=>expect(f.runtime.workers.get(busy.id).status).toBe('idle'));
+    await f.runtime.scan();await vi.waitFor(()=>expect(f.turns.filter(t=>t.worker===busy.id)).toHaveLength(2));
+    const prompt=f.turns.filter(t=>t.worker===busy.id).at(-1)!.prompt;expect(prompt).toContain(second.id);expect(prompt).toContain(third.id);
+    await vi.waitFor(()=>expect(f.runtime.workers.list().every(w=>w.status==='idle')).toBe(true));
+    expect(f.runtime.workers.list().map(w=>[w.id,w.threadId])).toEqual(bindings);
+    f.board.updateTask(first.id,{expectedVersion:f.board.board().tasks.find(t=>t.id===first.id)!.version,status:'done'});await f.runtime.scan();expect(f.runtime.workers.pool()?.state).toBe('active');
+    for(const goal of [second,third])f.board.updateTask(goal.id,{expectedVersion:f.board.board().tasks.find(t=>t.id===goal.id)!.version,status:'done'});
+    await vi.waitFor(()=>expect(f.runtime.workers.list().every(w=>w.status==='idle')).toBe(true));await f.runtime.scan();expect(f.runtime.workers.pool()?.state).toBe('completed');
+    const count=f.turns.length;await f.runtime.scan();expect(f.turns).toHaveLength(count);expect(f.board.board().tasks).toHaveLength(3);expect(f.board.board().resources).toHaveLength(0);
+  });
+
+  it('preserves explicit selected subscriptions on omitted fields and a human pause when widening', async () => {
+    const f=fixture();const goal=f.board.createTask({title:'Selected'});let pool=f.runtime.configurePool({workspacePath:f.dir,taskIds:[goal.id]});
+    await f.runtime.scan();await vi.waitFor(()=>expect(f.runtime.workers.list().every(w=>w.status==='idle')).toBe(true));
+    pool=f.runtime.configurePool({workspacePath:f.dir,size:4,expectedVersion:pool.version});expect(pool.taskIds).toEqual([goal.id]);
+    pool=f.runtime.controlPool({expectedVersion:pool.version,enabled:false});
+    const missed=f.board.createTask({title:'Excluded before widening'});await f.runtime.scan();const count=f.turns.length;
+    const stale=pool;pool=f.runtime.configurePool({workspacePath:f.dir,size:4,taskIds:[],expectedVersion:pool.version});
+    f.runtime.workers.checkpointPool(stale);expect(f.runtime.workers.pool()?.scopeRefresh).toEqual(pool.scopeRefresh);
+    await f.runtime.scan();expect(f.turns).toHaveLength(count);expect(f.runtime.workers.pool()?.enabled).toBe(false);
+    expect(f.board.board().entries.some(e=>e.summary==='BOARD_SCOPE_EXPANDED')).toBe(false);
+    expect(()=>f.runtime.configurePool({workspacePath:f.dir,taskIds:[],expectedVersion:stale.version})).toThrow(/Pool changed/);
+    f.runtime.controlPool({expectedVersion:pool.version,enabled:true});await f.runtime.scan();
+    await vi.waitFor(()=>expect(f.turns.length).toBeGreaterThan(count));
+    expect(f.board.board().entries.some(e=>e.summary==='BOARD_SCOPE_EXPANDED'&&e.taskId===missed.id)).toBe(true);
+  });
+  it('recovers a persisted scope refresh after publication fails without duplicating its board signal', async () => {
+    const f=fixture();const goal=f.board.createTask({title:'Selected'});const pool=f.runtime.configurePool({workspacePath:f.dir,taskIds:[goal.id]});
+    await f.runtime.scan();await vi.waitFor(()=>expect(f.runtime.workers.list().every(w=>w.status==='idle')).toBe(true));
+    const missed=f.board.createTask({title:'Excluded'});await f.runtime.scan();
+    f.runtime.configurePool({workspacePath:f.dir,taskIds:[],expectedVersion:pool.version});
+    const publish=f.board.publishSystemEntryOnce.bind(f.board);
+    const fault=vi.spyOn(f.board,'publishSystemEntryOnce').mockImplementationOnce(input=>{publish(input);throw new Error('Publication acknowledgement lost');});
+    await expect(f.runtime.scan()).rejects.toThrow('Publication acknowledgement lost');expect(f.runtime.workers.pool()?.scopeRefresh).toBeDefined();fault.mockRestore();
+    const bindings=f.runtime.workers.list().map(w=>[w.id,w.threadId]);
+    cleanups.pop(); await f.runtime.close();
+    const restored=new EventRuntime(f.board,{databasePath:join(f.dir,'board.sqlite'),serverEntry:'unused',adapter:w=>({open:async()=>w.threadId!,run:async()=>{},close:async()=>{}})});
+    cleanups.push(()=>restored.close());await restored.scan();
+    await vi.waitFor(()=>expect(restored.workers.list().every(w=>w.status==='idle')).toBe(true));
+    expect(restored.workers.pool()?.scopeRefresh).toBeUndefined();
+    expect(f.board.board().entries.filter(e=>e.summary==='BOARD_SCOPE_EXPANDED'&&e.taskId===missed.id)).toHaveLength(1);
+    expect(restored.workers.list().map(w=>[w.id,w.threadId])).toEqual(bindings);
+  });
   it('reports actual execution while peers handle an update to a waiting goal',async()=>{
     const f=fixture();f.runtime.configurePool({workspacePath:f.dir});f.hold(true);const goal=f.board.createTask({title:'Goal'});
     await f.runtime.scan();await vi.waitFor(()=>expect(f.finishes.size).toBe(3));

@@ -144,12 +144,27 @@ export class WorkerStore {
   savePool(pool: Pool) {
     this.db.prepare('INSERT INTO worker_pool VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(JSON.stringify(pool)); return pool;
   }
+  replaceMemberSubscriptions(poolId: string, taskIds: string[]) {
+    // Called within the configuration transaction; checkpoint saves preserve it.
+    for (const worker of this.list().filter(w => w.poolId === poolId)) {
+      this.write({ ...worker, taskIds, version: worker.version + 1 });
+    }
+  }
+  clearScopeRefresh(id: string) {
+    return this.transaction(() => {
+      const current = this.pool();
+      if (current?.scopeRefresh?.id === id) {
+        const { scopeRefresh: _completed, ...rest } = current;
+        this.savePool(rest);
+      }
+    });
+  }
   checkpointPool(pool: Pool) {
     return this.transaction(() => {
       const current = this.pool();
       if (!current || current.id !== pool.id || current.workspacePath !== pool.workspacePath) throw new AppError('VERSION_CONFLICT', 'Pool configuration changed', 409);
       return this.savePool({ ...pool, enabled: current.enabled, version: current.version,
-        size: current.size, maxSize: current.maxSize, taskIds: current.taskIds,
+        size: current.size, maxSize: current.maxSize, taskIds: current.taskIds, scopeRefresh: current.scopeRefresh,
         state: current.version === pool.version ? pool.state : current.state });
     });
   }
@@ -157,10 +172,11 @@ export class WorkerStore {
 
 export interface Pool {
   id: string; version: number; workspacePath: string; size: number; maxSize: number; taskIds: string[];
+  scopeRefresh?: { id: string; previousTaskIds: string[] };
   enabled: boolean; memberIds: string[]; state: 'ready' | 'active' | 'waiting' | 'completed' | 'stopping' | 'stopped' | 'error'; error: string;
 }
 export const poolSchemas = {
-  configure: z.object({ workspacePath: z.string().max(4096), size: z.number().int().min(1).max(128).default(3), maxSize: z.number().int().min(1).max(128).optional(), taskIds: z.array(z.string().min(1).max(128)).max(200).default([]), expectedVersion: z.number().int().nonnegative().default(0) }).strict(),
+  configure: z.object({ workspacePath: z.string().max(4096), size: z.number().int().min(1).max(128).default(3), maxSize: z.number().int().min(1).max(128).optional(), taskIds: z.array(z.string().min(1).max(128)).max(200).optional(), expectedVersion: z.number().int().nonnegative().default(0) }).strict(),
   control: z.object({ expectedVersion: z.number().int().positive(), enabled: z.boolean() }).strict(),
 };
 export const peerRequestSchema = z.object({ workerId: z.string().min(1), requestId: z.string().min(1).max(128), reason: z.string().trim().min(1).max(2000) }).strict();
