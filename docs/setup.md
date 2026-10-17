@@ -47,7 +47,7 @@ Restart the desktop app to load the new files. Collaboration data lives outside 
 `npm run package:desktop` produces:
 
 - `dist/desktop/`: the plugin directory.
-- `dist/swarmboard-desktop-0.5.0.zip`: a portable archive whose root is the plugin root.
+- `dist/swarmboard-desktop-0.5.1.zip`: a portable archive whose root is the plugin root.
 
 Extract the ZIP into a local marketplace and point its `source.path` at the extracted plugin root. The configuration uses `${PLUGIN_ROOT}`, so the extracted directory can be relocated. The target client still needs access to Node.js 24+. A public source repository or ZIP does not mean the plugin is listed in the OpenAI Plugin Directory.
 
