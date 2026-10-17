@@ -31,4 +31,6 @@
 
 双语文档截图由实际界面（英文 `?lang=en`、中文 `?lang=zh-CN`）和对应语言的隔离示例数据生成。截图脚本对英文视图检查可见文字无中文、文档语言一致且无横向溢出。浏览器回归验证英文表单真实保存、状态更新、切换中文后原始用户输入保持不变；便携包回归检查两份 README 各自引用三张对应语言的图片，解压后文件存在。
 
-桌面启动回归还覆盖 GUI 精简 PATH：从干净 ZIP 解压，在没有 Node 与外部 shell 命令的 PATH 下，通过带空格的隔离 NVM 路径发现实际运行时，完成真实 MCP 初始化、工具发现与 HTML 读取；无效显式运行时必须以 127 退出，仅输出 stderr 诊断。macOS/Linux 执行这些 POSIX 测试；Windows 使用原来的直接 Node 启动配置。
+桌面启动回归还覆盖 GUI 精简 PATH：从干净 ZIP 解压，在仅有 `sh`、没有 Node 或其他外部命令的 PATH 下，通过带空格的隔离 NVM 路径发现实际运行时，完成真实 MCP 初始化、工具发现与 HTML 读取；无效显式运行时必须以 127 退出，仅输出 stderr 诊断。macOS/Linux 执行这些 POSIX 测试；Windows 使用原来的直接 Node 启动配置。
+
+`npm run test:host -- /path/to/codex` 使用实际 Codex app-server 的插件加载器，分别在两个隔离的 CODEX_HOME 安装仅启动命令不同的副本：绝对命令必须被拒绝，允许的裸命令必须发现工具、原生入口及真实 HTML 资源。使用合成 HOME、NVM 和数据库，不访问用户数据、不创建模型会话。CI 额外使用固定版本 `@openai/codex@0.162.1` 跑此回归；本机交付还用当前桌面捆绑 CLI 验证。原始 SDK 启动成功和 `plugin list` 中 installed/enabled 都不能代替这层验证。

@@ -1,7 +1,7 @@
 // Launch the shipped archive with the official client so repository dependencies cannot hide packaging defects.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -55,7 +55,7 @@ describe('portable desktop plugin', () => {
     const manifest = JSON.parse(readFileSync(join(pluginRoot, 'plugin.json'), 'utf8'));
     expect(manifest).toMatchObject({ name: 'swarmboard', version: packageVersion, license: 'MIT', extensions: { 'com.openai': { requires_local_executor: true } } });
     const config = JSON.parse(readFileSync(join(pluginRoot, 'mcp.json'), 'utf8')) as Configuration;
-    expect(config.mcpServers.swarmboard).toEqual({ type: 'stdio', command: process.platform === 'win32' ? 'node' : '/bin/sh', args: [process.platform === 'win32' ? '${PLUGIN_ROOT}/server/swarmboard.mjs' : '${PLUGIN_ROOT}/server/launch.sh'], cwd: '${PLUGIN_ROOT}' });
+    expect(config.mcpServers.swarmboard).toEqual({ type: 'stdio', command: process.platform === 'win32' ? 'node' : 'sh', args: [process.platform === 'win32' ? '${PLUGIN_ROOT}/server/swarmboard.mjs' : '${PLUGIN_ROOT}/server/launch.sh'], cwd: '${PLUGIN_ROOT}' });
     const names = files(pluginRoot);
     expect(names).toEqual(expect.arrayContaining(['server/swarmboard.mjs', 'widget.html', 'skills/shared-worker/SKILL.md', 'BUILD.json']));
     expect(names.some(name => /(^|\/)(node_modules|\.env|\.git)(\/|$)|\.(sqlite|db)(-|$)/.test(name))).toBe(false);
@@ -72,11 +72,12 @@ describe('portable desktop plugin', () => {
 
     for (const name of names) expect(readFileSync(join(pluginRoot, name), 'utf8')).not.toMatch(/\/Users\/[^/]+\/|\/home\/runner\/work\//);
   });
-  it.skipIf(process.platform === 'win32')('discovers NVM Node with no node or shell utilities on the desktop PATH', async () => {
+  it.skipIf(process.platform === 'win32')('discovers NVM Node with only sh and no node or shell utilities on the desktop PATH', async () => {
     const nvm = join(root, 'synthetic nvm');
     const bin = join(nvm, 'versions/node/v24-fixture/bin');
-    const emptyPath = join(root, 'empty PATH');
+    const emptyPath = join(root, 'shell-only PATH');
     mkdirSync(bin, { recursive: true }); mkdirSync(emptyPath);
+    symlinkSync('/bin/sh', join(emptyPath, 'sh'));
     const marker = join(root, 'runtime-invoked');
     const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
     // Record execution of the isolated NVM fixture, then run the actual test runtime.

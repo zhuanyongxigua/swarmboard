@@ -32,7 +32,7 @@ await cp(path.join(root, 'dist/widget.html'), path.join(destination, 'widget.htm
 await cp(path.join(root, 'scripts/launch-desktop.sh'), path.join(destination, 'server/launch.sh'));
 const mcp = JSON.parse(await readFile(path.join(root, 'mcp.json'), 'utf8'));
 if (process.platform !== 'win32') {
-  mcp.mcpServers.swarmboard.command = '/bin/sh';
+  mcp.mcpServers.swarmboard.command = 'sh';
   mcp.mcpServers.swarmboard.args = ['${PLUGIN_ROOT}/server/launch.sh'];
 }
 await writeFile(path.join(destination, 'mcp.json'), JSON.stringify(mcp, null, 2) + '\n');

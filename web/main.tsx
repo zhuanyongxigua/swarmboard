@@ -142,7 +142,7 @@ function Workspace() {
     async function start() {
       try {
         if (window.parent !== window) {
-          const app = new App({ name: 'Swarmboard', version: '0.3.1' });
+          const app = new App({ name: 'Swarmboard', version: '0.3.2' });
           localBridge = app;
           app.ontoolresult = result => {
             try {

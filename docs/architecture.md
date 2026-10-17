@@ -71,4 +71,4 @@ HTTP 服务保留作开发预览及其他 MCP 客户端接入。可选 `BOARD_TO
 
 ## 桌面启动环境
 
-macOS/Linux 的构建产物通过绝对路径 `/bin/sh` 启动包内 `server/launch.sh`，由其发现 Node.js 24+ 并校验内置 SQLite；Windows 构建继续使用 Node 命令。来源中的标准 `mcp.json` 在构建阶段生成对应启动配置，包内路径仍使用 `${PLUGIN_ROOT}`。启动器仅查找运行时，不读写协作数据、不加载 shell 配置、不改变用户全局环境；最终服务沿用原有数据目录。
+macOS/Linux 的构建产物通过允许的裸命令 `sh` 启动包内 `server/launch.sh`，由其发现 Node.js 24+ 并校验内置 SQLite；Windows 构建继续使用 Node 命令。来源中的标准 `mcp.json` 在构建阶段生成对应启动配置，包内路径仍使用 `${PLUGIN_ROOT}`。启动器仅查找运行时，不读写协作数据、不加载 shell 配置、不改变用户全局环境；最终服务沿用原有数据目录。

@@ -1,10 +1,18 @@
 # 验证记录
 
+## 0.3.2 桌面插件加载器兼容修复
+
+日期：2026-10-17。用户再次重启后入口消失。实际桌面日志明确记录 `failed to parse plugin MCP server`，原因是 `Agent Plugins stdio command must be a bare executable name or a contained ./ path`。0.3.1 的 `/bin/sh` 绝对命令因此被忽略；上一轮原始 SDK 测试绕过插件加载器，未覆盖此错误。
+
+将构建产物启动命令改为允许的 `sh`。使用当前桌面捆绑 Codex **0.163.0-alpha.10.2** 的实际 app-server，在隔离 CODEX_HOME、精简 MCP PATH 与临时数据库中做对照：绝对命令副本被真实加载器拒绝；修复副本发现 **15 个工具**、`global/thread` 原生入口并读取真实 HTML。公开 CLI **0.162.1** 同一验证也通过。此流程保存为 `scripts/verify-plugin-host.mjs`，CI 增加固定版本 CLI 的宿主加载回归。
+
+这证明配置能通过实际插件加载器并提供界面资源；实际运行中的桌面是否刷新入口仍需另行观察，不以安装成功替代。
+
 ## 0.3.1 重启后的桌面启动修复
 
 日期：2026-10-17。用户重启桌面应用后看到 “Couldn’t display Swarmboard”。宿主日志记录 MCP 启动 `No such file or directory (os error 2)`；实际桌面进程 PATH 没有 Node，终端环境则有。
 
-使用同一构建服务、相同精简桌面 PATH 和临时数据库做单变量对照：直接调用 `node` 得到 `spawn node ENOENT`；改用包内启动器后完成 MCP 初始化，发现 **15 个工具**并读取到真实 HTML 资源。另从干净 ZIP 在完全不含 Node 与外部 shell 命令的 PATH 下，通过隔离 NVM 发现真实 Node；无效显式运行时给出 stderr 诊断且无协议 stdout。便携包 **5/5** 测试通过。
+使用同一构建服务、相同精简桌面 PATH 和临时数据库做单变量对照：直接调用 `node` 得到 `spawn node ENOENT`；改用包内启动器后完成 MCP 初始化，发现 **15 个工具**并读取到真实 HTML 资源。另从干净 ZIP 在完全不含 Node 与外部 shell 命令的 PATH 下，通过隔离 NVM 发现真实 Node；无效显式运行时给出 stderr 诊断且无协议 stdout。便携包 **5/5** 测试通过，但该轮未执行实际插件加载器验证，配置兼容问题见 0.3.2 记录。
 
 这是启动故障的进程与协议证据，不等于真实桌面已重新加载并显示界面。修复没有访问或迁移用户数据库，也没有修改全局 PATH、Node 安装或 shell 配置。桌面最终显示仍须实际宿主重试验收。
 
