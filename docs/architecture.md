@@ -43,6 +43,14 @@ Agent 心跳是会话活动信息。界面把超过两分钟未报告的会话�
 
 参考：[官方扩展指南](https://developers.openai.com/plugins/build/extensions)、[全局入口协议](https://github.com/openai/mcp-extensions/blob/main/docs/spec.md#global-entrypoint)、[消息扩展协议](https://github.com/openai/mcp-extensions/blob/main/docs/spec.md#prompt-target-and-send-behavior)。真实桌面布局与完整模型协作仍需宿主验收；模拟宿主测试只验证实际协议请求和隔离服务的业务结果。
 
+## 原生定时自动认领
+
+面板的启用／暂停操作先写入带版本和请求标识的 pending 配置，再用 `ui/message`（新会话、显式发送）请求原生 Agent 配置宿主定时自动化。该 Agent 通过官方工具查找精确匹配的本地项目、解析原生模型设置、创建或更新 standalone cron，并以真实返回值回报配置结果。Swarmboard 不调用桌面内部 Electron/CDP 接口，也不直接调用模型或启动 Codex app-server。
+
+配置确认采用版本检查和请求标识，防止旧回调覆盖新配置。确认仅是可信本地 Agent 对工具结果的回报，不是独立的宿主状态证明。待确认、失败或关闭时不允许新的自动认领。暂停不会强制终止已执行的进程；worker 按提示在安全边界停止。宿主直接变更状态也不会自动反映在 Swarmboard 中。未知结果会持久化 recoveryRequired；待确认或未知结果的下一次配置请求强制进入只读核对，找回原自动化 ID 或确认不存在之后才允许再次明确配置。
+
+每个宿主调度的独立执行会话读取配置与任务，使用原子自动认领工具绑定任务和会话身份，然后执行、验证、发布成果并转到待验收。轮次不依赖发起配置的聊天继续运行。现阶段每轮只处理一个任务，仍需宿主提供本地工具、权限及会话生命周期；并未实现论文的中途事件投递、自动恢复和任意多 worker 常驻组织。
+
 ## 与 Agensh 的关系
 
 思想来源：[Agensh 论文](https://arxiv.org/html/2609.26781v1)。共享工作区、消息和上下文共同支持 `gather → claim → act → verify → merge`，而不是仅靠一块文字面板。
@@ -67,7 +75,7 @@ HTTP 服务保留作开发预览及其他 MCP 客户端接入。可选 `BOARD_TO
 
 参考：[原生扩展](https://developers.openai.com/plugins/build/extensions)、[本地 marketplace](https://developers.openai.com/plugins/build/plugins)、[桌面本地 MCP](https://developers.openai.com/plugins/deploy/desktop-only)。
 
-服务不读取订阅登录文件，不接管 OAuth，不调用模型 API，不创建模型 worker。Agent 的持续运行与唤醒由其原有客户端决定。声明不是系统锁，也不会强制阻止绕过协作约定的直接资源操作。
+服务不读取订阅登录文件，不接管 OAuth，不调用模型 API，不创建模型 worker 进程。自动认领会话由宿主定时自动化创建与运行；其他 Agent 的持续运行与唤醒由其原有客户端决定。声明不是系统锁，也不会强制阻止绕过协作约定的直接资源操作。
 
 ## 桌面启动环境
 

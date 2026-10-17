@@ -68,6 +68,9 @@ async function scenario(name, rejected) {
       assert(server, `Swarmboard missing from host inventory: ${stderr.slice(-1200)}`);
       assert.equal(server.toolsError, null);
       assert(server.tools.board_open, 'Host must discover board_open');
+      for (const name of ['automation_read', 'automation_prepare', 'automation_claim', 'automation_confirm', 'automation_setup_failed', 'automation_reconcile']) {
+        assert(server.tools[name], `Host must discover ${name}`);
+      }
       assert.deepEqual(server.tools.board_open._meta['openai/ui'].entrypoints, [{ type: 'global' }, { type: 'thread' }]);
       const widget = await request('mcpServer/resource/read', { server: 'swarmboard', uri: 'ui://swarmboard/board.html' });
       assert(widget.contents.some(item => item.text?.startsWith('<!doctype html>')));

@@ -1,5 +1,5 @@
 // Keep native conversation requests explicit and bounded so board data can be
-// discussed in the host draft without sending a message or changing the board.
+// discussed in the host draft. Automation setup is sent explicitly to a separate native conversation.
 import { t } from './i18n.js';
 import type { App } from '@modelcontextprotocol/ext-apps';
 
@@ -44,4 +44,17 @@ export async function appendNativeDraft(app: App, text: string): Promise<void> {
   };
   const result = await app.sendMessage(params);
   if (result.isError) throw new Error(t("宿主未接受草稿追加请求，请在原生对话中检查后重试。"));
+}
+
+export async function startNativeAutomationSetup(app: App, text: string): Promise<void> {
+  const unavailable = nativeConversationUnavailableReason(app.getHostCapabilities(), app.getHostContext()?.platform);
+  if (unavailable) throw new Error(unavailable);
+  const params: Parameters<App['sendMessage']>[0] & {
+    _meta: { 'openai/message': { target: 'new'; send: true } };
+  } = {
+    role: 'user', content: [{ type: 'text', text }],
+    _meta: { 'openai/message': { target: 'new', send: true } },
+  };
+  const result = await app.sendMessage(params);
+  if (result.isError) throw new Error(t("宿主未接受自动认领配置请求，请检查新会话后重试。"));
 }

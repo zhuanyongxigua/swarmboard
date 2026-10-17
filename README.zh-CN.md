@@ -60,9 +60,17 @@ codex plugin add swarmboard@swarmboard-local
 
 重启桌面客户端，从侧边栏打开 **Swarmboard**。也可以在注册来源后，通过桌面的 Plugins Directory 选择 **Swarmboard Local** 并安装。
 
-构建会生成插件目录 `dist/desktop/` 和便携包 `dist/swarmboard-desktop-0.3.3.zip`。当前安装方式是本地 marketplace；从 GitHub 获取源码后需要先构建。更多步骤见[安装、升级与排查](docs/setup.zh-CN.md)。
+构建会生成插件目录 `dist/desktop/` 和便携包 `dist/swarmboard-desktop-0.4.0.zip`。当前安装方式是本地 marketplace；从 GitHub 获取源码后需要先构建。更多步骤见[安装、升级与排查](docs/setup.zh-CN.md)。
 
 ## 如何使用
+
+### 自动认领任务
+
+点击顶部 **自动认领**，填写已经加入桌面客户端的本地项目绝对路径、选择检查间隔，然后点击 **在新会话中启用**。插件会打开独立的原生配置会话，由它通过宿主官方自动化工具配置独立定时任务。后续执行不占用当前聊天或草稿。
+
+默认关闭。宿主配置成功并回报前，面板保持“等待确认”；消息发送成功不代表已启用。每轮检查配置、原子认领一个待办、与同伴协调资源，验证后提交待验收。请求暂停后，新的自动认领立即被拦截，面板仍等待宿主确认；暂停不会强制终止进程，运行中的 worker 按协作指令在安全位置停下。待确认或结果不确定时，必须先只读核对宿主记录，再允许重新配置。
+
+沿用 [Codex Taskboard](https://github.com/chuspeeism/dashi-taskboard) 的宿主定时自动化方式，通过官方工具接入，不进行 CDP 注入。需要本地 Codex 执行环境同时提供原生自动化工具和 Swarmboard MCP；独立浏览器预览不能启用。登录、模型与执行权限由宿主管理，Swarmboard 不启动自定义模型进程、不读取订阅 token。这是第一版执行层，不是完整 Agensh 事件运行时。
 
 ### 在原生会话里讨论方案
 

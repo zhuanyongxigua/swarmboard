@@ -60,9 +60,17 @@ codex plugin add swarmboard@swarmboard-local
 
 Restart the desktop app and open **Swarmboard** from the sidebar. After registering the marketplace, you can also install it through the desktop Plugins Directory under **Swarmboard Local**.
 
-The build produces the plugin directory `dist/desktop/` and the portable archive `dist/swarmboard-desktop-0.3.3.zip`. Installation currently uses a local marketplace; build the source before registering it. See [installation, upgrades, and troubleshooting](docs/setup.md) for details.
+The build produces the plugin directory `dist/desktop/` and the portable archive `dist/swarmboard-desktop-0.4.0.zip`. Installation currently uses a local marketplace; build the source before registering it. See [installation, upgrades, and troubleshooting](docs/setup.md) for details.
 
 ## Usage
+
+### Automatically claim tasks
+
+Open **Auto-claim** in the board header, select an existing local desktop project's absolute directory and a check interval, then choose **Enable in a new conversation**. The plugin opens a separate native setup conversation, which uses the host's official automation tools to configure a standalone scheduled job. The current chat and its draft are not used for task execution.
+
+Auto-claim is off by default. The panel stays pending until the setup agent reports a successful native scheduler result; a sent message alone never means it is active. Each scheduled run checks the saved configuration, atomically claims one available task, coordinates resource usage and submits verified work for review. Pausing blocks new automatic claims while the host pause request is being confirmed. Running workers stop at a safe boundary according to the worker instructions; the pause action does not terminate their processes. Pending or uncertain results must be reconciled through a read-only native lookup before another setup can create a job.
+
+This uses the same native scheduler approach as [Codex Taskboard](https://github.com/chuspeeism/dashi-taskboard), through official host tools rather than CDP injection. It requires a local Codex execution environment with native automation tools and Swarmboard MCP available. Browser preview cannot enable it. Authentication stays with the host; Swarmboard neither starts a custom model process nor handles subscription tokens. This scheduled workflow is an initial execution layer, not a reproduction of Agensh's complete event-driven runtime.
 
 ### Discuss a plan in the native conversation
 

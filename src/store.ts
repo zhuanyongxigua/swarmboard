@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+import { automationSchemas, canonicalWorkspace, defaultAutomationConfig, type AutomationConfig } from './automation.js';
 
 export class AppError extends Error {
   constructor(public code: string, message: string, public status = 400) { super(message); }
@@ -66,7 +67,7 @@ export class Store {
       // Separate desktop MCP processes must inspect and apply migrations under the same write lock.
       this.transaction(() => {
         const version = Number((this.db.prepare('PRAGMA user_version').get() as {user_version: number}).user_version);
-        if (version > 2) throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500);
+        if (version > 3) throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500);
         if (version === 0) this.db.exec(`
           CREATE TABLE agents(id TEXT PRIMARY KEY, name TEXT NOT NULL, lastSeenAt TEXT NOT NULL);
           CREATE TABLE tasks(id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, acceptanceCriteria TEXT NOT NULL, status TEXT NOT NULL, assignee TEXT REFERENCES agents(id), version INTEGER NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
@@ -80,6 +81,8 @@ export class Store {
           PRAGMA user_version = 1;
         `);
         if (version < 2) this.db.exec('ALTER TABLE usages ADD COLUMN version INTEGER NOT NULL DEFAULT 1; PRAGMA user_version = 2;');
+        if (version < 3) this.db.exec("CREATE TABLE IF NOT EXISTS automation_config(id INTEGER PRIMARY KEY CHECK(id=1), config TEXT NOT NULL); CREATE TABLE IF NOT EXISTS automation_bindings(taskId TEXT PRIMARY KEY REFERENCES tasks(id),agentId TEXT NOT NULL REFERENCES agents(id),threadId TEXT NOT NULL,automationId TEXT NOT NULL,automationVersion INTEGER NOT NULL,createdAt TEXT NOT NULL); PRAGMA user_version = 3;");
+        this.db.prepare('INSERT OR IGNORE INTO automation_config(id,config) VALUES(1,?)').run(JSON.stringify({ ...defaultAutomationConfig, boardId: randomUUID() }));
       });
     } catch (error) { this.db.close(); throw error; }
   }
@@ -115,6 +118,65 @@ export class Store {
   private touch(agentId: string) { this.db.prepare('UPDATE agents SET lastSeenAt = ? WHERE id = ?').run(new Date().toISOString(), agentId); }
   board() {
     return this.transaction(() => ({ tasks: this.list<Task>('tasks'), resources: this.list<Resource>('resources'), usages: this.list<Usage>('usages'), agents: this.list<Agent>('agents'), entries: this.db.prepare('SELECT * FROM (SELECT * FROM entries ORDER BY id DESC LIMIT 100) ORDER BY id').all().map(row => this.decode('entries', row) as unknown as Entry), cursor: Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor) }));
+  }
+  readAutomation(): AutomationConfig {
+    const row = this.db.prepare('SELECT config FROM automation_config WHERE id=1').get() as { config: string } | undefined;
+    return row ? JSON.parse(row.config) as AutomationConfig : { ...defaultAutomationConfig };
+  }
+  private saveAutomation(config: AutomationConfig): AutomationConfig {
+    this.db.prepare('INSERT INTO automation_config(id,config) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET config=excluded.config').run(JSON.stringify(config));
+    return config;
+  }
+  prepareAutomation(input: unknown): AutomationConfig {
+    const data = parse(automationSchemas.prepare, input);
+    return this.transaction(() => {
+      const before = this.readAutomation();
+      this.checkVersion(before.version, data.expectedVersion);
+      const recovery = data.action === 'reconcile' || before.state === 'pending' || before.recoveryRequired;
+      if (recovery) return this.saveAutomation({ ...before, version: before.version + 1, state: 'pending', setupMode: 'reconcile', recoveryRequired: true, requestId: randomUUID(), lastError: '', updatedAt: new Date().toISOString() });
+      if (data.action === 'pause' && !before.automationId) throw new AppError('AUTOMATION_NOT_CONFIGURED', 'No native automation has been confirmed; inspect any pending setup before retrying', 409);
+      let workspacePath = before.workspacePath;
+      if (data.action === 'enable') {
+        try { workspacePath = canonicalWorkspace(data.workspacePath ?? before.workspacePath); }
+        catch { throw new AppError('INVALID_WORKSPACE', 'Select an existing absolute workspace directory'); }
+      }
+      return this.saveAutomation({ ...before, version: before.version + 1, state: 'pending', setupMode: 'configure', recoveryRequired: false, desiredEnabled: data.action === 'enable', workspacePath, intervalMinutes: data.action === 'enable' ? data.intervalMinutes ?? before.intervalMinutes : before.intervalMinutes, requestId: randomUUID(), lastError: '', updatedAt: new Date().toISOString() });
+    });
+  }
+  confirmAutomation(input: unknown): AutomationConfig {
+    const data = parse(automationSchemas.confirm, input);
+    return this.transaction(() => {
+      const before = this.readAutomation();
+      this.checkVersion(before.version, data.expectedVersion);
+      if (before.state !== 'pending' || before.requestId !== data.requestId || before.setupMode !== 'configure' || before.recoveryRequired) throw new AppError('AUTOMATION_REQUEST_CONFLICT', 'Setup request is no longer pending or requires recovery', 409);
+      if (data.status !== (before.desiredEnabled ? 'ACTIVE' : 'PAUSED')) throw new AppError('AUTOMATION_STATUS_MISMATCH', 'Native status does not match the requested action', 409);
+      if (before.automationId && before.automationId !== data.automationId) throw new AppError('AUTOMATION_ID_MISMATCH', 'Update the existing native automation; do not create a duplicate', 409);
+      return this.saveAutomation({ ...before, version: before.version + 1, state: data.status === 'ACTIVE' ? 'active' : 'off', automationId: data.automationId, actualStatus: data.status, model: data.model, reasoningEffort: data.reasoningEffort, projectId: data.projectId, setupMode: null, recoveryRequired: false, requestId: null, lastError: '', updatedAt: new Date().toISOString() });
+    });
+  }
+  failAutomationSetup(input: unknown): AutomationConfig {
+    const data = parse(automationSchemas.failed, input);
+    return this.transaction(() => {
+      const before = this.readAutomation();
+      this.checkVersion(before.version, data.expectedVersion);
+      if (before.state !== 'pending' || before.requestId !== data.requestId) throw new AppError('AUTOMATION_REQUEST_CONFLICT', 'Setup request is no longer pending', 409);
+      return this.saveAutomation({ ...before, version: before.version + 1, state: 'error', setupMode: null, recoveryRequired: before.recoveryRequired || data.nativeOutcome === 'unknown', requestId: null, lastError: data.error, updatedAt: new Date().toISOString() });
+    });
+  }
+  reconcileAutomation(input: unknown): AutomationConfig {
+    const data = parse(automationSchemas.reconcile, input);
+    return this.transaction(() => {
+      const before = this.readAutomation();
+      this.checkVersion(before.version, data.expectedVersion);
+      if (before.state !== 'pending' || before.setupMode !== 'reconcile' || before.requestId !== data.requestId) throw new AppError('AUTOMATION_REQUEST_CONFLICT', 'Recovery request is no longer pending', 409);
+      if (data.outcome === 'found') {
+        if (!data.automationId || !data.status || !data.model || !data.reasoningEffort || !data.projectId) throw new AppError('VALIDATION_ERROR', 'A found native automation requires its observed ID, status, model, reasoning effort and project');
+        if (before.automationId && before.automationId !== data.automationId) throw new AppError('AUTOMATION_ID_MISMATCH', 'Reconcile the existing native automation; multiple identities need manual inspection', 409);
+        return this.saveAutomation({ ...before, version: before.version + 1, state: 'error', desiredEnabled: false, setupMode: null, recoveryRequired: false, requestId: null, automationId: data.automationId, actualStatus: data.status, model: data.model, reasoningEffort: data.reasoningEffort, projectId: data.projectId, lastError: 'Native automation recovered. Explicitly enable or pause it to finish setup.', updatedAt: new Date().toISOString() });
+      }
+      if (data.automationId || data.status || data.model || data.reasoningEffort || data.projectId) throw new AppError('VALIDATION_ERROR', 'An absent result cannot contain native automation fields');
+      return this.saveAutomation({ ...before, version: before.version + 1, state: 'off', desiredEnabled: false, setupMode: null, recoveryRequired: false, requestId: null, automationId: null, actualStatus: null, model: null, reasoningEffort: null, projectId: null, lastError: '', updatedAt: new Date().toISOString() });
+    });
   }
   createTask(input: unknown): Task {
     const { agentId, ...data } = parse(schemas.taskCreate, input);
@@ -175,14 +237,29 @@ export class Store {
     });
   }
   heartbeat(agentId: string): Agent { this.agent(agentId); this.touch(agentId); return this.get<Agent>('agents',agentId); }
+  private claimTaskLocked(taskId: string, data: z.infer<typeof schemas.claim>): Task {
+    this.agent(data.agentId); const task = this.get<Task>('tasks',taskId); this.checkVersion(task.version,data.expectedVersion);
+    if (task.assignee || !['todo','blocked'].includes(task.status)) throw new AppError('TASK_UNAVAILABLE','Task is already claimed or is not available for claiming',409);
+    const next: Task = {...task,assignee:data.agentId,status:'in_progress',version:task.version+1,updatedAt:new Date().toISOString()};
+    this.db.prepare('UPDATE tasks SET assignee=?,status=?,version=?,updatedAt=? WHERE id=?').run(next.assignee,next.status,next.version,next.updatedAt,taskId);
+    this.append({kind:'CLAIM',agentId:data.agentId,summary:`Task claimed: ${task.title}`,detail:'',taskId}); this.touch(data.agentId); return next;
+  }
   claimTask(taskId: string,input: unknown): Task {
     const data = parse(schemas.claim,input);
+    return this.transaction(() => this.claimTaskLocked(taskId, data));
+  }
+  claimAutomationTask(input: unknown) {
+    const data = parse(automationSchemas.claim, input);
     return this.transaction(() => {
-      this.agent(data.agentId); const task = this.get<Task>('tasks',taskId); this.checkVersion(task.version,data.expectedVersion);
-      if (task.assignee || !['todo','blocked'].includes(task.status)) throw new AppError('TASK_UNAVAILABLE','Task is already claimed or is not available for claiming',409);
-      const next: Task = {...task,assignee:data.agentId,status:'in_progress',version:task.version+1,updatedAt:new Date().toISOString()};
-      this.db.prepare('UPDATE tasks SET assignee=?,status=?,version=?,updatedAt=? WHERE id=?').run(next.assignee,next.status,next.version,next.updatedAt,taskId);
-      this.append({kind:'CLAIM',agentId:data.agentId,summary:`Task claimed: ${task.title}`,detail:'',taskId}); this.touch(data.agentId); return next;
+      const config = this.readAutomation();
+      this.checkVersion(config.version, data.automationVersion);
+      if (config.state !== 'active' || !config.desiredEnabled || config.actualStatus !== 'ACTIVE' || !config.automationId) throw new AppError('AUTOMATION_INACTIVE', 'Automatic claiming is not active; stop this scheduled cycle', 409);
+      const currentTask = this.get<Task>('tasks', data.id);
+      if (currentTask.status !== 'todo') throw new AppError('TASK_UNAVAILABLE', 'Automatic workers may only claim todo tasks', 409);
+      const task = this.claimTaskLocked(data.id, { agentId: data.agentId, expectedVersion: data.expectedVersion });
+      const binding = { taskId: task.id, agentId: data.agentId, threadId: data.threadId, automationId: config.automationId, automationVersion: config.version, createdAt: new Date().toISOString() };
+      this.db.prepare('INSERT INTO automation_bindings(taskId,agentId,threadId,automationId,automationVersion,createdAt) VALUES(?,?,?,?,?,?) ON CONFLICT(taskId) DO UPDATE SET agentId=excluded.agentId,threadId=excluded.threadId,automationId=excluded.automationId,automationVersion=excluded.automationVersion,createdAt=excluded.createdAt').run(binding.taskId,binding.agentId,binding.threadId,binding.automationId,binding.automationVersion,binding.createdAt);
+      return { task, binding };
     });
   }
   releaseTask(taskId: string, input: unknown): Task {

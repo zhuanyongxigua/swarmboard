@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import { AppError, Store, schemas } from './store.js';
+import { automationSchemas, buildSetupPrompt } from './automation.js';
 
 // Static metadata follows https://github.com/openai/mcp-extensions/blob/main/docs/spec.md.
 // Only the entrypoint/display-mode subset is needed; no extension RPC handlers are required.
@@ -11,7 +12,7 @@ type DisplayModeMetadata = { availableDisplayModes: ('inline' | 'fullscreen')[];
 
 export const BOARD_RESOURCE_URI = 'ui://swarmboard/board.html';
 export function createMcpServer(store: Store, widgetPath: string) {
-  const server = new McpServer({name:'swarmboard',version:'0.3.2'});
+  const server = new McpServer({name:'swarmboard',version:'0.4.0'});
   registerAppResource(server, 'swarmboard-ui', BOARD_RESOURCE_URI, {}, async () => ({
     contents: [{uri:BOARD_RESOURCE_URI,mimeType:RESOURCE_MIME_TYPE,text:readFileSync(widgetPath,'utf8'),_meta:{ui:{prefersBorder:false,csp:{connectDomains:[],resourceDomains:[]}},'openai/ui':{availableDisplayModes:['inline','fullscreen'],preferredDisplayMode:'fullscreen'} satisfies DisplayModeMetadata}}],
   }));
@@ -24,6 +25,12 @@ export function createMcpServer(store: Store, widgetPath: string) {
     return {isError:true,content:[{type:'text' as const,text:JSON.stringify({error:{code:known ? error.code : 'INTERNAL_ERROR',message:known ? error.message : 'Unable to complete operation'}})}]};
   }
   const operations = [
+    ['automation_read','Read native auto-claim setup intent and the last host status reported by its setup conversation. This service does not independently inspect native automations.',z.object({}).strict(),()=>store.readAutomation(),true],
+    ['automation_prepare','Prepare an explicitly authorized native standalone auto-claim schedule or pause. Returns a setupPrompt to send to a NEW native conversation; does not start any agent or mark the schedule active.',automationSchemas.prepare,(input:unknown)=>{const config=store.prepareAutomation(input);return {config,setupPrompt:buildSetupPrompt(config)};},false],
+    ['automation_reconcile','Record an authoritative read-only native schedule lookup for a pending recovery request. Found records stay inactive on this board until explicit enable/pause; absence permits a later new setup.',automationSchemas.reconcile,(input:unknown)=>store.reconcileAutomation(input),false],
+    ['automation_claim','Atomically claim one todo task only while the confirmed native automation is active at the expected configuration version. Records the caller-reported native thread binding; use this for scheduled workers instead of task_claim.',automationSchemas.claim,(input:unknown)=>store.claimAutomationTask(input),false],
+    ['automation_confirm','After inspecting a successful official native automation_update result, record its actual ID, status, model and project against the pending request revision. This is caller-reported host state, not independent verification.',automationSchemas.confirm,(input:unknown)=>store.confirmAutomation(input),false],
+    ['automation_setup_failed','Record failed or uncertain native schedule setup against its pending revision. Retains the last reported native status; no native schedule is modified.',automationSchemas.failed,(input:unknown)=>store.failAutomationSetup(input),false],
     ['board_read','Read tasks, resources, agents, usage declarations and the latest shared context.',z.object({}).strict(),()=>store.board(),true],
     ['task_create','Create a task with a concrete goal and acceptance criteria.',schemas.taskCreate,(input:unknown)=>store.createTask(input),false],
     ['task_update','Update task content or status using its current version. Supply agentId for agent ownership checks; omit only for trusted human editing.',schemas.taskUpdate.extend({id:z.string().min(1)}),(input:unknown)=>{const {id,...patch}=input as {id:string};return store.updateTask(id,patch);},false],

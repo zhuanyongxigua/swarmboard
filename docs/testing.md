@@ -34,3 +34,7 @@
 桌面启动回归还覆盖 GUI 精简 PATH：从干净 ZIP 解压，在仅有 `sh`、没有 Node 或其他外部命令的 PATH 下，通过带空格的隔离 NVM 路径发现实际运行时，完成真实 MCP 初始化、工具发现与 HTML 读取；无效显式运行时必须以 127 退出，仅输出 stderr 诊断。macOS/Linux 执行这些 POSIX 测试；Windows 使用原来的直接 Node 启动配置。
 
 `npm run test:host -- /path/to/codex` 使用实际 Codex app-server 的插件加载器，分别在两个隔离的 CODEX_HOME 安装仅启动命令不同的副本：绝对命令必须被拒绝，允许的裸命令必须发现工具、原生入口及真实 HTML 资源。使用合成 HOME、NVM 和数据库，不访问用户数据、不创建模型会话。CI 额外使用固定版本 `@openai/codex@0.162.1` 跑此回归；本机交付还用当前桌面捆绑 CLI 验证。原始 SDK 启动成功和 `plugin list` 中 installed/enabled 都不能代替这层验证。
+
+## 原生自动认领
+
+`test/integration/automation.test.ts` 与 `test/mcp/automation.test.ts` 使用真实 SQLite 和官方 MCP 客户端检查配置修订、未知结果恢复、自动认领门禁与持久会话绑定。`test/e2e/automation.spec.ts` 用模拟原生宿主连接同一真实服务，检查显式 `target:new, send:true` 配置请求、当前草稿保留、确认前 pending、暂停、只读核对、拒绝／传输失败及不支持的环境。测试客户端回报原生记录，不能作为实际宿主创建自动化或执行任务的证据。

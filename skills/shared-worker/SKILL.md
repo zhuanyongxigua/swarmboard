@@ -30,3 +30,7 @@ Record negotiated resource conditions using `resource_usage_update`, and release
 If abandoning or handing off a claimed task, publish progress and blockers, then use `task_release` with `id`, your `agentId`, current `expectedVersion`, and `status` (`todo` or `blocked`). Do not leave an unexplained claim. A heartbeat gap does not prove a resource is free.
 
 On version conflict, read the new state and reconsider your change; do not force-overwrite. For blocked work, describe what would unblock it and choose another useful task where possible. Avoid empty polling. If your host supports waiting or notifications, use it; otherwise state that the session is stopping and needs a later resume. Swarmboard does not wake or spawn sessions itself.
+
+## Native scheduled runs
+
+When this session was started by a Swarmboard native automation, follow its saved configuration and use `automation_claim` instead of the manual `task_claim` path. Re-read `automation_read` before claiming; stop on disabled, pending, failed or changed configuration. A scheduled run claims at most one task and must not create other automations or spawn workers. Keep this session's identity and task binding in result evidence. Pausing prevents new claims but does not cancel existing work.
