@@ -60,8 +60,9 @@ export class PoolLiveness {
     const attention = peers.some(w => !w.enabled || w.status === 'error' || w.status === 'uncertain');
     const watchdog = this.workers.liveness();
     const state = !pool ? (running ? 'running' : attention ? 'attention' : 'idle')
-      : ['stopped', 'stopping', 'completed', 'waiting', 'ready', 'error'].includes(pool.state) ? pool.state
-      : running ? 'running' : attention || watchdog?.state === 'attention' ? 'attention' : 'idle';
+      : ['stopped', 'stopping', 'completed', 'error'].includes(pool.state) ? pool.state
+      : running ? 'running' : attention || watchdog?.state === 'attention' ? 'attention'
+      : ['waiting','ready'].includes(pool.state) ? pool.state : 'idle';
     return { members: peers.length, running, idle, state, executionMode: 'internal-only' as const,
       watchdog: { state: watchdog?.state ?? 'inactive', attempts: watchdog?.attempts ?? 0,
         nextWakeAt: pool?.enabled && watchdog?.idleSince !== null && watchdog?.idleSince !== undefined && watchdog.state !== 'attention' ? new Date(watchdog.idleSince + this.idleMs).toISOString() : null },

@@ -23,6 +23,15 @@ function fixture() {
   return { dir, board, runtime, turns, closed, finishes, hold: (value: boolean) => { hold = value; } };
 }
 describe('equal peer organization', () => {
+  it('reports actual execution while peers handle an update to a waiting goal',async()=>{
+    const f=fixture();f.runtime.configurePool({workspacePath:f.dir});f.hold(true);const goal=f.board.createTask({title:'Goal'});
+    await f.runtime.scan();await vi.waitFor(()=>expect(f.finishes.size).toBe(3));
+    f.board.updateTask(goal.id,{expectedVersion:1,status:'blocked'});await f.runtime.scan();
+    expect(f.runtime.status()).toMatchObject({pool:{state:'waiting'},activity:{running:3,state:'running'}});
+    f.hold(false);for(const finish of f.finishes.values())finish();await vi.waitFor(()=>expect(f.runtime.workers.list().every(w=>w.status==='idle')).toBe(true));
+    await f.runtime.scan();await vi.waitFor(()=>expect(f.runtime.workers.list().every(w=>w.status==='idle')).toBe(true));await f.runtime.scan();
+    expect(f.runtime.status().activity).toMatchObject({running:0,state:'waiting'});
+  });
   it('upgrades one authorized legacy binding without undoing a human pause', () => {
     vi.stubEnv('SWARMBOARD_PROJECT_PATH', '');
     try {
