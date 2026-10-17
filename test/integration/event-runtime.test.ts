@@ -74,7 +74,7 @@ describe('event-driven persistent workers', () => {
     expect(prompts).toHaveLength(0);
   });
   it('reconciles a completed delivery without starting a second turn', async () => {
-    const { adapter, prompts } = session(); adapter.inspect = vi.fn(async () => 'completed');
+    const { adapter, prompts } = session(); adapter.inspect = vi.fn(async () => 'completed' as const);
     const f = fixture(adapter), worker = f.runtime.register({ name: 'Builder', workspacePath: f.dir });
     f.runtime.workers.save({ ...worker, threadId: 'saved-thread', status: 'uncertain', deliveryId: 'delivered', deliveryCursor: 1, turnId: 'saved-turn' });
     f.runtime.requestReconcile({ id: worker.id, expectedVersion: 1 }); await f.runtime.scan();
