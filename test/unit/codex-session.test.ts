@@ -30,4 +30,26 @@ describe('official App Server session adapter', () => {
     const s = session(), id = await s.open(worker);
     await expect(s.run(id, 'disconnect', () => {})).rejects.toThrow(/disconnected/);
   });
+  it('retains uncertainty when the transport dies after acknowledging a turn', async () => {
+    const s = session(), id = await s.open(worker), started = vi.fn();
+    await expect(s.run(id, 'disconnect-after-ack', started)).rejects.toBeInstanceOf(UncertainDelivery);
+    expect(started).toHaveBeenCalledWith('turn-1');
+  });
+  it('ignores unrelated completion notifications and tolerates duplicate notifications', async () => {
+    const s = session(), id = await s.open(worker);
+    await s.run(id, 'duplicate', () => {});
+    await expect(s.run(id, 'wrong-completion', () => {})).rejects.toThrow(/failed/);
+    await s.run(id, 'next', () => {});
+  });
+  it.each([
+    ['failed-thread', 'failed'], ['interrupted-thread', 'failed'], ['active-thread', 'active'], ['empty-thread', 'unknown'],
+  ] as const)('classifies %s without replaying an execution', async (threadId, expected) => {
+    expect(await session().inspect(threadId, 'saved-turn', 'delivery')).toBe(expected);
+  });
+  it('recovers a missing turn acknowledgement by its user-message delivery marker only', async () => {
+    const s = session();
+    expect(await s.inspect('marker-thread', null, 'delivery-needle')).toBe('completed');
+    expect(await s.inspect('assistant-only', null, 'delivery-needle')).toBe('unknown');
+    expect(await s.inspect('marker-thread', null, 'different-delivery')).toBe('unknown');
+  });
 });

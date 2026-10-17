@@ -16,7 +16,7 @@ describe('worker configuration', () => {
   it('does not let a stale delivery checkpoint undo a newer pause or reconciliation request', () => {
     const original = store.register({ name: 'Builder', workspacePath: tmpdir() });
     store.pauseForApproval(original.id);
-    expect(store.save({ ...original, status: 'idle', cursor: 7 })).toMatchObject({ enabled: false, version: 2, cursor: 7 });
+    expect(store.save({ ...original, status: 'idle', cursor: 7 })).toMatchObject({ enabled: false, version: 2, cursor: 7, error: expect.stringContaining('Human approval') });
     const before = store.get(original.id);
     store.save({ ...before, status: 'uncertain', deliveryId: 'pending' });
     store.requestReconcile({ id: original.id, expectedVersion: 2 });

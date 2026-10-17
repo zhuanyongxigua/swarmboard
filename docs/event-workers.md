@@ -44,7 +44,7 @@ context_read 增量分页，context_search 按字面词搜索完整历史，而�
 
 任务与共享上下文仍在 board.sqlite；成员、组织及检查点位于 board.sqlite.runtime.sqlite。备份须包含两者及一致 SQLite 快照，以及独立代码目录。一块看板仅一个存活 owner 投递，不因心跳晚到就抢走执行权。
 
-投递先持久化 deliveryId/待确认游标/threadId/turnId；只有成功完成才推进游标。进程退出或结果丢失保持 uncertain，不盲目重放。worker_reconcile 只读核对保存的执行：完成则确认；明确失败则 error，检查残留工作后恢复；仍运行或未知继续等待。无法核实的回合会阻止组织虚报完全停止。
+投递先持久化 deliveryId/待确认游标/threadId/turnId；只有成功完成才推进游标。进程退出或结果丢失保持 uncertain，不盲目重放。worker_reconcile 只读核对保存的执行：完成则确认；明确失败则 error，检查残留工作后恢复；仍运行或未知继续等待。无法核实的回合会阻止组织虚报完全停止。审批暂停和原因在核查完成后继续保留，只有显式恢复才继续工作；过期检查点不能覆盖较新的暂停及原因。
 
 ## 执行与权限
 

@@ -16,7 +16,11 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (params.sandbox !== 'workspace-write' || params.approvalPolicy !== 'on-request') { send({ id, error: { code: 400 } }); return; }
     send({ id, result: { thread: { id: params.threadId ?? 'persistent-thread', cwd: params.cwd } } });
   }
-  if (method === 'thread/read') send({ id, result: { thread: { turns: [{ id: 'saved-turn', status: 'completed' }] } } });
+  if (method === 'thread/read') {
+    const status = { 'failed-thread': 'failed', 'interrupted-thread': 'interrupted', 'active-thread': 'inProgress' }[params.threadId] ?? 'completed';
+    const items = [{ type: params.threadId === 'assistant-only' ? 'agentMessage' : 'userMessage', content: [{ type: 'inputText', text: 'delivery-needle' }] }];
+    send({ id, result: { thread: { turns: params.threadId === 'empty-thread' ? [] : [{ id: 'saved-turn', status, items }] } } });
+  }
   if (method === 'turn/start') {
     const text = params.input[0].text;
     if (text === 'timeout') return;
@@ -24,6 +28,13 @@ createInterface({ input: process.stdin }).on('line', line => {
     const tid = 'turn-' + (++turn);
     if (text === 'early') send({ method: 'turn/completed', params: { turn: { id: tid, status: 'completed' } } });
     send({ id, result: { turn: { id: tid } } });
+    if (text === 'disconnect-after-ack') { setTimeout(() => process.exit(0), 20); return; }
+    if (text === 'wrong-completion') {
+      send({ method: 'turn/completed', params: { turn: { id: 'unrelated-turn', status: 'completed' } } });
+      setTimeout(() => send({ method: 'turn/completed', params: { turn: { id: tid, status: 'failed' } } }), 20);
+      return;
+    }
+    if (text === 'duplicate') send({ method: 'turn/completed', params: { turn: { id: tid, status: 'completed' } } });
     if (text === 'approval') send({ id: 'approval', method: 'item/commandExecution/requestApproval', params: {} });
     else if (text !== 'early') send({ method: 'turn/completed', params: { turn: { id: tid, status: 'completed' } } });
   }

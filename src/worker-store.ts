@@ -7,6 +7,8 @@ import { dirname, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { AppError, parse } from './store.js';
 
+export const approvalPauseMessage = 'Human approval or input required; this worker is paused';
+
 export const workerSchemas = {
   register: z.object({ name: z.string().trim().min(1).max(200), workspacePath: z.string().max(4096), taskIds: z.array(z.string().min(1).max(128)).max(200).default([]) }).strict(),
   reconcile: z.object({ id: z.string().min(1), expectedVersion: z.number().int().positive() }).strict(),
@@ -86,6 +88,7 @@ export class WorkerStore {
     return this.transaction(() => {
       const current = this.get(worker.id);
       return this.write({ ...worker, enabled: current.enabled, version: current.version,
+        error: current.version !== worker.version && !current.enabled ? current.error || worker.error : worker.error,
         name: current.name, workspacePath: current.workspacePath, taskIds: current.taskIds,
         reconcileRequested: current.version !== worker.version ? current.reconcileRequested : worker.reconcileRequested });
     });
@@ -93,7 +96,7 @@ export class WorkerStore {
   pauseForApproval(id: string) {
     return this.transaction(() => {
       const current = this.get(id);
-      return this.write({ ...current, enabled: false, version: current.version + 1, error: 'Human approval or input required; this worker is paused' });
+      return this.write({ ...current, enabled: false, version: current.version + 1, error: approvalPauseMessage });
     });
   }
   acquire(token: string, pid: number, alive = processAlive) {

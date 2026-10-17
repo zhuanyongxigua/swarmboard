@@ -4,7 +4,7 @@ import { watch, existsSync, type FSWatcher } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Store, type Entry } from './store.js';
-import { WorkerStore, type Worker } from './worker-store.js';
+import { WorkerStore, approvalPauseMessage, type Worker } from './worker-store.js';
 import { CodexSession, UncertainDelivery, type SessionAdapter } from './codex-session.js';
 import { workerPrompt } from './worker-prompt.js';
 import { WorkerPool } from './worker-pool.js';
@@ -155,7 +155,8 @@ export class EventRuntime {
       if (worker.status === 'error' || this.running.has(worker.id)) continue;
       if (worker.status === 'running' || worker.status === 'uncertain') {
         if (worker.status === 'running' || worker.reconcileRequested) {
-          const saved = this.workers.save({ ...worker, status: 'uncertain', reconcileRequested: false, error: 'Checking the prior delivery before any replay' });
+          const saved = this.workers.save({ ...worker, status: 'uncertain', reconcileRequested: false,
+            error: this.recoveryError(worker, 'Checking the prior delivery before any replay') });
           const promise = this.reconcile(saved).finally(() => { this.running.delete(worker.id); this.notify(); });
           this.running.set(worker.id, promise);
         }
@@ -186,16 +187,23 @@ export class EventRuntime {
     });
     this.adapters.set(worker.id, adapter); return adapter;
   }
+  private recoveryError(worker: Worker, diagnostic: string) {
+    // Preserve the actionable approval cause while replacing transient
+    // inspection diagnostics, so resolved uncertainty does not linger.
+    const pause = !worker.enabled && worker.error.includes(approvalPauseMessage) ? approvalPauseMessage : '';
+    return [pause, diagnostic].filter(Boolean).join('; ');
+  }
   private async reconcile(worker: Worker) {
     try {
       const outcome = worker.threadId && worker.deliveryId ? await this.session(worker).inspect?.(worker.threadId, worker.turnId, worker.deliveryId) : 'unknown';
       if (!this.workers.owns(this.token)) return;
       const current = this.workers.get(worker.id);
-      if (outcome === 'completed') this.workers.save({ ...current, status: 'idle', cursor: worker.deliveryCursor ?? worker.cursor, deliveryId: null, deliveryCursor: null, turnId: null, error: '' });
-      else if (outcome === 'failed') this.workers.save({ ...current, status: 'error', error: 'Prior turn ended unsuccessfully; inspect its work before enabling a continuation' });
-      else this.workers.save({ ...current, status: 'uncertain', error: 'Prior delivery may still be active or its result is unknown; inspect the saved thread/turn before retrying reconciliation' });
+      if (outcome === 'completed') this.workers.save({ ...current, status: 'idle', cursor: worker.deliveryCursor ?? worker.cursor, deliveryId: null, deliveryCursor: null, turnId: null,
+        error: this.recoveryError(current, '') });
+      else if (outcome === 'failed') this.workers.save({ ...current, status: 'error', error: this.recoveryError(current, 'Prior turn ended unsuccessfully; inspect its work before enabling a continuation') });
+      else this.workers.save({ ...current, status: 'uncertain', error: this.recoveryError(current, 'Prior delivery may still be active or its result is unknown; inspect the saved thread/turn before retrying reconciliation') });
     } catch {
-      if (this.workers.owns(this.token)) { const current = this.workers.get(worker.id); this.workers.save({ ...current, status: 'uncertain', error: 'Could not inspect the bound session; no duplicate turn was started' }); }
+      if (this.workers.owns(this.token)) { const current = this.workers.get(worker.id); this.workers.save({ ...current, status: 'uncertain', error: this.recoveryError(current, 'Could not inspect the bound session; no duplicate turn was started') }); }
     }
   }
   private async deliver(worker: Worker, events: Entry[]) {
