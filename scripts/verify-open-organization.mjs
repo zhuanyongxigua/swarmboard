@@ -58,6 +58,21 @@ const wait = async (predicate, label, timeout = 600000) => {
   throw new Error('Timeout: ' + label);
 };
 const create = (title, acceptanceCriteria) => board.createTask({ title, description: 'Inspect fixture.json. Choose useful scopes and collaborators yourselves across current goals, publish scoped CLAIM and verified shared evidence, resolve overlaps through messages where useful, and integrate evidence for acceptance. There are no assigned roles, task quotas or required goal order. Human acceptance marks done.', acceptanceCriteria });
+// A reviewer can publish a useful task-linked message without joining mutable
+// goal status. Judge cooperation from shared artifacts, not claim-row counts.
+const cooperation = state => {
+  const entries = board.readEntries({ limit: 200 }).items.filter(e => e.taskId && e.detail.trim()
+    && ['FACT', 'PATCH_SUMMARY', 'MESSAGE'].includes(e.kind) && state.workers.some(w => w.id === e.agentId));
+  const agentsByGoal = new Map(), goalsByAgent = new Map();
+  for (const entry of entries) {
+    if (!agentsByGoal.has(entry.taskId)) agentsByGoal.set(entry.taskId, new Set());
+    if (!goalsByAgent.has(entry.agentId)) goalsByAgent.set(entry.agentId, new Set());
+    agentsByGoal.get(entry.taskId).add(entry.agentId); goalsByAgent.get(entry.agentId).add(entry.taskId);
+  }
+  return { multipleContributors: [...agentsByGoal.values()].some(ids => ids.size >= 2),
+    crossGoalContributor: [...goalsByAgent.values()].some(ids => ids.size >= 2),
+    contributingMembers: goalsByAgent.size };
+};
 try {
   let first, second, third;
   if (prior) {
@@ -91,11 +106,11 @@ try {
   let collaborated = runtime.status();
   if (!phases.some(p => p.phase === 'collaborated')) {
   collaborated = await wait(s => s.workers.length === 3 && s.workers.every(w => w.status === 'idle') && board.board().tasks.every(t => t.status === 'in_review')
-    && new Set(board.board().tasks.flatMap(t => t.participants)).size >= 2 && board.board().tasks.some(t => t.participants.length >= 2)
+    && cooperation(s).contributingMembers >= 2 && cooperation(s).multipleContributors && cooperation(s).crossGoalContributor
     && [first, second, third].every(g => board.board().entries.some(e => e.taskId === g.id && e.kind === 'FACT')), 'self-organized contributions across later goals');
   assert.equal(board.board().tasks.length, 3); assert.equal(board.board().resources.length, 0);
   for (const worker of collaborated.workers) for (const goal of [second, third]) assert(turns.some(t => t.workerId === worker.id && t.goalIds.includes(goal.id)), 'Every peer must receive each later goal');
-  phases.push({ phase: 'collaborated', tasks: board.board().tasks, entries: board.board().entries }); save();
+  phases.push({ phase: 'collaborated', cooperation: cooperation(collaborated), tasks: board.board().tasks, entries: board.board().entries }); save();
   }
   const original = [...bindings];
   if (!phases.some(p => p.phase === 'completed')) {

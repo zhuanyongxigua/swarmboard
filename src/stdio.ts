@@ -25,14 +25,15 @@ export async function startStdioServer(options: StdioOptions = {}) {
   const mayAct = () => {
     const pool = peerState?.pool();
     if (!pool?.enabled || !workerId || !pool.memberIds.includes(workerId) || !peerState!.get(workerId).enabled) return false;
-    const tasks = store.board().tasks.filter(t => !pool.taskIds.length || pool.taskIds.includes(t.id));
+    const tasks = store.taskStates().filter(t => !pool.taskIds.length || pool.taskIds.includes(t.id));
     return tasks.some(t => !['done', 'canceled'].includes(t.status));
   };
   const sharedUpdates = () => {
     const pool = peerState?.pool(); if (!pool) return undefined;
     const events = store.readEntries({ after: updateCursor, limit: 100 }); updateCursor = events.cursor;
     const items = events.items.filter(e => e.agentId !== workerId && (!e.taskId || !pool.taskIds.length || pool.taskIds.includes(e.taskId)) && (!e.recipientId || e.recipientId === workerId));
-    return { control: mayAct() ? 'continue-if-useful' : 'stop-after-safe-boundary', organization: { memberIds: pool.memberIds, size: pool.size, maxSize: pool.maxSize }, items, hasMore: events.hasMore };
+    const compact = items.map(e => ({ ...e, detail: e.detail.slice(0, 1000), detailTruncated: e.detail.length > 1000 }));
+    return { control: mayAct() ? 'continue-if-useful' : 'stop-after-safe-boundary', organization: { memberIds: pool.memberIds, size: pool.size, maxSize: pool.maxSize }, items: compact, hasMore: events.hasMore };
   };
   const server = createMcpServer(store, widgetPath, runtime, { poolMember, ...(peerState ? { sharedUpdates, mayAct, peers: peerState, workerId, ci: new PipelineEvents(store, peerState) } : {}) });
   const transport = new StdioServerTransport();

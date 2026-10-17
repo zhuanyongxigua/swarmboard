@@ -100,7 +100,7 @@ export class WorkerPool {
       if (!this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(agentId)) this.board.registerAgent({ agentId, name: 'Swarmboard organization events' });
       // Read after the scope commit: an older scan may have advanced its cursor
       // past a new goal while configuration was still in flight.
-      const goals = this.board.board().tasks.filter(t => !refresh.previousTaskIds.includes(t.id) && !['done', 'canceled'].includes(t.status));
+      const goals = this.board.taskStates().filter(t => !refresh.previousTaskIds.includes(t.id) && !['done', 'canceled'].includes(t.status));
       for (const { id: taskId } of goals) this.board.publishSystemEntryOnce({ kind: 'OBSERVED', agentId, taskId,
         summary: 'BOARD_SCOPE_EXPANDED', detail: JSON.stringify({ signalId: `${refresh.id}:${taskId}`,
           message: 'The organization follows all human goals. Read current shared work and choose useful contributions within the authorized project. Peers negotiate their own scopes and priorities.' }) });
@@ -108,7 +108,7 @@ export class WorkerPool {
       this.workers.clearScopeRefresh(refresh.id);
       pool = this.workers.pool()!;
     }
-    const tasks = this.board.board().tasks.filter(t => !pool!.taskIds.length || pool!.taskIds.includes(t.id));
+    const tasks = this.board.taskStates().filter(t => !pool!.taskIds.length || pool!.taskIds.includes(t.id));
     let state: Pool['state'];
     if (!pool.enabled) state = busy ? 'stopping' : 'stopped';
     else if (tasks.length && tasks.every(t => ['done', 'canceled'].includes(t.status))) state = busy ? 'stopping' : 'completed';

@@ -13,7 +13,7 @@ export interface Liveness {
 }
 export class PoolLiveness {
   constructor(private board: Store, private workers: WorkerStore, private idleMs: number) {}
-  private tasks(pool: Pool) { return this.board.board().tasks.filter(t => !pool.taskIds.length || pool.taskIds.includes(t.id)); }
+  private tasks(pool: Pool) { return this.board.taskStates().filter(t => !pool.taskIds.length || pool.taskIds.includes(t.id)); }
   sync(pool: Pool | null, now: number, queuedOrBusy: boolean, awaitingGoalIds: string[] = []) {
     if (!pool) return;
     const tasks = this.tasks(pool).filter(t => !awaitingGoalIds.includes(t.id));
@@ -36,7 +36,10 @@ export class PoolLiveness {
         value = { ...value, attempts: value.attempts + (attention ? 0 : 1), idleSince: null, state: attention ? 'attention' : 'nudged', pending: {
           agentId: 'runtime-' + pool.id, kind: attention ? 'OBSERVED' : 'MESSAGE',
           summary: attention ? 'IDLE_ATTENTION: goals remain idle after two recovery attempts' : 'IDLE_RECOVERY: inspect stranded human goals and continue useful work',
-          detail: JSON.stringify({ signalId: randomUUID(), goalIds: tasks.filter(t => ['todo', 'in_progress'].includes(t.status)).map(t => t.id),
+          detail: JSON.stringify({ signalId: randomUUID(), unfinishedGoalCount: tasks.filter(t => ['todo', 'in_progress'].includes(t.status)).length,
+            goalIds: tasks.filter(t => ['todo', 'in_progress'].includes(t.status)).slice(0, 20).map(t => t.id),
+            goalIdsHasMore: tasks.filter(t => ['todo', 'in_progress'].includes(t.status)).length > 20,
+            discovery: 'Use task_list pages to discover current goals; these IDs are only a bounded sample. This reminder assigns no goal or order.',
             instruction: attention ? 'Human attention needed. No further automatic idle nudges until a goal revision or explicit pool resume. Task states remain unchanged.'
               : 'INTERNAL_ONLY. Read current goals and shared evidence. Choose useful authorized work with existing peers. If truly waiting on a missing prerequisite or acceptance, publish the concrete blocker and use blocked/in_review as an active participant. Do not merely acknowledge this message, poll, invent success, launch external harnesses or create tasks. Do not reply to the runtime identity.' }),
           ...(recipientId ? { recipientId } : {}),

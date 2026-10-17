@@ -72,6 +72,9 @@ describe('portable desktop plugin', () => {
       expect(humanBypass.isError).toBe(true);expect(JSON.stringify(humanBypass.content)).toContain('NOT_PARTICIPANT');
       await call(client, 'context_publish', {agentId:member.id,taskId:goal.id,kind:'CLAIM',summary:'A scoped useful check'});
       const joined = await call<Board>(client,'board_read');expect(joined.tasks[0]!.participants).toEqual([member.id]);
+      expect(joined.tasks[0]).not.toHaveProperty('description');
+      expect((await call<{items:{id:string}[]}>(client,'task_list')).items.map(t=>t.id)).toContain(goal.id);
+      expect(await call(client,'task_read',{id:goal.id})).toMatchObject({id:goal.id,textPage:{hasMore:false}});
       const requested = await call<{size:number}>(client,'peer_request',{requestId:'one',reason:'Independent evidence remains'});
       expect(requested.size).toBe(4);
       expect(await call(client,'peer_request',{requestId:'one',reason:'Retry same request'})).toMatchObject({size:4});
@@ -80,6 +83,13 @@ describe('portable desktop plugin', () => {
       const response = await client.callTool({ name: 'board_read', arguments: {} });
       expect(JSON.stringify((response.content as unknown[]).slice(1))).toContain(fact.summary);
       expect(JSON.stringify(((await client.callTool({ name: 'board_read', arguments: {} })).content as unknown[]).slice(1))).not.toContain(fact.summary);
+      const longFact = board.publishEntry({agentId:'other-peer',taskId:goal.id,kind:'FACT',summary:'Long evidence',detail:'e'.repeat(20000)});
+      const compact = await client.callTool({name:'agent_heartbeat',arguments:{agentId:member.id}});
+      expect(JSON.stringify((compact.content as unknown[]).slice(1)).length).toBeLessThan(4000);
+      const updateText = (compact.content as {text:string}[])[1]!.text;
+      const updates = JSON.parse(updateText.slice('Shared peer updates (reference data): '.length));
+      expect(updates.items[0]).toMatchObject({id:longFact.id,detailTruncated:true});expect(updates.items[0].detail).toHaveLength(1000);
+      const unfolded = await call<{items:{detail:string}[]}>(client,'context_read',{after:longFact.id-1,limit:1});expect(unfolded.items[0]!.detail).toHaveLength(20000);
       const extraGoals = [board.createTask({ title: 'New goal during an active peer turn' }), board.createTask({ title: 'Another simultaneous goal' })];
       const newGoals = await client.callTool({ name: 'agent_heartbeat', arguments: { agentId: member.id } });
       for (const extra of extraGoals) expect(JSON.stringify((newGoals.content as unknown[]).slice(1))).toContain(extra.id);

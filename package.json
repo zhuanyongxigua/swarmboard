@@ -1,6 +1,6 @@
 {
   "name": "swarmboard",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "description": "An Agensh-inspired multi-agent workspace for ChatGPT Desktop: claim tasks, coordinate resources, and share progress.",
   "type": "module",

@@ -21,6 +21,8 @@ const resourceFields = { name: text, kind: legacyResourceKind.default(''), descr
 export const schemas = {
   taskCreate: z.object({ ...taskFields, agentId: id.optional() }).strict(),
   taskUpdate: z.object({ expectedVersion: z.number().int().positive(), title: text.optional(), description: longText.optional(), acceptanceCriteria: longText.optional(), status: z.enum(taskStatuses).optional(), agentId: id.optional() }).strict(),
+  taskList: z.object({ after: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(50).default(20), statuses: z.array(z.enum(taskStatuses)).min(1).max(6).default(['todo', 'in_progress', 'in_review', 'blocked']), query: z.string().trim().min(1).max(500).optional() }).strict(),
+  taskRead: z.object({ id, offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(8000).default(4000), expectedVersion: z.number().int().positive().optional() }).strict(),
   resourceCreate: z.object({ ...resourceFields, agentId: id.optional() }).strict(),
   resourceUpdate: z.object({ expectedVersion: z.number().int().positive(), name: text.optional(), kind: legacyResourceKind.optional(), description: longText.optional(), capabilities: z.array(text).max(50).optional(), accessNotes: longText.optional(), agentId: id.optional() }).strict(),
   agent: z.object({ name: text, agentId: id.optional() }).strict(),
@@ -33,6 +35,7 @@ export const schemas = {
   release: z.object({ agentId: id, expectedVersion: z.number().int().positive() }).strict(),
 };
 export interface Task { id: string; title: string; description: string; acceptanceCriteria: string; status: typeof taskStatuses[number]; assignee: string | null; participants: string[]; version: number; createdAt: string; updatedAt: string }
+export type TaskSummary = Omit<Task, 'description' | 'acceptanceCriteria'>;
 export interface Resource { id: string; name: string; kind: string; description: string; capabilities: string[]; accessNotes: string; version: number; createdAt: string; updatedAt: string }
 export interface Agent { id: string; name: string; lastSeenAt: string }
 export interface Entry { id: number; kind: typeof entryKinds[number]; agentId: string; summary: string; detail: string; taskId?: string; resourceId?: string; recipientId?: string; createdAt: string }
@@ -130,6 +133,41 @@ export class Store {
   private touch(agentId: string) { this.db.prepare('UPDATE agents SET lastSeenAt = ? WHERE id = ?').run(new Date().toISOString(), agentId); }
   board() {
     return this.transaction(() => ({ tasks: this.list<Task>('tasks'), resources: this.list<Resource>('resources'), usages: this.list<Usage>('usages'), agents: this.list<Agent>('agents'), entries: this.db.prepare('SELECT * FROM (SELECT * FROM entries ORDER BY id DESC LIMIT 100) ORDER BY id').all().map(row => this.decode('entries', row) as unknown as Entry), cursor: Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor) }));
+  }
+  readTask(taskId: string): Task { return this.get<Task>('tasks', taskId); }
+  // Runtime lifecycle checks need states, never full human requirements or context.
+  taskStates() { return this.db.prepare('SELECT id,status,version,assignee FROM tasks ORDER BY id').all() as unknown as Pick<Task, 'id' | 'status' | 'version' | 'assignee'>[]; }
+  readTasks(input: unknown = {}, subscribedIds: string[] = []) {
+    return this.transaction(() => this.taskPage(input, subscribedIds));
+  }
+  private taskPage(input: unknown, subscribedIds: string[]) {
+    const query = parse(schemas.taskList, input);
+    // Task rows are never deleted/reinserted. Their insertion ordinal is stable
+    // across edits and tied/backward wall clocks; UUID/time ordering is not.
+    const clauses = [`rowid > ?`, `status IN (${query.statuses.map(() => '?').join(',')})`];
+    const values: (string | number)[] = [query.after, ...query.statuses];
+    if (query.query) { clauses.push("instr(lower(title || char(10) || description || char(10) || acceptanceCriteria), lower(?)) > 0"); values.push(query.query); }
+    if (subscribedIds.length) { clauses.push(`id IN (${subscribedIds.map(() => '?').join(',')})`); values.push(...subscribedIds); }
+    const rows = this.db.prepare(`SELECT rowid AS discoveryCursor,id,title,status,assignee,version,createdAt,updatedAt FROM tasks WHERE ${clauses.join(' AND ')} ORDER BY rowid LIMIT ?`).all(...values, query.limit + 1);
+    const hasMore = rows.length > query.limit;
+    const items = rows.slice(0, query.limit).map(({ discoveryCursor: _, ...row }) => this.decode('tasks', row) as unknown as TaskSummary);
+    return { items, hasMore, cursor: items.length ? Number(rows[items.length - 1]!.discoveryCursor) : query.after };
+  }
+  readTaskPage(input: unknown) {
+    const query = parse(schemas.taskRead, input), task = this.readTask(query.id);
+    if (query.expectedVersion !== undefined) this.checkVersion(task.version, query.expectedVersion);
+    const end = query.offset + query.limit;
+    return { ...task, description: task.description.slice(query.offset, end), acceptanceCriteria: task.acceptanceCriteria.slice(query.offset, end),
+      textPage: { offset: query.offset, nextOffset: end, hasMore: task.description.length > end || task.acceptanceCriteria.length > end } };
+  }
+  peerBoard(subscribedIds: string[] = []) {
+    return this.transaction(() => {
+      const page = this.taskPage({}, subscribedIds);
+      return { tasks: page.items, taskPage: { cursor: page.cursor, hasMore: page.hasMore },
+        resources: this.list<Resource>('resources'), usages: this.list<Usage>('usages'), agents: this.list<Agent>('agents'),
+        entries: this.db.prepare('SELECT id,kind,agentId,summary,substr(detail,1,1000) AS detail,length(detail)>1000 AS detailTruncated,taskId,resourceId,recipientId,createdAt FROM (SELECT * FROM entries ORDER BY id DESC LIMIT 20) ORDER BY id').all().map(row => this.decode('entries', row)),
+        cursor: Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor) };
+    });
   }
   readAutomation(): AutomationConfig {
     const row = this.db.prepare('SELECT config FROM automation_config WHERE id=1').get() as { config: string } | undefined;

@@ -29,6 +29,21 @@ function fixture() {
   };
 }
 describe('internal peer idle recovery', () => {
+  it('keeps recovery signals bounded when hundreds of human goals remain unfinished', async () => {
+    const f = fixture(); await f.settle();
+    for (let i = 0; i < 600; i++) f.board.createTask({ title: `Additional human goal ${i}` });
+    // Set up an already-delivered backlog; multi-batch transport is tested separately.
+    const cursor = f.board.board().cursor;
+    for (const worker of f.runtime.workers.list()) f.runtime.workers.save({ ...worker, cursor });
+    await f.settle(); f.tick(); await f.settle();
+    const recovery = f.board.readEntries({ query: 'IDLE_RECOVERY' }).items;
+    expect(recovery).toHaveLength(1);
+    expect(recovery[0]!.detail.length).toBeLessThan(2000);
+    expect(recovery[0]!.detail).toContain('task_list');
+    expect(JSON.parse(recovery[0]!.detail)).toMatchObject({ unfinishedGoalCount: 601, goalIdsHasMore: true });
+    expect(JSON.parse(recovery[0]!.detail).goalIds).toHaveLength(20);
+    expect(f.runtime.status().error).toBe('');
+  });
   it('waits for the interval, nudges one existing peer, survives restart and stops after two unproductive nudges', async () => {
     const f = fixture(); await f.settle(); const ids = f.runtime.workers.list().map(w => [w.id, w.threadId]);
     expect(f.turns).toHaveLength(3); expect(f.turns[0]!.prompt).toContain('INTERNAL_ONLY');

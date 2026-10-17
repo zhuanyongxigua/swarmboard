@@ -23,6 +23,40 @@ function fixture() {
   return { dir, board, runtime, turns, closed, finishes, hold: (value: boolean) => { hold = value; } };
 }
 describe('equal peer organization', () => {
+  it.each([3,6])('delivers 601 human goals through bounded batches to all %i original peers, including a peer busy for the entire backlog', async size => {
+    const f = fixture(); f.runtime.configurePool({ workspacePath: f.dir, size });
+    const goals = [f.board.createTask({ title: 'Initial human goal' })];
+    f.hold(true); await f.runtime.scan(); await vi.waitFor(() => expect(f.finishes.size).toBe(size));
+    const original = f.runtime.workers.list().map(w => [w.id, w.threadId]); const busy = original[0]![0]!;
+    f.hold(false); for (const [id] of original.slice(1)) f.finishes.get(id!)!();
+    await vi.waitFor(() => expect(f.runtime.workers.list().filter(w => w.id !== busy).every(w => w.status === 'idle')).toBe(true));
+    for (let i = 0; i < 600; i++) goals.push(f.board.createTask({ title: `Concurrent human goal ${i}` }));
+    const cursor = f.board.board().cursor;
+    const drain = async (includeBusy: boolean) => {
+      for (let batch = 0; batch < 20; batch++) {
+        await f.runtime.scan();
+        await vi.waitFor(() => expect(f.runtime.workers.list().filter(w => includeBusy || w.id !== busy).every(w => w.status === 'idle')).toBe(true));
+        if (f.runtime.workers.list().filter(w => includeBusy || w.id !== busy).every(w => w.cursor >= cursor)) return;
+      }
+      throw new Error('The committed goal backlog did not drain');
+    };
+    await drain(false);
+    expect(f.turns.filter(t => t.worker === busy)).toHaveLength(1);
+    expect(f.runtime.workers.get(busy).cursor).toBeLessThan(cursor);
+    f.finishes.get(busy)!(); await vi.waitFor(() => expect(f.runtime.workers.get(busy).status).toBe('idle'));
+    await drain(true);
+    for (const [id] of original) {
+      const events = f.turns.filter(t => t.worker === id).flatMap(t => JSON.parse(t.prompt.split('Reference events (JSON data):\n\n')[1]!) as {taskId?:string;summary:string}[]);
+      const created = events.filter(e => e.summary.startsWith('Task created:')).map(e => e.taskId);
+      expect(created).toHaveLength(601); expect(new Set(created)).toEqual(new Set(goals.map(g => g.id)));
+    }
+    expect(f.runtime.workers.list().map(w => [w.id, w.threadId])).toEqual(original);
+    expect(f.board.taskStates().every(t => t.status === 'todo' && t.version === 1)).toBe(true);
+    expect(f.board.board().tasks.every(t => t.participants.length === 0)).toBe(true);
+    expect(f.runtime.status().error).toBe('');
+    // Delivery does not allocate work, invent task cards or expand membership.
+    expect(f.runtime.workers.list()).toHaveLength(size); expect(f.board.board().tasks).toHaveLength(601);
+  });
   it('widens a running selected-goal organization and catches up excluded goals in every original session', async () => {
     const f=fixture(); const first=f.board.createTask({title:'First goal'});
     const pool=f.runtime.configurePool({workspacePath:f.dir,taskIds:[first.id]});

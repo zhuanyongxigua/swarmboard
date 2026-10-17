@@ -51,6 +51,39 @@ describe('event worker MCP management', () => {
 });
 
 describe('pool peer tool boundary', () => {
+  it('keeps bounded discovery and direct reads within an explicitly selected subscription', async () => {
+    const chosen=store.createTask({title:'Chosen human goal'}),other=store.createTask({title:'Outside subscription'});
+    runtime.configurePool({workspacePath:tmpdir(),taskIds:[chosen.id]});
+    const peer=createMcpServer(store,'unused',undefined,{poolMember:true,peers:runtime.workers});
+    const [a,b]=InMemoryTransport.createLinkedPair();await peer.connect(a);
+    const session=new Client({name:'scoped-peer',version:'1'});await session.connect(b);
+    try {
+      const page=(await session.callTool({name:'task_list',arguments:{}})).structuredContent as {items:{id:string}[]};
+      expect(page.items.map(t=>t.id)).toEqual([chosen.id]);
+      const response=await session.callTool({name:'task_read',arguments:{id:other.id}});expect(response.isError).toBe(true);expect(JSON.stringify(response.content)).toContain('UNBOUND_GOAL');
+      expect((await session.callTool({name:'task_read',arguments:{id:chosen.id}})).isError).not.toBe(true);
+    } finally {await session.close();await peer.close();}
+  });
+  it('bounds peer discovery over 200 long goals while the human board keeps full requirements', async () => {
+    const goals = Array.from({length:200}, (_,i) => store.createTask({title:`Goal ${i}`,description:'x'.repeat(20000),acceptanceCriteria:'y'.repeat(20000)}));
+    const peer = createMcpServer(store,'unused',undefined,{poolMember:true});
+    const [a,b] = InMemoryTransport.createLinkedPair(); await peer.connect(a);
+    const session = new Client({name:'many-goals-peer',version:'1'}); await session.connect(b);
+    const read = async (name:string,args:Record<string,unknown>={}) => {
+      const response=await session.callTool({name,arguments:args});expect(response.isError).not.toBe(true);return response.structuredContent as Record<string,any>;
+    };
+    try {
+      const first=await read('board_read');expect(first.tasks).toHaveLength(20);expect(first.taskPage.hasMore).toBe(true);
+      expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThan(30000);
+      expect((await read('board_open')).tasks).toHaveLength(20);
+      const seen=first.tasks.map((t:{id:string})=>t.id);let after=first.taskPage.cursor;
+      for (;;) { const page=await read('task_list',{after}); seen.push(...page.items.map((t:{id:string})=>t.id)); after=page.cursor; if(!page.hasMore)break; }
+      expect(new Set(seen)).toEqual(new Set(goals.map(t=>t.id)));
+      const goal=await read('task_read',{id:goals[199]!.id});expect(goal.description).toHaveLength(4000);expect(goal.textPage.hasMore).toBe(true);
+      expect((await read('task_read',{id:goals[199]!.id,offset:goal.textPage.nextOffset,expectedVersion:goal.version})).description).toHaveLength(4000);
+      expect(data(await call('board_read')).tasks).toHaveLength(200);expect(store.readTask(goals[199]!.id).description).toHaveLength(20000);
+    } finally { await session.close();await peer.close(); }
+  });
   it('withholds task/resource creation and pool controls, supplies shared updates, and fences stopped writes', async () => {
     const peer = createMcpServer(store, 'unused', undefined, { poolMember: true, sharedUpdates: () => ({ control: 'stop-after-safe-boundary', items: [{ kind: 'FAIL', summary: 'Peer counterexample' }] }), mayAct: () => false });
     const [a,b] = InMemoryTransport.createLinkedPair(); await peer.connect(a);

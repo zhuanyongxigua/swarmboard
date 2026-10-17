@@ -36,6 +36,18 @@
 
 context_read 增量分页，context_search 按字面词搜索完整历史，而非只搜 board_read 最近 100 条。记录可能在工具附加更新与下一回合中重复出现，按 entry id 去重，不重复执行副作用。大量相关事件以有界批次处理；不要求逐条唤醒所有模型。30 秒恢复扫描仅检查持久数据，无可推进目标的空队列不调用模型；可推进目标长时间全员空闲时按下述有界兜底处理，不新建宿主定时会话。所有监听进程退出时不会凭空唤醒。
 
+## 多目标发现与任务量边界
+
+任务数量不决定成员分工，也没有一人一目标配额。对照 [Agensh 附录 A/B](https://arxiv.org/html/2609.26781v1#A1)，统一成员协议负责引导自主选择、协商、验证和整合；运行时只维护事件与共享状态。论文中的单一重建目标不直接证明本项目的多个人类目标场景，因此必须另外验证运行中新增目标、跨目标贡献和忙碌成员追赶。
+
+专用成员 MCP 的 board_read/board_open 只返回前 20 个未完成目标摘要及 taskPage.hasMore/cursor，正文通过 task_read 读取；人类界面仍保留完整任务快照。task_list 默认包含 todo/in_progress/in_review/blocked，不按参与者过滤；limit 默认 20、最多 50，携带 after=cursor 继续分页，也可指定 statuses 或按正文和标题字面搜索。游标按不可删除任务行的插入顺序推进，修改任务、相同时间戳和时钟回拨不改变顺序。页面顺序不是任务优先级；收到状态修订或开始新回合时须重新发现目标，旧筛选游标不是状态变更订阅。
+
+task_read(id, offset, limit) 返回目标元数据和 description/acceptanceCriteria 的正文片段；默认每个字段 4,000 字符，最多 8,000。textPage.hasMore 为真时用 nextOffset 继续，并将首次返回的 version 作为 expectedVersion；遇版本冲突从零重新读取，避免混用不同修订。分页和截短都有显式标记，不以摘要代替完整验收条件。回合内附加共享更新及最近上下文也压缩长 detail，标记 detailTruncated；用 context_read(after=entry.id-1,limit=1) 按需展开原文，持久记录不被改写。
+
+运行时状态判断只查询目标 id/status/version 等元数据，不再反复加载所有任务正文。空闲恢复信号只带计数和最多 20 个目标样例，goalIdsHasMore 标明省略；成员通过 task_list 查看全局目标，样例不构成分配或执行顺序。
+
+以上解决有界发现和事件追赶，不承诺无限任务吞吐或所有成员立即中断当前工作。忙碌成员的普通事件在下回合交付，MCP 返回可附带回合内更新；显式暂停、审批暂停、错误或不确定投递仍须先按原恢复门禁处理，事件不会因此被分配给某个排他负责人。全板可见性也不扩大已授权项目、网络或生产权限。确定性压力回归与小规模真实模型验收的证明范围分别记录在验证台账，不能相互替代。
+
 ## GitLab CI 持久订阅
 
 等待 CI 前调用 pipeline_watch，提供现有人类 taskId、pipelineId 和完整 40 位 sha。host/project 只从人类授权源项目的 Git origin 读取，不接受正文里的任意 URL；origin 凭据不进入订阅。运行时通过既有 glab 登录执行只读 pipeline API，原始响应、stderr 和凭据不进入模型或共享记录。

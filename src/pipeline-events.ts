@@ -47,7 +47,7 @@ export class PipelineEvents {
     const data = parse(pipelineSchema, input), pool = this.workers.pool();
     if (!pool?.enabled) throw new AppError('POOL_STOPPED', 'The organization is stopped', 409);
     if (workerId && (!pool.memberIds.includes(workerId) || !this.workers.get(workerId).enabled)) throw new AppError('NOT_MEMBER', 'Only an enabled organization member may subscribe', 403);
-    const task = this.board.board().tasks.find(t => t.id === data.taskId);
+    const task = this.board.taskStates().find(t => t.id === data.taskId);
     if (!task || pool.taskIds.length && !pool.taskIds.includes(task.id) || ['done','canceled'].includes(task.status)) throw new AppError('INVALID_GOAL', 'Subscribe only to an unfinished bound human goal');
     const remote = projectRemote(pool.workspacePath);
     return this.workers.transaction(() => {
@@ -67,7 +67,7 @@ export class PipelineEvents {
   hasPending() { return this.list().some(w => w.state === 'watching'); }
   async poll(now: number) {
     const pool = this.workers.pool(); if (!pool?.enabled) return;
-    const goals = this.board.board().tasks;
+    const goals = this.board.taskStates();
     for (const w of this.list().filter(w => w.state === 'watching')) if (w.poolId !== pool.id || !goals.some(t => t.id === w.taskId && !['done','canceled'].includes(t.status))) this.replace(w,{ ...w, state: 'canceled', pending: null });
     const due = this.list().filter(w => w.state === 'watching' && (w.pending || w.nextPollAt <= now)).sort((a,b) => a.nextPollAt - b.nextPollAt).slice(0,4);
     await Promise.all(due.map(w => this.pollOne(w, now)));
@@ -82,7 +82,7 @@ export class PipelineEvents {
       const current = this.list().find(w => w.id === watch.id)!;
       const pool = this.workers.pool();
       if (!pool?.enabled || current.state !== 'watching' || current.generation !== watch.generation) return;
-      if (!this.board.board().tasks.some(t => t.id === watch.taskId && !['done','canceled'].includes(t.status))) { this.replace(current,{ ...current, state: 'canceled' }); return; }
+      if (!this.board.taskStates().some(t => t.id === watch.taskId && !['done','canceled'].includes(t.status))) { this.replace(current,{ ...current, state: 'canceled' }); return; }
       if (!result) {
         value = { ...current, failures: current.failures + 1, error: 'GitLab lookup failed or returned a different SHA; verify CLI authentication, network and pipeline identity', nextPollAt: now + 60000 };
         if (value.failures < 3) { this.replace(current,value); return; }
@@ -102,7 +102,7 @@ export class PipelineEvents {
     this.workers.transaction(() => {
       const current = this.list().find(w => w.id === watch.id)!, pool = this.workers.pool();
       if (!this.mayPublish() || !pool?.enabled || current.state !== 'watching' || current.generation !== watch.generation) return;
-      if (!this.board.board().tasks.some(t => t.id === watch.taskId && !['done','canceled'].includes(t.status))) { this.save({ ...current, state: 'canceled', pending: null }); return; }
+      if (!this.board.taskStates().some(t => t.id === watch.taskId && !['done','canceled'].includes(t.status))) { this.save({ ...current, state: 'canceled', pending: null }); return; }
       const signal = current.pending!;
       if (!this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(signal.agentId)) this.board.registerAgent({ agentId: signal.agentId, name: 'Swarmboard CI events' });
       this.board.publishSystemEntryOnce(signal);

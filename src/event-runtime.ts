@@ -120,7 +120,7 @@ export class EventRuntime {
       if (completed && this.board.db.prepare('SELECT status FROM tasks WHERE id=?').get(entry.taskId)?.status === 'done') {
         // Completion can satisfy a dependency, including for the same worker.
         // Wake only workers with pending subscribed work; they recheck the actual prerequisites.
-        return this.board.board().tasks.some(task => !task.assignee && ['todo', 'blocked'].includes(task.status) && (!worker.taskIds.length || worker.taskIds.includes(task.id)));
+        return this.board.taskStates().some(task => !task.assignee && ['todo', 'blocked'].includes(task.status) && (!worker.taskIds.length || worker.taskIds.includes(task.id)));
       }
     }
     if (entry.agentId === worker.id) return false;
@@ -239,7 +239,7 @@ export class EventRuntime {
       const pool = worker.poolId ? this.workers.pool() : null;
       // Opening/resuming a session is asynchronous. Recheck human stop and goal
       // completion after it returns, before submitting a new model turn.
-      const poolStopped = !!worker.poolId && (!pool?.enabled || !this.board.board().tasks.some(t =>
+      const poolStopped = !!worker.poolId && (!pool?.enabled || !this.board.taskStates().some(t =>
         (!pool.taskIds.length || pool.taskIds.includes(t.id)) && !['done', 'canceled'].includes(t.status)));
       if (!current.enabled || poolStopped) { this.workers.save({ ...current, threadId, status: 'idle', deliveryId: null, deliveryCursor: null }); return; }
       this.workers.save({ ...current, threadId });
