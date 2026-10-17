@@ -6,6 +6,15 @@ let store: WorkerStore;
 beforeEach(() => { store = new WorkerStore(':memory:'); });
 afterEach(() => store.close());
 describe('worker configuration', () => {
+  it('retires a known failed delivery only on explicit resume while retaining its cursor and thread', () => {
+    const w = store.register({ name: 'Builder', workspacePath: tmpdir() });
+    store.save({ ...w, threadId: 'original', cursor: 7, status: 'error', deliveryId: 'failed-delivery', deliveryCursor: 12, turnId: 'failed-turn', error: 'Prior turn failed' });
+    const resumed = store.update({ id: w.id, expectedVersion: w.version, enabled: true });
+    expect(resumed).toMatchObject({ status: 'idle', threadId: 'original', cursor: 7, deliveryId: null, deliveryCursor: null, turnId: null });
+    store.save({ ...resumed, status: 'uncertain', deliveryId: 'unresolved' });
+    expect(() => store.update({ id: w.id, expectedVersion: resumed.version, enabled: true })).toThrow(/Inspect/);
+    expect(store.get(w.id).deliveryId).toBe('unresolved');
+  });
   it('requires an actual absolute directory and rejects duplicate subscriptions regardless of input ordering', () => {
     for (const workspacePath of ['relative', '/a-directory-that-does-not-exist', '/etc/hosts']) expect(() => store.register({ name: 'Builder', workspacePath })).toThrow(/absolute workspace/);
     const first = store.register({ name: 'Builder', workspacePath: tmpdir(), taskIds: ['b', 'a', 'a'] });

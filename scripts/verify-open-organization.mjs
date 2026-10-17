@@ -26,12 +26,13 @@ git('-c', 'user.name=Synthetic fixture', '-c', 'user.email=fixture@example.inval
 }
 const path = join(root, 'board.sqlite');
 const board = new Store(path);
-const bindings = new Map(prior?.bindings.map(w => [w.id, w.threadId]) ?? []), turns = prior?.turns ?? [], closed = [], phases = prior?.phases ?? [];
+const bindings = new Map(prior?.bindings.map(w => [w.id, w.threadId]) ?? []), turns = prior?.turns ?? [], activeAdapters = new Set(), phases = prior?.phases ?? [];
 let runtime;
 const evidence = { root, passed: false, bindings: [], phases, turns, limitations: 'Real models and MCP in an isolated board. No centrally assigned roles or goal sequence; not production acceptance, Explorer visibility, or paper-scale replication.' };
 const save = () => { evidence.bindings = [...bindings].map(([id, threadId]) => ({ id, threadId })); writeFileSync(join(root, 'evidence.json'), JSON.stringify(evidence, null, 2)); };
 runtime = new EventRuntime(board, { databasePath: path, serverEntry: resolve('dist/server/stdio.js'), keepAlive: true,
   adapter: worker => {
+    activeAdapters.add(worker.id);
     const adapter = new CodexSession({ databasePath: path, serverEntry: resolve('dist/server/stdio.js'), workerId: worker.id, poolMember: true });
     return {
       open: async w => { const id = await adapter.open(w); bindings.set(w.id, id); save(); return id; },
@@ -42,7 +43,7 @@ runtime = new EventRuntime(board, { databasePath: path, serverEntry: resolve('di
         turn.completed = true; save();
       },
       inspect: (...args) => adapter.inspect(...args),
-      close: async () => { await adapter.close(); closed.push(worker.id); },
+      close: async () => { await adapter.close(); activeAdapters.delete(worker.id); },
     };
   },
 });
@@ -67,7 +68,14 @@ try {
     const deadline = Date.now() + 60000;
     while (runtime.workers.list().some(w => w.status === 'uncertain') && Date.now() < deadline) await delay(200);
     assert(runtime.workers.list().every(w => ['error', 'idle'].includes(w.status)), 'Inspect unresolved synthetic turns before any retry');
-    for (const w of runtime.workers.list()) if (w.status === 'error') runtime.update({ id: w.id, expectedVersion: w.version, enabled: true });
+    for (const w of runtime.workers.list()) {
+      if (w.status === 'idle' && w.deliveryId) {
+        const reader = new CodexSession({ databasePath: path, serverEntry: resolve('dist/server/stdio.js') });
+        try { assert(['completed', 'failed'].includes(await reader.inspect(w.threadId, w.turnId, w.deliveryId)), 'Retained delivery must be terminal before retiring its marker'); }
+        finally { await reader.close(); }
+      }
+      if (w.status === 'error' || w.deliveryId) runtime.update({ id: w.id, expectedVersion: w.version, enabled: true });
+    }
     runtime.controlPool({ expectedVersion: runtime.workers.pool().version, enabled: true });
     [first, second, third] = ['Synthetic numerical properties', 'Synthetic signed values', 'Synthetic label properties'].map(title => board.board().tasks.find(t => t.title === title));
     assert(first && second && third); phases.push({ phase: 'resumed-original-sessions-after-inspection', priorError: prior.error });
@@ -80,22 +88,27 @@ try {
   third = create('Synthetic label properties', 'Verify three labels, two distinct labels and repeated label a against the actual fixture.');
   phases.push({ phase: 'goals-added-during-real-turns', activeTurns: turns.filter(t => t.started && !t.completed).length, firstStatus: board.board().tasks.find(t => t.id === first.id).status }); save();
   }
-  const collaborated = await wait(s => s.workers.length === 3 && s.workers.every(w => w.status === 'idle') && board.board().tasks.every(t => t.status === 'in_review')
+  let collaborated = runtime.status();
+  if (!phases.some(p => p.phase === 'collaborated')) {
+  collaborated = await wait(s => s.workers.length === 3 && s.workers.every(w => w.status === 'idle') && board.board().tasks.every(t => t.status === 'in_review')
     && new Set(board.board().tasks.flatMap(t => t.participants)).size >= 2 && board.board().tasks.some(t => t.participants.length >= 2)
     && [first, second, third].every(g => board.board().entries.some(e => e.taskId === g.id && e.kind === 'FACT')), 'self-organized contributions across later goals');
   assert.equal(board.board().tasks.length, 3); assert.equal(board.board().resources.length, 0);
   for (const worker of collaborated.workers) for (const goal of [second, third]) assert(turns.some(t => t.workerId === worker.id && t.goalIds.includes(goal.id)), 'Every peer must receive each later goal');
-  const original = [...bindings];
   phases.push({ phase: 'collaborated', tasks: board.board().tasks, entries: board.board().entries }); save();
-  for (const goal of board.board().tasks) board.updateTask(goal.id, { expectedVersion: goal.version, status: 'done' });
-  await wait(s => s.pool?.state === 'completed' && s.workers.every(w => w.status === 'idle') && closed.length >= 3, 'automatic stop after all goals');
+  }
+  const original = [...bindings];
+  if (!phases.some(p => p.phase === 'completed')) {
+  for (const goal of board.board().tasks) if (goal.status !== 'done') board.updateTask(goal.id, { expectedVersion: goal.version, status: 'done' });
+  await wait(s => s.pool?.state === 'completed' && s.workers.every(w => w.status === 'idle' && !w.deliveryId) && activeAdapters.size === 0, 'automatic stop after all goals');
   phases.push({ phase: 'completed', bindings: [...bindings] }); save();
-  const fourth = create('Synthetic goal after completion', 'Re-check that fixture values sum to 8. Publish verified evidence and submit for human acceptance.');
+  }
+  const fourth = board.board().tasks.find(t => t.title === 'Synthetic goal after completion') ?? create('Synthetic goal after completion', 'Re-check that fixture values sum to 8. Publish verified evidence and submit for human acceptance.');
   await wait(s => s.workers.every(w => w.status === 'idle') && board.board().tasks.find(t => t.id === fourth.id)?.status === 'in_review'
     && collaborated.workers.every(w => turns.some(t => t.workerId === w.id && t.goalIds.includes(fourth.id))), 'new goal reuses every existing peer');
   assert.deepEqual([...bindings], original); assert.equal(board.board().tasks.length, 4); assert.equal(board.board().resources.length, 0);
   const latest = board.board().tasks.find(t => t.id === fourth.id); board.updateTask(fourth.id, { expectedVersion: latest.version, status: 'done' });
-  await wait(s => s.pool?.state === 'completed' && s.workers.every(w => w.status === 'idle'), 'final completion');
+  await wait(s => s.pool?.state === 'completed' && s.workers.every(w => w.status === 'idle' && !w.deliveryId) && activeAdapters.size === 0, 'final completion');
   evidence.passed = true; phases.push({ phase: 'reused-and-stopped', tasks: board.board().tasks }); save();
   console.log(JSON.stringify({ root, passed: true, bindings: evidence.bindings, goals: 4, phases: phases.map(p => p.phase) }));
 } catch (error) {

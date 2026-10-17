@@ -72,7 +72,8 @@ export class WorkerStore {
       if (worker.version !== data.expectedVersion) throw new AppError('VERSION_CONFLICT', 'Worker changed; read its current version', 409);
       // An ambiguous delivery must be inspected, never blindly replayed by toggling enable.
       if (data.enabled && ['running', 'uncertain'].includes(worker.status)) throw new AppError('DELIVERY_UNRESOLVED', 'Inspect the bound session before resuming this worker', 409);
-      return this.write({ ...worker, enabled: data.enabled, version: worker.version + 1, status: data.enabled ? 'idle' : worker.status, error: data.enabled ? '' : worker.error });
+      return this.write({ ...worker, enabled: data.enabled, version: worker.version + 1, status: data.enabled ? 'idle' : worker.status, error: data.enabled ? '' : worker.error,
+        ...(data.enabled ? { deliveryId: null, deliveryCursor: null, turnId: null, reconcileRequested: false } : {}) });
     });
   }
   requestReconcile(input: unknown) {
