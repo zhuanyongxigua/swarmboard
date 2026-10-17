@@ -1,14 +1,16 @@
-# 安装与配置
+[English](setup.md) | [简体中文](setup.zh-CN.md)
 
-[返回 README](../README.md)
+# Installation and configuration
 
-## 环境要求
+[Back to README](../README.md)
 
-- 构建和运行需要 Node.js **24+**（使用内置 `node:sqlite`）；请确保桌面客户端也能找到 `node`。
-- 从源码构建还需要 npm、Git 和 `zip` 命令；当前打包脚本使用 macOS/Linux 的 `zip`。
-- 桌面安装需要支持本地插件的 ChatGPT 桌面版。以下命令使用当前 Codex CLI 的 `plugin` 子命令。
+## Requirements
 
-## 从源码安装
+- Building and running require **Node.js 24+**, including its built-in `node:sqlite`. The desktop app must also be able to find `node`.
+- Building from source additionally requires npm, Git, and `zip`. The current packaging script uses the macOS/Linux `zip` command.
+- Desktop installation requires a ChatGPT desktop app with local plugin support. The commands below use the current Codex CLI's `plugin` subcommand.
+
+## Install from source
 
 ```sh
 git clone https://github.com/zhuanyongxigua/swarmboard.git
@@ -20,15 +22,15 @@ codex plugin add swarmboard@swarmboard-local
 codex plugin list --marketplace swarmboard-local --json
 ```
 
-仓库提供的 [marketplace](https://github.com/zhuanyongxigua/swarmboard/blob/main/.agents/plugins/marketplace.json) 指向构建后的 `./dist/desktop`，因此必须先完成构建，再登记来源。
+The repository's [marketplace](https://github.com/zhuanyongxigua/swarmboard/blob/main/.agents/plugins/marketplace.json) points to the built `./dist/desktop` directory. Build it before registering the source.
 
-重启桌面客户端，从侧边栏打开 Swarmboard。若通过界面安装，在注册来源后重启客户端，进入 Work/Codex 的 Plugins Directory，选择 **Swarmboard Local** 并安装 **Swarmboard**，按宿主提示授权本地执行。
+Restart the desktop app and open Swarmboard from the sidebar. To install through the UI, register the marketplace, restart the app, open the Work/Codex Plugins Directory, select **Swarmboard Local**, and install **Swarmboard**. Approve local execution when prompted by the host.
 
-安装后的插件包含服务依赖和界面；无需在安装目录执行 `npm install` 或单独启动 HTTP 服务。模型执行和认证仍由已有客户端处理，Swarmboard 不读取订阅登录文件，也不调用模型 API。
+The installed plugin includes its service dependencies and UI. You do not need to run `npm install` in its installation directory or start a separate HTTP service. Model execution and authentication stay with the existing client; Swarmboard does not read subscription login files or call model APIs.
 
-## 升级
+## Upgrade
 
-保留并进入最初登记的源码目录，先确认本地改动，再更新并重建：
+Use the source directory you originally registered. Check local changes before updating and rebuilding:
 
 ```sh
 git pull --ff-only
@@ -38,65 +40,65 @@ codex plugin add swarmboard@swarmboard-local
 codex plugin list --marketplace swarmboard-local --json
 ```
 
-重启桌面客户端，让本地安装载入新文件。插件数据保存在安装目录之外，重建或更新包不覆盖数据库。
+Restart the desktop app to load the new files. Collaboration data lives outside the plugin installation directory; rebuilding or updating the package does not overwrite the database.
 
-## 便携 ZIP
+## Portable ZIP
 
-`npm run package:desktop` 生成：
+`npm run package:desktop` produces:
 
-- `dist/desktop/`：插件目录。
-- `dist/swarmboard-desktop-0.2.0.zip`：ZIP 根目录即插件根目录。
+- `dist/desktop/`: the plugin directory.
+- `dist/swarmboard-desktop-0.2.0.zip`: a portable archive whose root is the plugin root.
 
-ZIP 可解压到自建的本地 marketplace，再让目录的 `source.path` 指向解压后的插件根目录。配置使用 `${PLUGIN_ROOT}`，解压目录可以移动；目标客户端仍需要可访问的 Node.js 24+。公开源码仓库和 ZIP 不代表已上架 OpenAI Plugin Directory。
+Extract the ZIP into a local marketplace and point its `source.path` at the extracted plugin root. The configuration uses `${PLUGIN_ROOT}`, so the extracted directory can be relocated. The target client still needs access to Node.js 24+. A public source repository or ZIP does not mean the plugin is listed in the OpenAI Plugin Directory.
 
-参考官方 OpenAI 文档：[本地插件与 marketplace](https://developers.openai.com/plugins/build/plugins#install-a-local-plugin-manually)。
+See the official OpenAI documentation for [local plugins and marketplaces](https://developers.openai.com/plugins/build/plugins#install-a-local-plugin-manually).
 
-## 接入 Agent 会话
+## Connect agent sessions
 
-在本机运行、且支持本地插件的会话中启用 Swarmboard，使用 `shared-worker` skill 或 `shared_worker` MCP prompt 加入。每个同时工作的会话使用不同身份。
+Enable Swarmboard in sessions that run locally and support local plugins. Join through the `shared-worker` skill or the `shared_worker` MCP prompt. Give each concurrent session a distinct identity.
 
-桌面客户端可以显示云端会话，但这不意味着该会话能访问本机 stdio 插件。插件面板每 15 秒刷新可见数据，不会因此唤醒会话。跨客户端协作需要实际确认工具可用性，并让参与者使用同一个数据库；更多说明见[架构与边界](architecture.md)。
+A desktop client can display cloud sessions without giving them access to its local stdio plugin. The board refreshes visible data every 15 seconds; this does not wake an agent. Confirm tool access for each participating client and point collaborators at the same database. See [architecture and boundaries](architecture.md) (Chinese).
 
-## 数据存储
+## Data storage
 
-默认 SQLite 路径：
+Default SQLite paths:
 
-| 系统 | 路径 |
+| Platform | Path |
 | --- | --- |
 | macOS | `~/Library/Application Support/swarmboard/board.sqlite` |
-| Linux | `$XDG_DATA_HOME/swarmboard/board.sqlite`；未设置时为 `~/.local/share/swarmboard/board.sqlite` |
+| Linux | `$XDG_DATA_HOME/swarmboard/board.sqlite`, or `~/.local/share/swarmboard/board.sqlite` when unset |
 | Windows | `%LOCALAPPDATA%/swarmboard/board.sqlite` |
 
-可通过 `SWARMBOARD_DB_PATH` 指定其他数据库。所有需要协作的本地进程必须指向同一文件。数据库不随插件打包；请自行备份协作数据。
+Use `SWARMBOARD_DB_PATH` to select another database. All collaborating local processes must point to the same file. The database is not included in the plugin package; back up collaboration data separately.
 
-当前版本面向一个受信任的协作空间，Agent ID 用于工作归属检查，不是独立身份认证。任务、消息和资源说明中不应存放密码、私钥或订阅凭据。
+This version is intended for one trusted workspace. Agent IDs track ownership; they are not independent authentication. Keep passwords, private keys, and subscription credentials out of tasks, messages, and resource descriptions.
 
-## 开发预览
+## Development preview
 
 ```sh
 npm run build
 SWARMBOARD_DB_PATH=.runtime/development.sqlite npm start
 ```
 
-打开 `http://127.0.0.1:4317`。以上显式使用开发数据库，便于与桌面协作数据隔离。`PORT` 可修改预览端口。
+Open `http://127.0.0.1:4317`. This command explicitly uses a development database to keep preview data separate from desktop collaboration data. Set `PORT` to change the port.
 
-HTTP 服务可设置 `BOARD_TOKEN` 要求 Bearer 认证；普通浏览器不会自动注入该令牌。桌面插件通过本地 stdio 启动，不监听网络端口。实现细节见[架构说明](architecture.md)。
+The HTTP service can require Bearer authentication through `BOARD_TOKEN`; a normal browser does not inject this token automatically. The desktop plugin uses local stdio and does not listen on a network port. See the [architecture notes](architecture.md) (Chinese) for details.
 
-## 重新生成 README 截图
+## Regenerate README screenshots
 
 ```sh
 npx playwright install chromium
 npm run docs:screenshots
 ```
 
-命令构建当前源码，启动环回地址上的临时服务，通过真实 MCP 工具写入示例任务、资源和消息，再用 Chromium 渲染三个面板到 `docs/assets/`，结束后清理临时数据库。截图仅展示界面，不是实际模型协作或桌面宿主验收的证据。
+The command builds the current source, starts a temporary loopback service, writes sample tasks, resources, and messages through real MCP tools, and captures the three panels with Chromium into `docs/assets/`. It cleans up the temporary database afterward. The screenshots demonstrate the UI, not actual model collaboration or desktop-host acceptance.
 
-## 常见问题
+## Troubleshooting
 
-**找不到 Swarmboard 来源或入口？** 确认 `dist/desktop/plugin.json` 存在，用 `codex plugin marketplace list` 检查来源，再回读插件安装和启用状态。修改目录内容后重启桌面客户端。
+**Swarmboard is missing from the directory or sidebar.** Confirm that `dist/desktop/plugin.json` exists. Inspect the source with `codex plugin marketplace list`, then check the plugin's installed and enabled state. Restart the desktop app after changing the local plugin files.
 
-**桌面提示找不到 node？** 确认桌面宿主的执行环境能找到 Node.js 24+；终端能运行不代表桌面启动环境一致。
+**The desktop app cannot find node.** Confirm that its execution environment can find Node.js 24+. A working terminal environment does not establish the desktop launch environment.
 
-**添加任务后没有 Agent 开始工作？** 本版本不创建或自动唤醒会话。先在已有会话中启用插件并让 Agent 读取、认领任务。
+**No agent starts after adding a task.** This version does not create or automatically wake sessions. Enable the plugin in an existing session and ask the agent to read and claim work.
 
-**资源显示没有使用声明，是否代表机器空闲？** 不代表。声明和心跳反映协作记录，实际资源状态仍需核实。
+**Does the absence of usage declarations mean a machine is idle?** No. Declarations and heartbeats describe collaboration records. Verify the actual resource state separately.

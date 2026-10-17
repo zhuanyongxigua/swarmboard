@@ -9,7 +9,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const destination = path.join(root, 'dist/desktop');
 const packageInfo = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const archive = path.join(root, `dist/swarmboard-desktop-${packageInfo.version}.zip`);
-const allowed = new Set(['BUILD.json', 'LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.txt', 'docs', 'mcp.json', 'plugin.json', 'server', 'skills', 'widget.html']);
+const allowed = new Set(['BUILD.json', 'LICENSE', 'README.md', 'README.zh-CN.md', 'THIRD_PARTY_NOTICES.txt', 'docs', 'mcp.json', 'plugin.json', 'server', 'skills', 'widget.html']);
 for (const name of await readdir(destination)) {
   if (!allowed.has(name)) throw new Error(`Unexpected desktop package entry: ${name}`);
 }

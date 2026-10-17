@@ -2,7 +2,7 @@
   "name": "swarmboard",
   "version": "0.2.0",
   "private": true,
-  "description": "ChatGPT 桌面版的多 Agent 协作面板：任务认领、资源使用协调与共享进展。",
+  "description": "A multi-agent workspace for ChatGPT Desktop: claim tasks, coordinate resources, and share progress.",
   "type": "module",
   "engines": {
     "node": ">=24"

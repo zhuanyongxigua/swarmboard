@@ -22,14 +22,14 @@ const result = await build({
   sourcemap: false,
   metafile: true,
 });
-for (const name of ['plugin.json', 'mcp.json', 'LICENSE', 'README.md']) {
+for (const name of ['plugin.json', 'mcp.json', 'LICENSE', 'README.md', 'README.zh-CN.md']) {
   await cp(path.join(root, name), path.join(destination, name));
 }
 await mkdir(path.join(destination, 'skills/shared-worker'), { recursive: true });
 await cp(path.join(root, 'skills/shared-worker/SKILL.md'), path.join(destination, 'skills/shared-worker/SKILL.md'));
 await cp(path.join(root, 'dist/widget.html'), path.join(destination, 'widget.html'));
 await mkdir(path.join(destination, 'docs'), { recursive: true });
-for (const name of ['architecture.md', 'testing.md', 'verification.md', 'setup.md']) {
+for (const name of ['architecture.md', 'testing.md', 'verification.md', 'setup.md', 'setup.zh-CN.md']) {
   await cp(path.join(root, 'docs', name), path.join(destination, 'docs', name));
 }
 // Keep the README image links usable in the portable plugin as well as on GitHub.
