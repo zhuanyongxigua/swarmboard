@@ -4,7 +4,7 @@ import { test, expect } from '@playwright/test';
 test('English preview supports real editing while Chinese remains the default', async ({ page, request }) => {
   await page.goto('/?lang=en');
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
-  await expect(page.getByRole('tab')).toHaveText(['Tasks', 'Resources', 'Shared board']);
+  await expect(page.getByRole('tab')).toHaveText(['Tasks', 'Collaboration environment', 'Shared board']);
   await expect(page.getByRole('heading', { name: 'To do', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Discuss a plan', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'New task', exact: true }).click();
@@ -18,7 +18,7 @@ test('English preview supports real editing while Chinese remains the default', 
   await page.getByRole('combobox', { name: 'Status', exact: true }).selectOption('in_review');
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect(page.locator('[data-status="in_review"]').getByRole('button', { name: `View task ${title}`, exact: true })).toBeVisible();
-  await page.getByRole('tab', { name: 'Resources', exact: true }).click();
+  await page.getByRole('tab', { name: 'Collaboration environment', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Add resource', exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'Shared board', exact: true }).click();
   await expect(page.getByText('Read-only', { exact: true })).toBeVisible();
@@ -28,7 +28,7 @@ test('English preview supports real editing while Chinese remains the default', 
   for (const url of ['/?lang=zh-CN', '/', '/?lang=unknown']) {
     await page.goto(url);
     await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
-    await expect(page.getByRole('tab')).toHaveText(['任务管理', '资源池', '共享面板']);
+    await expect(page.getByRole('tab')).toHaveText(['任务管理', '协作环境', '共享面板']);
     await expect(page.getByRole('button', { name: `查看任务 ${title}`, exact: true })).toBeVisible();
   }
   expect(await (await request.get('/api/board')).json()).toEqual(before);

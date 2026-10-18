@@ -59,6 +59,6 @@ test('keeps readable columns and keyboard navigation inside a narrow viewport', 
   await page.getByRole('button', { name: '查看任务 Layout: narrow viewport target', exact: true }).focus();
   await page.keyboard.press('Enter'); await expect(page.getByLabel('标题', { exact: true })).toHaveValue('Layout: narrow viewport target');
   await page.keyboard.press('Escape');
-  await page.getByRole('tab', { name: '资源池', exact: true }).click();
+  await page.getByRole('tab', { name: '协作环境', exact: true }).click();
   await expect(page.getByRole('button', { name: '添加资源', exact: true })).toBeVisible();
 });

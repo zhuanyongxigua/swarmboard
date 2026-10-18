@@ -4,11 +4,14 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from '@modelcontextprotocol/ext-apps';
 import './style.css';
+import { TaskProgress, type TaskProgressSnapshot } from './TaskProgress.js';
+import { PreferencesEditor, type Preferences, type PreferenceWrite } from './preferences-editor.js';
 import { appendNativeDraft, nativeConversationUnavailableReason, startNativeAutomationSetup, taskDiscussionPrompt } from './native-conversation.js';
 
 type Task = {
   id: string; title: string; description: string; acceptanceCriteria: string;
   status: string; assignee: string | null; participants?: string[]; version: number; updatedAt: string;
+  progress?: TaskProgressSnapshot | null;
 };
 type Resource = {
   id: string; name: string; kind: string; description: string;
@@ -26,7 +29,7 @@ type Usage = {
 type Board = { tasks: Task[]; resources: Resource[]; agents: Agent[]; usages: Usage[]; entries: Entry[]; cursor: number };
 type Editor = { type: 'task'; item?: Task } | { type: 'resource'; item?: Resource };
 type Tab = 'tasks' | 'resources' | 'shared';
-type RuntimeStatus = { mode: 'events'; ciWatches?: { id: string; pipelineId: number; sha: string; state: string; error: string }[]; pool?: { id?: string; size: number; maxSize?: number; workspacePath?: string; taskIds?: string[]; enabled: boolean; version: number; state: string; error: string } | null; activity?: { members: number; running: number; idle: number; state: string; executionMode: string; watchdog: { state: string; attempts: number; nextWakeAt: string | null } }; workers: { id: string; name: string; poolId?: string; enabled: boolean; status: string; error: string }[]; error: string };
+type RuntimeStatus = { mode: 'events'; ciWatches?: { id: string; pipelineId: number; sha: string; state: string; error: string }[]; pool?: { id?: string; size: number; minSize?: number; maxSize?: number; workspacePath?: string; taskIds?: string[]; enabled: boolean; version: number; state: string; error: string } | null; activity?: { members: number; running: number; idle: number; draining?: number; state: string; executionMode: string; watchdog: { state: string; attempts: number; nextWakeAt: string | null } }; workers: { id: string; name: string; poolId?: string; enabled: boolean; status: string; error: string }[]; error: string };
 
 
 const statuses: Record<string, string> = {
@@ -39,7 +42,7 @@ const entryKinds: Record<string, string> = {
 };
 const tabs: { id: Tab; title: string }[] = [
   { id: 'tasks', title: t("任务管理") },
-  { id: 'resources', title: t("资源池") },
+  { id: 'resources', title: t("协作环境") },
   { id: 'shared', title: t("共享面板") },
 ];
 let bridge: App | null = null;
@@ -76,6 +79,9 @@ async function operation<T>(name: string, args: Record<string, unknown> = {}): P
   if (name === 'runtime_read') url = '/api/runtime';
   if (name === 'pool_configure') { url = '/api/pool/configure'; method = 'POST'; body = args; }
   if (name === 'pool_control') { url = '/api/pool/control'; method = 'POST'; body = args; }
+  if (name === 'preferences_read') url = '/api/preferences';
+  if (name === 'preferences_write') { url = '/api/preferences'; method = 'PATCH'; body = args; }
+  if (name === 'pool_reduce') { url = '/api/pool/reduce'; method = 'POST'; body = args; }
   if (name === 'task_create') { url = '/api/tasks'; method = 'POST'; body = args; }
   if (name === 'task_update') { url = `/api/tasks/${encodeURIComponent(String(id))}`; method = 'PATCH'; body = patch; }
   if (name === 'resource_create') { url = '/api/resources'; method = 'POST'; body = args; }
@@ -88,6 +94,8 @@ async function operation<T>(name: string, args: Record<string, unknown> = {}): P
   if (!response.ok) throw operationError(data.error);
   return data as T;
 }
+function readPreferences() { return operation<Preferences>('preferences_read'); }
+function writePreferences(input: PreferenceWrite) { return operation<Preferences>('preferences_write', input); }
 function RichText({ value }: { value: string }) {
   return <>{value.split(/(https?:\/\/[^\s<>]+)/g).map((part, index) => /^https?:\/\//.test(part)
     ? <a key={index} href={part} target="_blank" rel="noopener noreferrer">{part}</a>
@@ -114,22 +122,48 @@ function Workspace() {
   const [automationError, setAutomationError] = useState('');
   const [eventRuntime, setEventRuntime] = useState<RuntimeStatus | null>(null);
   const [poolBusy, setPoolBusy] = useState(false);
+  const poolOperation = useRef(false);
+  const [poolFeedback, setPoolFeedback] = useState('');
+  const [poolError, setPoolError] = useState('');
   const memberLimit = eventRuntime?.pool?.maxSize ?? 8;
   const memberLimitReached = !!eventRuntime?.pool && eventRuntime.pool.size >= memberLimit;
   const memberLimitHint = t('已达成员上限（{limit} 人）').replace('{limit}', String(memberLimit));
+  const minimumMembers = eventRuntime?.pool?.minSize ?? 1;
+  const reduceDisabledReason = poolBusy ? t('正在更新成员，请稍候。')
+    : eventRuntime?.pool && eventRuntime.pool.size <= minimumMembers
+      ? t('至少保留 {limit} 名成员').replace('{limit}', String(minimumMembers))
+      : !eventRuntime?.pool?.enabled ? t('协作已停止，请先恢复协作。') : '';
   async function controlPool(enabled?: boolean) {
-    const pool = eventRuntime?.pool; if (!pool || poolBusy) return;
-    setPoolBusy(true);
+    const pool = eventRuntime?.pool; if (!pool || poolOperation.current) return;
+    poolOperation.current = true; setPoolBusy(true); setPoolFeedback(''); setPoolError('');
     try { await operation('pool_control', { expectedVersion: pool.version, enabled: enabled ?? !pool.enabled }); setEventRuntime(await operation<RuntimeStatus>('runtime_read')); }
     catch (error) { setError(message(error)); }
-    finally { setPoolBusy(false); }
+    finally { poolOperation.current = false; setPoolBusy(false); }
   }
   async function addPeer() {
-    const pool = eventRuntime?.pool; if (!pool?.workspacePath || poolBusy) return;
-    setPoolBusy(true);
+    const pool = eventRuntime?.pool; if (!pool?.workspacePath || poolOperation.current) return;
+    poolOperation.current = true; setPoolBusy(true); setPoolFeedback(''); setPoolError('');
     try { await operation('pool_configure', { workspacePath: pool.workspacePath, taskIds: pool.taskIds ?? [], size: pool.size + 1, maxSize: pool.maxSize, expectedVersion: pool.version }); setEventRuntime(await operation<RuntimeStatus>('runtime_read')); }
     catch (error) { setError(message(error)); setEventRuntime(await operation<RuntimeStatus>('runtime_read')); }
-    finally { setPoolBusy(false); }
+    finally { poolOperation.current = false; setPoolBusy(false); }
+  }
+  async function reducePeer() {
+    const pool = eventRuntime?.pool;
+    if (!pool?.workspacePath || poolOperation.current || reduceDisabledReason) return;
+    poolOperation.current = true; setPoolBusy(true); setPoolFeedback(''); setPoolError('');
+    try {
+      await operation('pool_reduce', { expectedVersion: pool.version, requestId: crypto.randomUUID() });
+      const current = await operation<RuntimeStatus>('runtime_read');
+      setEventRuntime(current);
+      const before = eventRuntime?.activity?.members;
+      setPoolFeedback(current.activity?.draining ? ''
+        : before !== undefined && current.activity?.members === before - 1
+          ? t('已减少一名成员。') : t('减少请求已接受，等待人数状态确认。'));
+    } catch (error) {
+      setPoolError(error instanceof OperationError ? message(error) : t('减少结果尚未确认，请刷新核对实际人数后再操作。'));
+      // Reading after an error is safe; never replay an unconfirmed mutation.
+      try { setEventRuntime(await operation<RuntimeStatus>('runtime_read')); } catch { /* Preserve the last confirmed count. */ }
+    } finally { poolOperation.current = false; setPoolBusy(false); }
   }
   const automationBusy = useRef(false);
   const [expandedResource, setExpandedResource] = useState<string | null>(null);
@@ -350,8 +384,14 @@ function Workspace() {
           <button type="button" className="secondary" disabled={poolBusy || !eventRuntime.pool.enabled || memberLimitReached} aria-describedby={memberLimitReached ? 'member-limit-tooltip' : undefined} onClick={() => void addPeer()}>{t('增加成员')}</button>
           {memberLimitReached ? <span id="member-limit-tooltip" className="member-limit-tooltip" role="tooltip">{memberLimitHint}</span> : null}
         </span> : null}
+        {eventRuntime.pool.workspacePath ? <span className="add-peer-control" tabIndex={reduceDisabledReason ? 0 : undefined}>
+          <button type="button" className="secondary" disabled={Boolean(reduceDisabledReason)} aria-describedby={reduceDisabledReason ? 'member-minimum-tooltip' : undefined} onClick={() => void reducePeer()}>{t('减少成员')}</button>
+          {reduceDisabledReason ? <span id="member-minimum-tooltip" className="member-limit-tooltip" role="tooltip">{reduceDisabledReason}</span> : null}
+        </span> : null}
         <button type="button" className="secondary" disabled={poolBusy} onClick={() => void controlPool()}>{t(eventRuntime.pool.enabled ? '停止协作' : '恢复协作')}</button></div>
         : <span>{t('事件协作')} · {eventRuntime.workers.filter(w => w.enabled).length} {t('个工作会话')}</span>}
+      {eventRuntime.activity?.draining ? <p className="subtle">{eventRuntime.activity.draining} {t('个正在退出')} · {t('正在等待成员安全收尾或核清，实际人数尚未减少。')}</p> : poolFeedback ? <p className="subtle">{poolFeedback}</p> : null}
+      {poolError ? <p role="alert">{poolError}</p> : null}
       {eventRuntime.ciWatches?.some(w => w.state === 'watching') ? <p className="subtle">{t('等待 CI 结果，完成后通知全体成员')}</p> : null}
       {eventRuntime.ciWatches?.filter(w => w.state === 'error').map(w => <p role="alert" key={w.id}>CI #{w.pipelineId}: {w.error}</p>)}
       {eventRuntime.activity?.watchdog.nextWakeAt ? <p className="subtle">{t('下次空闲检查')} {time(eventRuntime.activity.watchdog.nextWakeAt, true)}</p> : null}
@@ -383,9 +423,13 @@ function Workspace() {
               event.dataTransfer.effectAllowed = 'move';
             }} dragEnd={() => { dragged.current = null; }}
             dragOver={event => { if (dragged.current) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} drop={drop} />
-            : tab === 'resources' ? <ResourcePool board={board} usages={usages} name={name} stale={stale}
+            : tab === 'resources' ? <div className="collaboration-environment"><section aria-labelledby="available-resources-heading">
+              <h2 id="available-resources-heading" className="environment-heading">{t('可用资源')}</h2>
+              <ResourcePool board={board} usages={usages} name={name} stale={stale}
               expanded={expandedResource} toggle={id => setExpandedResource(current => current === id ? null : id)}
-              edit={resource => setEditor({ type: 'resource', item: resource })} />
+              edit={resource => setEditor({ type: 'resource', item: resource })} /></section>
+              <PreferencesEditor read={readPreferences} write={writePreferences} refreshKey={board.cursor} />
+            </div>
               : <SharedFeed board={board} name={name} openTask={openTask} openResource={openResource} />}
     </main>
     <div className="sr-only" aria-live="polite">{announcement}</div>
@@ -417,17 +461,22 @@ function TaskBoard({ board, usages, name, stale, movingId, open, dragStart, drag
           {tasks.length ? tasks.map(task => {
             const related = [...new Set(usages.filter(usage => usage.taskId === task.id).map(usage => usage.resourceId))]
               .map(id => board.resources.find(resource => resource.id === id)?.name ?? id);
-            return <button type="button" key={task.id} className="task-card" draggable={movingId === null}
-              data-task-id={task.id} aria-label={`${t('查看任务')} ${task.title}`} disabled={movingId === task.id}
-              onClick={() => open(task)} onDragStart={event => dragStart(event, task)} onDragEnd={dragEnd}>
-              <span className="task-title" title={task.title}>{task.title}</span>
-              {task.description && <span className="task-excerpt">{task.description.replace(/\b[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}\b/gi, shortId)}</span>}
+            return <div key={task.id} className="task-card" draggable={movingId === null}
+              data-card-id={task.id} aria-busy={movingId === task.id}
+              onDragStart={event => dragStart(event, task)} onDragEnd={dragEnd}>
+              <button type="button" className="task-open" data-task-id={task.id}
+                aria-label={`${t('查看任务')} ${task.title}`} disabled={movingId === task.id} onClick={() => open(task)}>
+                <span className="task-title" title={task.title}>{task.title}</span>
+                {task.status !== 'in_progress' && task.description && <span className="task-excerpt">{task.description.replace(/\b[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}\b/gi, shortId)}</span>}
+              </button>
+              {task.status === 'in_progress' && <TaskProgress taskTitle={task.title} progress={task.progress} />}
               <span className="task-footer">
                 <span title={participants(task).map(name).join(', ')}>{participants(task).length ? `${t('参与者')} ${participants(task).length}` : t("未认领")}
                   {participants(task).length > 0 && participants(task).every(stale) && <span className="stale"> {t("· 最近未报告")}</span>}</span>
-                {related.length > 0 && <span title={related.join(locale === 'en' ? ', ' : '、')}>{related.join(locale === 'en' ? ', ' : '、')}</span>}
+                <time dateTime={task.updatedAt} title={time(task.updatedAt, true)}>{time(task.updatedAt)}</time>
               </span>
-            </button>;
+              {related.length > 0 && <span className="task-related" title={related.join(locale === 'en' ? ', ' : '、')}>{related.join(locale === 'en' ? ', ' : '、')}</span>}
+            </div>;
           }) : <p className="column-empty">{t("暂无任务")}</p>}
         </div>
       </section>;

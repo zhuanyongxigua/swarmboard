@@ -45,6 +45,17 @@ describe('event worker MCP management', () => {
       expect((revoked.structuredContent as { grants: unknown[] }).grants).toEqual([]);
     } finally { await session.close(); await peer.close(); }
   });
+  it('accepts a versioned dual-harness grant (zcode+dsh) through the host tool while members stay read-only', async () => {
+    const goal = store.createTask({ title: 'Dual harness host goal' });
+    const pool = runtime.configurePool({ workspacePath: tmpdir(), size: 1 });
+    const configured = await call('task_execution_configure', { taskId: goal.id, expectedVersion: 0, projectPath: tmpdir(), executionWorkspace: tmpdir(), externalHarnesses: ['zcode', 'dsh'], monitoring: true, enabled: true });
+    expect(configured.isError, JSON.stringify(configured.content)).not.toBe(true);
+    expect(data(configured)).toMatchObject({ externalHarnesses: ['zcode', 'dsh'], version: 1, enabled: true });
+    const duplicate = await call('task_execution_configure', { taskId: goal.id, expectedVersion: 1, projectPath: tmpdir(), executionWorkspace: tmpdir(), externalHarnesses: ['dsh', 'dsh'], monitoring: true, enabled: true });
+    expect(duplicate.isError).toBe(true); expect(JSON.stringify(duplicate.content)).toContain('at most once');
+    expect(data(await call('runtime_read')).executionGrants[0]).toMatchObject({ externalHarnesses: ['zcode', 'dsh'] });
+    expect(runtime.workers.pool()).toMatchObject({ id: pool.id, workspacePath: pool.workspacePath }); // grant does not rebind the pool
+  });
   it('configures a default three-peer organization without creating or assigning human tasks', async () => {
     const pool = data(await call('pool_configure', { workspacePath: tmpdir() }));
     expect(pool).toMatchObject({ size: 3, enabled: true, memberIds: [], state: 'ready' });

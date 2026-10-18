@@ -23,14 +23,17 @@ export async function startStdioServer(options: StdioOptions = {}) {
   const databasePath = options.dbPath ?? defaultDatabasePath();
   const store = new Store(databasePath);
   const collaboratorId = process.env.SWARMBOARD_COLLABORATOR_ID;
+  // Management mode exposes host-only tools without watchers, ownership or
+  // deliveries, so the human host can configure beside a live organization.
+  const managementOnly = process.env.SWARMBOARD_MANAGEMENT_ONLY === '1';
   const sidecar = databasePath === ':memory:' ? ':memory:' : databasePath + '.runtime.sqlite';
   // A collaborator child never runs the event runtime: Swarmboard does not
   // wake external harnesses, and file/database access alone proves no wakeup.
   const collaboratorState = collaboratorId ? new CollaboratorStore(sidecar) : undefined;
   if (collaboratorId) collaboratorState!.get(collaboratorId); // unknown id = startup error
   const role = collaboratorState && collaboratorId ? collaboratorRole(store, collaboratorState, collaboratorId) : undefined;
-  const runtime = collaboratorId || process.env.SWARMBOARD_DISABLE_RUNTIME === '1' ? undefined : new EventRuntime(store, { databasePath, serverEntry: fileURLToPath(import.meta.url), backend, autoPool: true });
-  runtime?.start();
+  const runtime = collaboratorId || process.env.SWARMBOARD_DISABLE_RUNTIME === '1' ? undefined : new EventRuntime(store, { databasePath, serverEntry: fileURLToPath(import.meta.url), backend, autoPool: !managementOnly, managementOnly });
+  if (!managementOnly) runtime?.start();
   const poolMember = process.env.SWARMBOARD_POOL_MEMBER === '1';
   const workerId = process.env.SWARMBOARD_WORKER_ID;
   const peerState = poolMember && workerId ? new WorkerStore(sidecar) : undefined;

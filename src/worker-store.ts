@@ -27,6 +27,8 @@ export interface Worker {
   reconcileRequested?: boolean;
   deliveryId: string | null; deliveryCursor: number | null; turnId: string | null;
   deliveryPhase?: 'opening' | 'submitting' | 'running';
+  retirement?: { state: 'draining' | 'retired'; previousEnabled: boolean; requestedAt: string; requestId: string;
+    resolution?: { deliveryId: string | null; outcome: 'failed' | 'not-submitted'; observedAt: string } };
 }
 export function processAlive(pid: number) {
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
@@ -48,6 +50,7 @@ export class WorkerStore {
       CREATE TABLE IF NOT EXISTS worker_pool(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS pool_liveness(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS peer_requests(poolId TEXT,workerId TEXT,requestId TEXT,reason TEXT,PRIMARY KEY(poolId,workerId,requestId));
+      CREATE TABLE IF NOT EXISTS member_retirement_requests(poolId TEXT,requestId TEXT,memberId TEXT NOT NULL,expectedVersion INTEGER NOT NULL,PRIMARY KEY(poolId,requestId));
     `);
   }
   close() { this.db.close(); }
@@ -81,9 +84,11 @@ export class WorkerStore {
     return this.transaction(() => {
       const worker = this.get(data.id);
       if (worker.version !== data.expectedVersion) throw new AppError('VERSION_CONFLICT', 'Worker changed; read its current version', 409);
+      if (data.enabled && worker.retirement) throw new AppError('MEMBER_RETIRING', 'Restore membership through an explicit capacity increase before enabling this worker', 409);
       // An ambiguous delivery must be inspected, never blindly replayed by toggling enable.
       if (data.enabled && ['running', 'uncertain'].includes(worker.status)) throw new AppError('DELIVERY_UNRESOLVED', 'Inspect the bound session before resuming this worker', 409);
       return this.write({ ...worker, enabled: data.enabled, version: worker.version + 1, status: data.enabled ? 'idle' : worker.status, error: data.enabled ? '' : worker.error,
+        retirement: worker.retirement && !data.enabled ? { ...worker.retirement, previousEnabled: false } : worker.retirement,
         ...(data.enabled ? { deliveryId: null, deliveryCursor: null, turnId: null, deliveryPhase: undefined, reconcileRequested: false } : {}) });
     });
   }
@@ -92,8 +97,8 @@ export class WorkerStore {
     return this.transaction(() => {
       const worker = this.get(data.id);
       if (worker.version !== data.expectedVersion) throw new AppError('VERSION_CONFLICT', 'Worker changed; read its current version', 409);
-      if (worker.status !== 'uncertain') throw new AppError('NOT_UNCERTAIN', 'Only an uncertain delivery needs reconciliation', 409);
-      return this.write({ ...worker, reconcileRequested: true, version: worker.version + 1 });
+      if (worker.status !== 'uncertain' && !(worker.retirement?.state === 'draining' && worker.status === 'error')) throw new AppError('NOT_UNCERTAIN', 'Only an uncertain delivery needs reconciliation', 409);
+      return this.write({ ...worker, status: 'uncertain', reconcileRequested: true, version: worker.version + 1 });
     });
   }
   private write(worker: Worker) { this.db.prepare('UPDATE workers SET data=? WHERE id=?').run(JSON.stringify(worker), worker.id); return worker; }
@@ -102,7 +107,11 @@ export class WorkerStore {
     // committed by another MCP process after the delivery snapshot was read.
     return this.transaction(() => {
       const current = this.get(worker.id);
+      // No delivery remains after retirement. Late native checkpoints must not
+      // recreate an unresolved turn or change its preserved history.
+      if (current.retirement?.state === 'retired') return current;
       return this.write({ ...worker, enabled: current.enabled, version: current.version,
+        retirement: current.retirement,
         error: current.version !== worker.version && !current.enabled ? current.error || worker.error : worker.error,
         name: current.name, workspacePath: current.workspacePath, taskIds: current.taskIds,
         reconcileRequested: current.version !== worker.version ? current.reconcileRequested : worker.reconcileRequested });
@@ -111,7 +120,8 @@ export class WorkerStore {
   pauseForApproval(id: string) {
     return this.transaction(() => {
       const current = this.get(id);
-      return this.write({ ...current, enabled: false, version: current.version + 1, error: approvalPauseMessage });
+      return this.write({ ...current, enabled: false, version: current.version + 1, error: approvalPauseMessage,
+        retirement: current.retirement ? { ...current.retirement, previousEnabled: false } : undefined });
     });
   }
   acquire(token: string, pid: number, alive = processAlive) {
@@ -130,6 +140,65 @@ export class WorkerStore {
     if (!row) return null;
     const pool = JSON.parse(String(row.data)) as Pool;
     return { ...pool, maxSize: pool.maxSize ?? Math.max(pool.size, 8) };
+  }
+  /** Capacity state only. The host selects a member and verifies resource
+   *  handoff before completion; this primitive is not an agent-facing tool. */
+  requestMemberRetirement(input: unknown) {
+    const data = parse(memberRetirementSchema, input);
+    return this.transaction(() => {
+      const pool = this.pool();
+      if (!pool) throw new AppError('NOT_FOUND', 'Organization not found', 404);
+      const prior = this.db.prepare('SELECT memberId,expectedVersion FROM member_retirement_requests WHERE poolId=? AND requestId=?').get(pool.id, data.requestId);
+      if (prior) {
+        if (prior.memberId !== data.memberId || prior.expectedVersion !== data.expectedVersion) throw new AppError('REQUEST_CONFLICT', 'Retirement request identity changed', 409);
+        return { pool, member: this.get(data.memberId), requestId: data.requestId };
+      }
+      if (pool.version !== data.expectedVersion) throw new AppError('VERSION_CONFLICT', 'Pool changed; read runtime_read', 409);
+      if (!pool.enabled || ['stopping', 'stopped', 'completed'].includes(pool.state)) throw new AppError('POOL_STOPPED', 'The organization is stopped', 409);
+      if (pool.size <= 1) throw new AppError('MEMBER_MINIMUM', 'Keep at least one member in the organization', 409);
+      const member = this.get(data.memberId);
+      if (!pool.memberIds.includes(member.id) || member.poolId !== pool.id || member.retirement) throw new AppError('NOT_MEMBER', 'Select a current member without a pending retirement', 409);
+      const next = this.write({ ...member, enabled: false, version: member.version + 1,
+        retirement: { state: 'draining', previousEnabled: member.enabled, requestedAt: new Date().toISOString(), requestId: data.requestId } });
+      this.db.prepare('INSERT INTO member_retirement_requests VALUES(?,?,?,?)').run(pool.id, data.requestId, member.id, data.expectedVersion);
+      return { pool: this.savePool({ ...pool, size: pool.size - 1, version: pool.version + 1 }), member: next, requestId: data.requestId };
+    });
+  }
+  memberRetirementRequest(requestId: string) {
+    const pool = this.pool();
+    return pool ? this.db.prepare('SELECT memberId,expectedVersion FROM member_retirement_requests WHERE poolId=? AND requestId=?').get(pool.id, requestId) as { memberId: string; expectedVersion: number } | undefined : undefined;
+  }
+  resolveRetirementDelivery(id: string, deliveryId: string | null, outcome: 'failed' | 'not-submitted') {
+    return this.transaction(() => {
+      const member = this.get(id);
+      if (member.retirement?.state !== 'draining') return member;
+      if (member.status !== 'error' || member.deliveryId !== deliveryId) throw new AppError('DELIVERY_CHANGED', 'Native delivery changed during retirement inspection', 409);
+      return this.write({ ...member, retirement: { ...member.retirement, resolution: { deliveryId, outcome, observedAt: new Date().toISOString() } } });
+    });
+  }
+  /** Called only after the host has verified resource/claim handoff. Unknown
+   *  native deliveries retain their checkpoints and cannot complete here. */
+  completeMemberRetirement(id: string) {
+    return this.transaction(() => {
+      const pool = this.pool(), member = this.get(id);
+      if (!pool || member.poolId !== pool.id || !member.retirement) throw new AppError('NOT_RETIRING', 'Member has no retirement request', 409);
+      if (member.retirement.state === 'retired') return pool;
+      const resolvedFailure = member.status === 'error' && member.retirement.resolution?.deliveryId === member.deliveryId;
+      if (['running', 'uncertain'].includes(member.status) || !resolvedFailure && (member.deliveryId || member.turnId || member.deliveryPhase || member.deliveryCursor !== null)) throw new AppError('DELIVERY_UNRESOLVED', 'Inspect and finish the native delivery before retirement', 409);
+      this.write({ ...member, enabled: false, version: member.version + 1, retirement: { ...member.retirement, state: 'retired' } });
+      return this.savePool({ ...pool, memberIds: pool.memberIds.filter(memberId => memberId !== id), version: pool.version + 1 });
+    });
+  }
+  restoreRetiredMember(id: string) {
+    return this.transaction(() => {
+      const pool = this.pool(), member = this.get(id);
+      if (!pool || !pool.enabled || pool.memberIds.length >= pool.size) throw new AppError('MEMBER_CAPACITY', 'An explicit capacity increase is required', 409);
+      if (member.poolId !== pool.id || member.retirement?.state !== 'retired' || pool.memberIds.includes(id)) throw new AppError('NOT_RETIRED', 'Member has not completed retirement', 409);
+      const { retirement, ...original } = member;
+      const restored = this.write({ ...original, enabled: retirement.previousEnabled && member.status === 'idle', version: member.version + 1 });
+      this.savePool({ ...pool, memberIds: [...pool.memberIds, id], version: pool.version + 1 });
+      return restored;
+    });
   }
   requestPeer(input: unknown) {
     const data = parse(peerRequestSchema, input);
@@ -176,6 +245,7 @@ export class WorkerStore {
       const current = this.pool();
       if (!current || current.id !== pool.id || current.workspacePath !== pool.workspacePath) throw new AppError('VERSION_CONFLICT', 'Pool configuration changed', 409);
       return this.savePool({ ...pool, enabled: current.enabled, version: current.version,
+        memberIds: current.version === pool.version ? pool.memberIds : current.memberIds,
         size: current.size, maxSize: current.maxSize, taskIds: current.taskIds, scopeRefresh: current.scopeRefresh,
         state: current.version === pool.version ? pool.state : current.state });
     });
@@ -190,5 +260,7 @@ export interface Pool {
 export const poolSchemas = {
   configure: z.object({ workspacePath: z.string().max(4096), size: z.number().int().min(1).max(128).default(3), maxSize: z.number().int().min(1).max(128).optional(), taskIds: z.array(z.string().min(1).max(128)).max(200).optional(), expectedVersion: z.number().int().nonnegative().default(0) }).strict(),
   control: z.object({ expectedVersion: z.number().int().positive(), enabled: z.boolean() }).strict(),
+  reduce: z.object({ expectedVersion: z.number().int().positive(), requestId: z.string().trim().min(1).max(128) }).strict(),
 };
 export const peerRequestSchema = z.object({ workerId: z.string().min(1), requestId: z.string().min(1).max(128), reason: z.string().trim().min(1).max(2000) }).strict();
+export const memberRetirementSchema = z.object({ memberId: z.string().min(1), expectedVersion: z.number().int().positive(), requestId: z.string().trim().min(1).max(128) }).strict();

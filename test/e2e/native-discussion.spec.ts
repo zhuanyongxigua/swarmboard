@@ -14,7 +14,7 @@ const originalDraft = 'Keep my existing native draft.';
 
 async function simulatedHost(page: Page, mode: HostMode = 'supported') {
   const client = new Client({ name: 'native-draft-contract-host', version: '1.0.0' });
-  await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:4318/mcp')));
+  await client.connect(new StreamableHTTPClientTransport(new URL('/mcp', test.info().project.use.baseURL)));
   // This suite tests task-context handoff; default automatic startup has its own fixture suite.
   async function seedTool(name: string, args: Record<string, unknown> = {}) {
     const result = await client.callTool({ name, arguments: args });
@@ -34,6 +34,7 @@ async function simulatedHost(page: Page, mode: HostMode = 'supported') {
   let forbiddenApiCalls = 0;
   await page.exposeFunction('hostCallTool', async (params: { name: string; arguments?: Record<string, unknown> }) => {
     calls.push(params.name);
+    if (params.name === 'preferences_read') return { structuredContent: { boardId: 'native-fixture', text: '', version: 0, source: null, updatedAt: null } };
     return client.callTool(params);
   });
   await page.route('**/api/**', async route => { forbiddenApiCalls++; await route.abort(); });
@@ -75,9 +76,9 @@ test('discussion appends a native draft only after a click and leaves persisted 
   const before = await (await request.get('/api/board')).json();
   const host = await simulatedHost(page);
   try {
-    await expect(host.frame.getByRole('tab')).toHaveText(['任务管理', '资源池', '共享面板']);
+    await expect(host.frame.getByRole('tab')).toHaveText(['任务管理', '协作环境', '共享面板']);
     await host.frame.getByRole('button', { name: '刷新面板', exact: true }).click();
-    await host.frame.getByRole('tab', { name: '资源池', exact: true }).click();
+    await host.frame.getByRole('tab', { name: '协作环境', exact: true }).click();
     await host.frame.getByRole('tab', { name: '共享面板', exact: true }).click();
     await expect(host.frame.getByRole('textbox')).toHaveCount(0);
     await host.frame.getByRole('tab', { name: '任务管理', exact: true }).click();
@@ -101,7 +102,7 @@ test('discussion appends a native draft only after a click and leaves persisted 
     expect(text).toContain(task.acceptanceCriteria);
     expect(text).not.toContain('Unsaved changes must stay out of the native draft');
     expect(await host.submitted()).toEqual([]);
-    expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read' || name === 'automation_ensure' || name === 'runtime_read')).toBe(true);
+    expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read' || name === 'automation_ensure' || name === 'runtime_read' || name === 'preferences_read')).toBe(true);
     expect(host.forbiddenApiCalls()).toBe(0);
     expect(await (await request.get('/api/board')).json()).toEqual(before);
   } finally { await host.close(); }
@@ -117,7 +118,7 @@ test('a host without the native draft extension keeps the board usable without o
     await expect(host.frame.getByRole('button', { name: '讨论此任务', exact: true })).toBeDisabled();
     await expect(host.frame.getByText('当前宿主不支持原生对话草稿追加，请在支持此功能的 ChatGPT 桌面端打开。', { exact: false })).toBeVisible();
     await host.frame.getByRole('button', { name: '关闭编辑窗口', exact: true }).click();
-    await host.frame.getByRole('tab', { name: '资源池', exact: true }).click();
+    await host.frame.getByRole('tab', { name: '协作环境', exact: true }).click();
     await expect(host.frame.getByRole('button', { name: '添加资源', exact: true })).toBeEnabled();
     await host.frame.getByRole('tab', { name: '共享面板', exact: true }).click();
     await expect(host.frame.getByRole('textbox')).toHaveCount(0);
@@ -138,11 +139,11 @@ test('mobile host cannot append a draft even when it advertises native messaging
     await expect(host.frame.getByText('移动端暂不支持追加原生对话草稿，请在 ChatGPT 桌面端打开。', { exact: false })).toBeVisible();
     await host.frame.getByRole('button', { name: '关闭编辑窗口', exact: true }).click();
     await host.frame.getByRole('button', { name: '刷新面板', exact: true }).click();
-    await host.frame.getByRole('tab', { name: '资源池', exact: true }).click();
+    await host.frame.getByRole('tab', { name: '协作环境', exact: true }).click();
     expect(await host.messages()).toEqual([]);
     expect(await host.submitted()).toEqual([]);
     await expect(page.getByLabel('Simulated native composer')).toHaveValue(originalDraft);
-    expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read' || name === 'automation_ensure' || name === 'runtime_read')).toBe(true);
+    expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read' || name === 'automation_ensure' || name === 'runtime_read' || name === 'preferences_read')).toBe(true);
     expect(host.forbiddenApiCalls()).toBe(0);
     expect(await (await request.get('/api/board')).json()).toEqual(before);
   } finally { await host.close(); }
@@ -163,7 +164,7 @@ for (const mode of ['denied', 'rpc-error'] as const) {
       expect((await host.messages())[0]).toMatchObject({ _meta: { 'openai/message': { target: 'active', send: false } } });
       expect(await host.submitted()).toEqual([]);
       await expect(page.getByLabel('Simulated native composer')).toHaveValue(originalDraft);
-      expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read' || name === 'automation_ensure' || name === 'runtime_read')).toBe(true);
+      expect(host.calls.every(name => name === 'board_read' || name === 'context_read' || name === 'automation_read' || name === 'automation_ensure' || name === 'runtime_read' || name === 'preferences_read')).toBe(true);
       expect(host.forbiddenApiCalls()).toBe(0);
       expect(await (await request.get('/api/board')).json()).toEqual(before);
     } finally { await host.close(); }
@@ -172,7 +173,7 @@ for (const mode of ['denied', 'rpc-error'] as const) {
 
 test('standalone browser keeps a compact header and shows native availability only in task details', async ({ page, request }) => {
   await page.goto('/');
-  await expect(page.getByRole('tab')).toHaveText(['任务管理', '资源池', '共享面板']);
+  await expect(page.getByRole('tab')).toHaveText(['任务管理', '协作环境', '共享面板']);
   await expect(page.getByRole('button', { name: '讨论方案', exact: true })).toHaveCount(0);
   await expect(page.locator('.native-conversation-note')).toHaveCount(0);
   await request.post('/api/tasks', { data: { title: 'Standalone task discussion' } });

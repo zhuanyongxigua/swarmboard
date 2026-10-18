@@ -59,10 +59,17 @@ a { color: inherit; text-underline-offset: 3px; overflow-wrap: anywhere; }
 .column-heading h2 { margin: 0; font-size: 13px; font-weight: 500; line-height: 1.5; }
 .column-heading > span { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .column-list { display: flex; flex-direction: column; flex: 1; gap: 10px; min-height: 0; padding: 10px; border-radius: 8px; background: var(--soft); overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin; }
-.task-card { width: 100%; text-align: left; display: block; flex-shrink: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px; cursor: grab; min-width: 0; }
+.task-card { position: relative; width: 100%; text-align: left; display: block; flex-shrink: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px; cursor: grab; min-width: 0; }
 .task-card:hover { border-color: var(--muted); }
 .task-card:active { cursor: grabbing; }
-.task-card:disabled { cursor: wait; }
+.task-card[aria-busy="true"] { cursor: wait; }
+.task-open { display: block; width: 100%; padding: 0; border: 0; background: transparent; text-align: left; cursor: inherit; }
+.task-open::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.task-open:focus-visible { outline: 0; }
+.task-open:focus-visible::after { outline: 2px solid var(--focus); outline-offset: 3px; }
+.task-card > .task-progress { position: relative; z-index: 1; }
+.task-related { display: block; margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
+.task-footer time { flex-shrink: 0; }
 .task-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 13px; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
 .task-excerpt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 8px; font-size: 12px; line-height: 1.6; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .task-footer { margin-top: 14px; display: flex; gap: 8px; justify-content: space-between; align-items: center; font-size: 11px; color: var(--muted); }
@@ -150,7 +157,18 @@ dialog::backdrop { background: light-dark(#0005, #0008); }
 }
 
 .automation-notice { margin: 0; padding: 7px 22px; color: var(--muted); font-size: 11px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
-.pool-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.environment-heading { margin: 18px 22px 12px; font-size: 16px; }
+.preferences-panel { margin: 24px 22px; padding-top: 20px; border-top: 1px solid var(--line); }
+.preferences-panel h2 { font-size: 16px; }
+.preferences-panel label { display: block; margin: 14px 0 6px; }
+.preferences-panel textarea { box-sizing: border-box; width: 100%; resize: vertical; padding: 10px; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 5px; }
+.preferences-panel select { font: inherit; max-width: 100%; padding: 6px; }
+.preference-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.preference-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+@media (pointer: coarse) { .preferences-panel textarea, .preferences-panel select { font-size: 16px; } }
+.pool-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pool-controls > span:first-child { flex: 1 1 300px; }
+.pool-controls > button { flex-shrink: 0; }
 .add-peer-control { position: relative; display: inline-flex; flex-shrink: 0; }
 .add-peer-control[tabindex] { cursor: not-allowed; }
 .add-peer-control:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }

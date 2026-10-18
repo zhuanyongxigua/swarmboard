@@ -1,0 +1,22 @@
+.task-progress { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 11px; min-width: 0; }
+.task-progress-trigger { display: block; width: 100%; padding: 0; border: 0; background: transparent; text-align: left; cursor: help; }
+.task-progress-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; color: var(--muted); font-size: 11px; }
+.task-progress-percent { font-size: 17px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.task-progress-percent small { font-size: 10px; margin-left: 1px; }
+.task-progress-unknown { font-size: 13px; font-weight: 500; }
+.task-progress-track { display: block; height: 4px; margin-top: 7px; border-radius: 3px; overflow: hidden; background: light-dark(#eceef4, #343749); }
+.task-progress-fill { display: block; height: 100%; background: light-dark(#4967d9, #8b9fff); border-radius: inherit; }
+.task-progress-stage { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: 10px; color: var(--muted); }
+.task-progress-stage > :first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-progress-stage > :last-child { flex-shrink: 0; }
+.task-progress[data-progress-state="waiting"] .task-progress-fill { background: light-dark(#b68b45, #d6b477); }
+.task-progress[data-progress-state="waiting"] .task-progress-track { background: light-dark(#f1ede5, #413b2f); }
+.task-progress[data-progress-state="waiting"] .task-progress-percent,
+.task-progress[data-progress-state="waiting"] .task-progress-stage > :last-child { color: light-dark(#856429, #e4c58f); }
+.task-progress[data-progress-state="unknown"] .task-progress-track { background: var(--line); }
+.task-progress-evidence { position: fixed; z-index: 50; width: min(310px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--text); box-shadow: 0 5px 20px #0002; font-size: 12px; overflow-wrap: anywhere; }
+.task-progress-evidence > strong { font-size: 12px; font-weight: 600; }
+.task-progress-evidence dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px 10px; margin: 10px 0; }
+.task-progress-evidence dt { color: var(--muted); }
+.task-progress-evidence dd { margin: 0; white-space: pre-wrap; }
+.task-progress-evidence p { margin: 10px 0 0; font-size: 11px; color: var(--muted); }
