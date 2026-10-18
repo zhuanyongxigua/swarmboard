@@ -11,8 +11,9 @@ import { WorkerPool } from './worker-pool.js';
 import { PoolLiveness } from './pool-liveness.js';
 import { PipelineEvents, type PipelineReader } from './pipeline-events.js';
 import { ExecutionGrants } from './execution-grants.js';
+import { notificationDelay, notificationSettings, type NotificationOptions } from './notification-batch.js';
 
-export interface RuntimeOptions {
+export interface RuntimeOptions extends NotificationOptions {
   databasePath: string; serverEntry: string;
   adapter?: (worker: Worker) => SessionAdapter;
   fallbackMs?: number; debounceMs?: number; keepAlive?: boolean; autoPool?: boolean;
@@ -31,11 +32,15 @@ export class EventRuntime {
   private fileWatchers = new Map<string, FSWatcher>();
   private fallback?: ReturnType<typeof setInterval>;
   private debounce?: ReturnType<typeof setTimeout>;
+  private batchWake?: ReturnType<typeof setTimeout>;
+  private notificationPolicy;
+  private nextBatchWakeAt: number | null = null;
   private running = new Map<string, Promise<void>>();
   private adapters = new Map<string, SessionAdapter>();
   private closed = false;
   private lastError = '';
   constructor(readonly board: Store, readonly options: RuntimeOptions) {
+    this.notificationPolicy = notificationSettings(options);
     this.workers = new WorkerStore(options.databasePath === ':memory:' ? ':memory:' : options.databasePath + '.runtime.sqlite');
     this.pool = new WorkerPool(this.workers, board, options.databasePath);
     this.grants = new ExecutionGrants(board, this.workers);
@@ -92,7 +97,7 @@ export class EventRuntime {
   status() {
     const activity = this.liveness.activity(this.workers.pool());
     if (activity.state === 'idle' && this.ci.hasPending()) activity.state = 'waiting';
-    return { mode: 'events' as const, owner: this.workers.owner(), workers: this.workers.list(), pool: this.workers.pool(), activity, executionGrants: this.grants.list(), ciWatches: this.ci.list(), error: this.lastError };
+    return { mode: 'events' as const, owner: this.workers.owner(), workers: this.workers.list(), pool: this.workers.pool(), activity, executionGrants: this.grants.list(), ciWatches: this.ci.list(), notifications: { ...this.notificationPolicy, nextWakeAt: this.nextBatchWakeAt }, error: this.lastError };
   }
   configureExecutionGrant(input: unknown) {
     const grant = this.grants.configure(input);
@@ -169,6 +174,7 @@ export class EventRuntime {
   }
   private async scanOnce() {
     if (this.closed || !this.hasWorkers() || !this.workers.acquire(this.token, process.pid)) return;
+    clearTimeout(this.batchWake); this.nextBatchWakeAt = null;
     await this.ci.poll(this.options.now?.() ?? Date.now());
     if (this.closed || !this.workers.owns(this.token)) return;
     const before = this.workers.pool();
@@ -210,9 +216,22 @@ export class EventRuntime {
         if (worker.poolId) { const adapter = this.adapters.get(worker.id); if (adapter) { await adapter.close(); this.adapters.delete(worker.id); } }
         continue;
       }
+      const now = this.options.now?.() ?? Date.now();
+      const delay = notificationDelay(batch.events, this.notificationPolicy, now, batch.hasMore);
+      if (delay > 0) {
+        // Leave the delivery cursor unchanged. Recompute from committed event
+        // timestamps after restart; notifications never acknowledge execution.
+        const deadline = now + delay;
+        if (this.nextBatchWakeAt === null || deadline < this.nextBatchWakeAt) this.nextBatchWakeAt = deadline;
+        continue;
+      }
       const delivering = this.workers.save({ ...worker, status: 'running', deliveryId: randomUUID(), deliveryCursor: batch.cursor, turnId: null, deliveryPhase: 'opening', error: '' });
       const promise = this.deliver(delivering, batch.events).finally(() => { this.running.delete(worker.id); this.notify(); });
       this.running.set(worker.id, promise);
+    }
+    if (this.nextBatchWakeAt !== null) {
+      this.batchWake = setTimeout(() => { this.nextBatchWakeAt = null; this.notify(); }, Math.max(1, this.nextBatchWakeAt - (this.options.now?.() ?? Date.now())));
+      if (!this.options.keepAlive) this.batchWake.unref();
     }
   }
   private session(worker: Worker) {
@@ -276,7 +295,7 @@ export class EventRuntime {
     }
   }
   async close() {
-    this.closed = true; this.watcher?.close(); for (const watcher of this.fileWatchers.values()) watcher.close(); clearInterval(this.fallback); clearTimeout(this.debounce);
+    this.closed = true; this.watcher?.close(); for (const watcher of this.fileWatchers.values()) watcher.close(); clearInterval(this.fallback); clearTimeout(this.debounce); clearTimeout(this.batchWake);
     await Promise.all([...this.adapters.values()].map(adapter => adapter.close()));
     await this.scanning;
     await Promise.all(this.running.values());

@@ -28,9 +28,9 @@ board.publishSystemEntryOnce = input => {
 const waiting = new Map<string, () => void>();
 const send = (value: unknown) => process.send?.(value);
 const wait = (key: string) => new Promise<void>(resolve => { waiting.set(key, resolve); });
-const runtime = new EventRuntime(board, {
+const runtime = new EventRuntime(board, { notificationBatchMs: Number(process.env.SWARMBOARD_TEST_BATCH_MS ?? 0),
   databasePath, serverEntry: 'never-start-a-real-model', keepAlive: true, fallbackMs: 100, debounceMs: 5,
-  now: () => now, idleMs: 100,
+  now: process.env.SWARMBOARD_TEST_BATCH_MS ? () => Date.now() : () => now, idleMs: process.env.SWARMBOARD_TEST_BATCH_MS ? 60000 : 100,
   pipelineReader: async watch => ({ sha: watch.sha, status: 'success' }),
   adapter: worker => ({
     open: async (w: Worker) => {
@@ -85,7 +85,7 @@ process.on('message', (message: { id: number; command: string; gate?: Gate; outc
     else if (message.command === 'drain') { gate = 'none'; for (const finish of waiting.values()) finish(); waiting.clear(); }
     else if (message.command === 'scan') await runtime.scan();
     else if (message.command === 'close') { await runtime.close(); ledger.close(); board.close(); }
-    send({ id: message.id, result: message.command === 'stats' ? { scans } : true });
+    send({ id: message.id, result: message.command === 'stats' ? { scans, notifications: runtime.status().notifications } : true });
     if (message.command === 'close') process.disconnect?.();
   })().catch(error => send({ id: message.id, error: String(error) }));
 });

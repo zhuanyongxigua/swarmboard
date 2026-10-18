@@ -9,7 +9,7 @@ import { EventRuntime } from '../../src/event-runtime.js';
 let store: Store, runtime: EventRuntime, client: Client, server: ReturnType<typeof createMcpServer>;
 beforeEach(async () => {
   store = new Store();
-  runtime = new EventRuntime(store, { databasePath: ':memory:', serverEntry: 'unused', adapter: () => ({ open: async () => 'test-thread', run: async () => {}, close: async () => {} }) });
+  runtime = new EventRuntime(store, { notificationBatchMs: 0, databasePath: ':memory:', serverEntry: 'unused', adapter: () => ({ open: async () => 'test-thread', run: async () => {}, close: async () => {} }) });
   server = createMcpServer(store, 'unused', runtime);
   const [a,b] = InMemoryTransport.createLinkedPair();
   await server.connect(a); client = new Client({ name: 'event-worker-test', version: '1' }); await client.connect(b);

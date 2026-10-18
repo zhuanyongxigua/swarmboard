@@ -26,10 +26,10 @@ class ProcessPeer {
   stderr = '';
   sequence = 0;
   pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
-  constructor(path: string, ledger: string) {
+  constructor(path: string, ledger: string, batchMs?: number) {
     this.child = fork(resolve('test/fixtures/runtime-process.ts'), [path, ledger], {
       execArgv: ['--import', 'tsx'], stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
-      env: { PATH: process.env.PATH, HOME: process.env.HOME, SWARMBOARD_DISABLE_RUNTIME: '1' },
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, SWARMBOARD_DISABLE_RUNTIME: '1', ...(batchMs === undefined ? {} : { SWARMBOARD_TEST_BATCH_MS: String(batchMs) }) },
     });
     this.child.stderr!.on('data', chunk => { this.stderr += chunk.toString(); });
     this.child.on('message', (message: any) => {
@@ -64,7 +64,7 @@ function fixture(pool = false) {
   else { const w = workers.register({ name: 'Synthetic worker', workspacePath: dir }); board.registerAgent({ agentId: w.id, name: w.name }); }
   board.registerAgent({ agentId: 'synthetic-peer', name: 'Synthetic peer' });
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }), () => { ledger.close(); workers.close(); board.close(); });
-  const spawn = async () => { const peer = new ProcessPeer(path, ledgerPath); cleanups.push(() => peer.kill()); return peer.ready(); };
+  const spawn = async (batchMs?: number) => { const peer = new ProcessPeer(path, ledgerPath, batchMs); cleanups.push(() => peer.kill()); return peer.ready(); };
   const effects = () => ledger.prepare('SELECT workerId,eventId,deliveryId,pid FROM effects ORDER BY rowid').all();
   const count = () => Number(ledger.prepare('SELECT count(*) AS n FROM submissions').get()!.n);
   const idle = () => workers.list().every(w => w.status === 'idle');
@@ -73,6 +73,23 @@ function fixture(pool = false) {
 }
 
 describe.skipIf(process.platform === 'win32')('real process fault recovery', () => {
+  it('survives actual SIGKILL during a notification window and delivers each queued event once to every original peer', async () => {
+    const f = fixture(true), goal = f.board.createTask({ title: 'Goal for notification recovery' });
+    const first = await f.spawn(1500); await first.request('start');
+    await until(f.count, n => n === 3, 'initial peers'); await until(f.idle, Boolean, 'initial idle');
+    const original = f.workers.list().map(w => [w.id, w.threadId, w.cursor]);
+    const event = f.board.publishEntry({ agentId: 'synthetic-peer', taskId: goal.id, kind: 'FACT', summary: 'Evidence before a real crash' });
+    await first.request('scan');
+    expect((await first.request('stats')).notifications.nextWakeAt).not.toBeNull();
+    expect(f.count()).toBe(3);
+    await first.kill();
+    expect(f.workers.list().map(w => [w.id, w.threadId, w.cursor])).toEqual(original);
+    const second = await f.spawn(1500); await second.request('start');
+    await until(f.count, n => n === 6, 'recovered batch'); await until(f.idle, Boolean, 'recovered idle');
+    expect(f.effects().filter(e => e.eventId === event.id).map(e => e.workerId).sort()).toEqual(original.map(w => w[0]).sort());
+    expect(f.workers.list().map(w => [w.id, w.threadId])).toEqual(original.map(w => w.slice(0, 2)));
+    await second.request('scan'); expect(f.count()).toBe(6);
+  });
   it('recovers an actual SIGKILL during resume without advancing events or duplicating a model submission', async () => {
     const f = fixture(); f.board.createTask({ title: 'Synthetic goal' });
     const original = f.workers.list()[0]!;

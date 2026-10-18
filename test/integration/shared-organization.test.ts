@@ -12,7 +12,7 @@ afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn()
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'swarmboard-organization-')), board = new Store(join(dir, 'board.sqlite'));
   const turns: { id: string; thread: string; prompt: string }[] = [];
-  const runtime = new EventRuntime(board, { databasePath: join(dir, 'board.sqlite'), serverEntry: 'unused', adapter: w => ({
+  const runtime = new EventRuntime(board, { notificationBatchMs: 0, databasePath: join(dir, 'board.sqlite'), serverEntry: 'unused', adapter: w => ({
     open: async worker => worker.threadId ?? 'thread-' + worker.id,
     run: async (thread, prompt) => { turns.push({ id: w.id, thread, prompt }); }, close: async () => {},
   }) });
