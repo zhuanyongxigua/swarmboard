@@ -16,7 +16,7 @@ function fixture(adapter?: SessionAdapter) {
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, 'board.sqlite'), store = new Store(path);
   cleanups.push(() => store.close());
-  const runtime = new EventRuntime(store, { databasePath: path, serverEntry: 'unused', adapter: adapter ? () => adapter : undefined, fallbackMs: 60000, debounceMs: 5 });
+  const runtime = new EventRuntime(store, { notificationBatchMs: 0, databasePath: path, serverEntry: 'unused', adapter: adapter ? () => adapter : undefined, fallbackMs: 60000, debounceMs: 5 });
   cleanups.push(() => runtime.close());
   return { dir, path, store, runtime };
 }

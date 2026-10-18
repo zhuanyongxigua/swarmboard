@@ -13,7 +13,7 @@ function fixture() {
   const board = new Store(path), turns: { id: string; prompt: string; thread: string }[] = [];
   let now = 1000, held = false;
   const releases: (() => void)[] = [];
-  const make = () => new EventRuntime(board, { databasePath: path, serverEntry: 'unused', now: () => now, idleMs: 100,
+  const make = () => new EventRuntime(board, { notificationBatchMs: 0, databasePath: path, serverEntry: 'unused', now: () => now, idleMs: 100,
     adapter: worker => ({ open: async w => w.threadId ?? 'thread-' + w.id,
       run: async (thread, prompt) => { turns.push({ id: worker.id, prompt, thread }); if (held) await new Promise<void>(r => releases.push(r)); },
       close: async () => {},

@@ -14,7 +14,7 @@ function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'swarmboard-pool-')); const board = new Store(join(dir, 'board.sqlite'));
   const turns: { worker: string; prompt: string; threadId: string }[] = [], closed: string[] = [], finishes = new Map<string, () => void>();
   let hold = false;
-  const runtime = new EventRuntime(board, { databasePath: join(dir, 'board.sqlite'), serverEntry: 'unused', adapter: worker => ({
+  const runtime = new EventRuntime(board, { notificationBatchMs: 0, databasePath: join(dir, 'board.sqlite'), serverEntry: 'unused', adapter: worker => ({
     open: async w => w.threadId ?? 'thread-' + w.id,
     run: async (threadId, prompt, started) => { turns.push({ worker: worker.id, prompt, threadId }); started('turn-' + turns.length); if (hold) await new Promise<void>(resolve => { finishes.set(worker.id, resolve); }); },
     close: async () => { closed.push(worker.id); },
@@ -129,7 +129,7 @@ describe('equal peer organization', () => {
     await expect(f.runtime.scan()).rejects.toThrow('Publication acknowledgement lost');expect(f.runtime.workers.pool()?.scopeRefresh).toBeDefined();fault.mockRestore();
     const bindings=f.runtime.workers.list().map(w=>[w.id,w.threadId]);
     cleanups.pop(); await f.runtime.close();
-    const restored=new EventRuntime(f.board,{databasePath:join(f.dir,'board.sqlite'),serverEntry:'unused',adapter:w=>({open:async()=>w.threadId!,run:async()=>{},close:async()=>{}})});
+    const restored=new EventRuntime(f.board, { notificationBatchMs: 0,databasePath:join(f.dir,'board.sqlite'),serverEntry:'unused',adapter:w=>({open:async()=>w.threadId!,run:async()=>{},close:async()=>{}})});
     cleanups.push(()=>restored.close());await restored.scan();
     await vi.waitFor(()=>expect(restored.workers.list().every(w=>w.status==='idle')).toBe(true));
     expect(restored.workers.pool()?.scopeRefresh).toBeUndefined();

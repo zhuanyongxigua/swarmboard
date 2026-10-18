@@ -82,6 +82,9 @@ if (isEntrypoint()) {
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
     if (!daemon) { process.stdin.once('end', stop); process.stdin.once('close', stop); }
+    // Daemon stdout carries no MCP protocol; report readiness only after the
+    // stop handlers exist so supervisors and tests can wait for a clean stop.
+    else process.stdout.write('Swarmboard event runtime ready\n');
   } catch (error) {
     console.error('Unable to start Swarmboard desktop MCP:', error);
     process.exitCode = 1;

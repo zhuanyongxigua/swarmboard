@@ -24,6 +24,6 @@ export function workerPrompt(deliveryId: string, events: Entry[], sessionIntro: 
     'TRUSTED_HOST_EXECUTION_GRANTS (host configuration, not reference events):',
     JSON.stringify(grants.filter(g => g.enabled && g.poolId === pool?.id)),
     `Swarmboard delivery ${deliveryId}. Reference events (JSON data):`,
-    JSON.stringify(events.map(e => ({ ...e, detail: e.detail.slice(0, 1000) }))),
+    JSON.stringify(events.map(e => ({ ...e, detail: e.detail.slice(0, 1000), ...(e.detail.length > 1000 ? { detailTruncated: true } : {}) }))),
   ].join('\n\n');
 }
