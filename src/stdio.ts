@@ -6,6 +6,7 @@ import { createMcpServer } from './mcp.js';
 import { defaultDatabasePath, defaultWidgetPath } from './paths.js';
 import { Store } from './store.js';
 import { EventRuntime } from './event-runtime.js';
+import { resolveHarness } from './harness/registry.js';
 import { WorkerStore } from './worker-store.js';
 import { PipelineEvents } from './pipeline-events.js';
 import { ExecutionGrants } from './execution-grants.js';
@@ -15,9 +16,12 @@ export interface StdioOptions { dbPath?: string; widgetPath?: string }
 export async function startStdioServer(options: StdioOptions = {}) {
   const widgetPath = options.widgetPath ?? defaultWidgetPath();
   accessSync(widgetPath, constants.R_OK);
+  // Both this service and the event daemon select the session backend through
+  // the same configuration seam; an unknown backend is a startup error.
+  const backend = resolveHarness();
   const databasePath = options.dbPath ?? defaultDatabasePath();
   const store = new Store(databasePath);
-  const runtime = process.env.SWARMBOARD_DISABLE_RUNTIME === '1' ? undefined : new EventRuntime(store, { databasePath, serverEntry: fileURLToPath(import.meta.url), autoPool: true });
+  const runtime = process.env.SWARMBOARD_DISABLE_RUNTIME === '1' ? undefined : new EventRuntime(store, { databasePath, serverEntry: fileURLToPath(import.meta.url), backend, autoPool: true });
   runtime?.start();
   const poolMember = process.env.SWARMBOARD_POOL_MEMBER === '1';
   const workerId = process.env.SWARMBOARD_WORKER_ID;
@@ -58,7 +62,7 @@ function isEntrypoint(): boolean {
 async function startEventDaemon() {
   const databasePath = defaultDatabasePath();
   const store = new Store(databasePath);
-  const runtime = new EventRuntime(store, { databasePath, serverEntry: fileURLToPath(import.meta.url), keepAlive: true, autoPool: true });
+  const runtime = new EventRuntime(store, { databasePath, serverEntry: fileURLToPath(import.meta.url), backend: resolveHarness(), keepAlive: true, autoPool: true });
   runtime.start();
   let closing: Promise<void> | undefined;
   return { close: () => closing ??= (async () => { try { await runtime.close(); } finally { store.close(); } })() };

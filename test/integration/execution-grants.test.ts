@@ -8,6 +8,7 @@ import { Store } from '../../src/store.js';
 import { WorkerStore } from '../../src/worker-store.js';
 import { ExecutionGrants } from '../../src/execution-grants.js';
 import { workerPrompt } from '../../src/worker-prompt.js';
+import { codexBackend } from '../../src/codex-session.js';
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const f of cleanups.splice(0).reverse()) f(); });
 it('persists a versioned grant for one goal, retains pool bindings and excludes terminal goals', () => {
@@ -24,7 +25,7 @@ it('persists a versioned grant for one goal, retains pool bindings and excludes 
   workers.close(); workers = new WorkerStore(join(dir, 'runtime.sqlite')); grants = new ExecutionGrants(board, workers);
   expect(grants.active()).toHaveLength(1);
   const member = workers.register({ name: 'Equal peer', workspacePath: dir });
-  const prompt = workerPrompt(member, 'delivery', [], workers.pool(), grants.active());
+  const prompt = workerPrompt('delivery', [], codexBackend.sessionIntro(member), workers.pool(), grants.active());
   expect(prompt).toContain('TRUSTED_HOST_EXECUTION_GRANTS');
   expect(prompt).toContain(goal.id); expect(prompt).toContain('zcode');
   expect(prompt).toContain('do not bypass');

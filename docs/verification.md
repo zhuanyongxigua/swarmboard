@@ -1,3 +1,11 @@
+# Harness 协作内核与适配层（2026-10-18）
+
+- 协作内核不再依赖具体 harness：`SessionAdapter`/`UncertainDelivery`/能力声明移入 `src/harness/contract.ts`，`src/event-runtime.ts` 经注册表取得后端；官方 Codex 适配完整接回新契约，现网默认行为不变。`SWARMBOARD_HARNESS` 是唯一配置缝，桌面 stdio 与事件守护进程共用，未知后端以 `UNKNOWN_HARNESS` 启动报错，绝不静默回落。新增确定性 echo 参考后端（`deterministic: true`，无模型，sidecar 台账）证明扩展不改内核。
+- Worker 持久化 `backendId`：历史数据读取时归一为 `codex`（非破坏迁移，暂停/授权/检查点保留）；已绑定会话标识的 worker 在后端不匹配时拒绝投递与核查并保持事件排队，人工审批暂停原因保留；未绑定标识的新 worker 可改绑。`runtime_read`/`/api/runtime` 如实返回所选后端与能力。
+- 新增共享契约套件（echo 与 Codex 经 model-free 协议夹具跑同一用例）、注册表单测、真实守护进程装配测试（echo/codex 干净启停、未知配置退出码 1）、真实 SQLite 的后端身份集成回归（拒绝跨后端、暂停保留、台账核查恢复不重放）与便携包真实子进程选择 echo/拒绝未知后端测试。协议夹具增加记录已启动 turnId 的加法修改，原断言全部保留。
+- 完整 `npm run check` 通过：lint、typecheck、构建、便携打包、**182/182** 服务/协议/集成（覆盖率门槛未降低；`src/harness` 行/语句/函数 100%、分支 96.96%，codex-session 行 100%、event-runtime 行 94.44%）与 **28/28** Chromium。DSH 侧交付基于本机安装的 `@deepseek-ai/dsh@0.1.1-rc.2` 与 dsh-pilot 实测兼容报告的映射、样例骨架与缺口清单（`docs/harness-adapters.md`），未实现、未运行真实 DSH 驱动。
+- 隔离看板真实 Codex 最小闭环 `node scripts/verify-harness-loop.mjs --live` **passed=true**：注册表默认 codex 后端经官方桌面捆绑 CLI **0.163.0-alpha.10.2** 建立真实会话 threadId `01a14ce8-f2e4-7fe1-8df9-eaf3d70a5101`，45 秒完成一个真实模型回合；模型按目标经 swarmboard_worker MCP 注册身份并发布 `LOOP_CLAIM` 事实（核对隔离工作区 AGENTS.md fixture），游标推进到 3。临时数据库/工作区已清理，凭据未读取。该证据不覆盖 DSH、审批流程或业务看板。
+
 # 0.8.4 单任务宿主执行授权（2026-10-18）
 
 - 修复“任务卡已转述人类授权，但原会话仍只有源项目/INTERNAL_ONLY 边界”的启动缺口。根 MCP 提供版本化 task_execution_configure；授权与目标和组织绑定，保存在运行时 sidecar，包含项目读取范围、独立执行目录、明确的 Zcode 和监控许可。保持默认策略、原组织与会话不变。

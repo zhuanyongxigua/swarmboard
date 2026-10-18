@@ -5,7 +5,8 @@ import { basename, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Store, type Entry } from './store.js';
 import { WorkerStore, approvalPauseMessage, type Worker } from './worker-store.js';
-import { CodexSession, UncertainDelivery, type SessionAdapter } from './codex-session.js';
+import { UncertainDelivery, type HarnessBackend, type SessionAdapter } from './harness/contract.js';
+import { resolveHarness } from './harness/registry.js';
 import { workerPrompt } from './worker-prompt.js';
 import { WorkerPool } from './worker-pool.js';
 import { PoolLiveness } from './pool-liveness.js';
@@ -15,6 +16,7 @@ import { ExecutionGrants } from './execution-grants.js';
 export interface RuntimeOptions {
   databasePath: string; serverEntry: string;
   adapter?: (worker: Worker) => SessionAdapter;
+  backend?: HarnessBackend;
   fallbackMs?: number; debounceMs?: number; keepAlive?: boolean; autoPool?: boolean;
   now?: () => number; idleMs?: number;
   pipelineReader?: PipelineReader;
@@ -35,8 +37,12 @@ export class EventRuntime {
   private adapters = new Map<string, SessionAdapter>();
   private closed = false;
   private lastError = '';
+  private readonly backend: HarnessBackend;
+  private readonly statePath: string;
   constructor(readonly board: Store, readonly options: RuntimeOptions) {
-    this.workers = new WorkerStore(options.databasePath === ':memory:' ? ':memory:' : options.databasePath + '.runtime.sqlite');
+    this.statePath = options.databasePath === ':memory:' ? ':memory:' : options.databasePath + '.runtime.sqlite';
+    this.backend = options.backend ?? resolveHarness();
+    this.workers = new WorkerStore(this.statePath);
     this.pool = new WorkerPool(this.workers, board, options.databasePath);
     this.grants = new ExecutionGrants(board, this.workers);
     this.liveness = new PoolLiveness(board, this.workers, options.idleMs ?? 10 * 60 * 1000);
@@ -92,7 +98,9 @@ export class EventRuntime {
   status() {
     const activity = this.liveness.activity(this.workers.pool());
     if (activity.state === 'idle' && this.ci.hasPending()) activity.state = 'waiting';
-    return { mode: 'events' as const, owner: this.workers.owner(), workers: this.workers.list(), pool: this.workers.pool(), activity, executionGrants: this.grants.list(), ciWatches: this.ci.list(), error: this.lastError };
+    return { mode: 'events' as const,
+      backend: { id: this.backend.id, displayName: this.backend.displayName, deterministic: this.backend.deterministic === true, capabilities: this.backend.capabilities },
+      owner: this.workers.owner(), workers: this.workers.list(), pool: this.workers.pool(), activity, executionGrants: this.grants.list(), ciWatches: this.ci.list(), error: this.lastError };
   }
   configureExecutionGrant(input: unknown) {
     const grant = this.grants.configure(input);
@@ -185,6 +193,15 @@ export class EventRuntime {
         if (adapter) { await adapter.close(); this.adapters.delete(worker.id); }
         continue;
       }
+      // Session/turn identifiers from another backend must never be silently
+      // consumed here; only an unbound worker (no identifiers yet) may rebind.
+      if (worker.backendId !== this.backend.id && (worker.threadId || worker.turnId || worker.deliveryId)) {
+        const adapter = this.adapters.get(worker.id);
+        if (adapter) { await adapter.close(); this.adapters.delete(worker.id); }
+        if (worker.status !== 'error') this.workers.save({ ...worker, status: 'error',
+          error: this.recoveryError(worker, `Bound session belongs to harness backend '${worker.backendId}', not the configured '${this.backend.id}'; restore that backend configuration before reusing this worker's session identifiers`) });
+        continue;
+      }
       if (worker.status === 'error' || this.running.has(worker.id)) continue;
       if (worker.status === 'running' || worker.status === 'uncertain') {
         if (worker.status === 'running' || worker.reconcileRequested) {
@@ -210,15 +227,15 @@ export class EventRuntime {
         if (worker.poolId) { const adapter = this.adapters.get(worker.id); if (adapter) { await adapter.close(); this.adapters.delete(worker.id); } }
         continue;
       }
-      const delivering = this.workers.save({ ...worker, status: 'running', deliveryId: randomUUID(), deliveryCursor: batch.cursor, turnId: null, deliveryPhase: 'opening', error: '' });
+      const delivering = this.workers.save({ ...worker, status: 'running', deliveryId: randomUUID(), deliveryCursor: batch.cursor, turnId: null, deliveryPhase: 'opening', error: '', backendId: this.backend.id });
       const promise = this.deliver(delivering, batch.events).finally(() => { this.running.delete(worker.id); this.notify(); });
       this.running.set(worker.id, promise);
     }
   }
   private session(worker: Worker) {
-    const adapter = this.adapters.get(worker.id) ?? this.options.adapter?.(worker) ?? new CodexSession({
-      databasePath: this.options.databasePath, serverEntry: this.options.serverEntry,
-      workerId: worker.id, poolMember: !!worker.poolId,
+    const adapter = this.adapters.get(worker.id) ?? this.options.adapter?.(worker) ?? this.backend.createSession({
+      databasePath: this.options.databasePath, statePath: this.statePath, serverEntry: this.options.serverEntry,
+      worker,
       onApproval: () => { this.workers.pauseForApproval(worker.id); },
     });
     this.adapters.set(worker.id, adapter); return adapter;
@@ -262,7 +279,7 @@ export class EventRuntime {
       if (!current.enabled || poolStopped) { this.workers.save({ ...current, threadId, status: 'idle', deliveryId: null, deliveryCursor: null, turnId: null, deliveryPhase: undefined }); return; }
       this.workers.save({ ...current, threadId, deliveryPhase: 'submitting' });
       submitted = true;
-      await adapter.run(threadId, workerPrompt(worker, worker.deliveryId!, events, worker.poolId ? this.workers.pool() : null, worker.poolId ? this.grants.active() : []), turnId => {
+      await adapter.run(threadId, workerPrompt(worker.deliveryId!, events, this.backend.sessionIntro(worker), worker.poolId ? this.workers.pool() : null, worker.poolId ? this.grants.active() : []), turnId => {
         const latest = this.workers.get(worker.id); this.workers.save({ ...latest, turnId, deliveryPhase: 'running' });
       });
       if (!this.workers.owns(this.token)) return;

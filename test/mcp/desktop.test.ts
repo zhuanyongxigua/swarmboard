@@ -152,6 +152,30 @@ describe('portable desktop plugin', () => {
     expect(output.stdout).toBe('');
     expect(output.stderr).toContain('SWARMBOARD_NODE must point to a working Node.js 24+');
   });
+  it('selects the configured reference backend in the packaged runtime and refuses unknown backends', async () => {
+    // The reference backend is statically part of the portable artifact, not a
+    // source-only module that would silently vanish after packaging.
+    expect(readFileSync(join(pluginRoot, 'server/swarmboard.mjs'), 'utf8')).toContain('Echo reference backend');
+    const database = join(root, 'echo-backend', 'board.sqlite');
+    const client = await connect(database, work, { SWARMBOARD_HARNESS: 'echo' });
+    try {
+      interface RuntimeReport { backend: { id: string; deterministic: boolean; capabilities: { inspection: boolean; approvalSignals: boolean } }; workers: { id: string; status: string; backendId: string; threadId: string | null }[] }
+      const initial = await call<RuntimeReport>(client, 'runtime_read');
+      expect(initial.backend).toEqual({ id: 'echo', displayName: expect.any(String), deterministic: true, capabilities: { inspection: true, approvalSignals: false } });
+      const worker = await call<{ id: string }>(client, 'worker_register', { name: 'Echo peer', workspacePath: work });
+      await call(client, 'task_create', { title: 'Reference backend goal' });
+      let settled: RuntimeReport['workers'][number] | undefined;
+      for (let attempt = 0; attempt < 100 && !settled; attempt++) {
+        const current = await call<RuntimeReport>(client, 'runtime_read');
+        settled = current.workers.find(item => item.id === worker.id && item.status === 'idle' && item.threadId);
+        if (!settled) await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      expect(settled, 'echo delivery did not settle in the packaged child').toBeDefined();
+      expect(settled).toMatchObject({ backendId: 'echo' });
+      expect(settled!.threadId).toMatch(/^echo-thread-/);
+    } finally { await close(client); }
+    await expect(connect(join(root, 'unknown-backend', 'board.sqlite'), work, { SWARMBOARD_HARNESS: 'nope' })).rejects.toThrow(/Unknown harness backend/);
+  });
   it('discovers native entrypoints and UI, collaborates, and persists after a clean process restart', async () => {
     const before = fingerprints(), database = join(root, 'persistence', 'board.sqlite');
     const client = await connect(database);
