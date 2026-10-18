@@ -3,7 +3,7 @@
 import { watch, existsSync, type FSWatcher } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { Store, type Entry } from './store.js';
+import { AppError, Store, type Entry } from './store.js';
 import { WorkerStore, approvalPauseMessage, type Worker } from './worker-store.js';
 import { UncertainDelivery, type HarnessBackend, type SessionAdapter } from './harness/contract.js';
 import { resolveHarness } from './harness/registry.js';
@@ -122,8 +122,16 @@ export class EventRuntime {
   // delivers turns to them; it registers their stable board identity and keeps
   // their scoped record for the collaborator MCP role.
   configureCollaborator(input: unknown) {
-    const { collaborator, created } = this.collaborators.configure(input, this.board);
-    if (created && !this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(collaborator.id)) this.board.registerAgent({ agentId: collaborator.id, name: collaborator.name });
+    const { collaborator } = this.collaborators.configure(input, this.board);
+    // The sidecar commit and the board registration are separate stores. If an
+    // earlier attempt committed the record but failed before registering, any
+    // later successful configure — including a same-id retry after a restart —
+    // idempotently repairs the missing identity with exactly one join notice,
+    // instead of leaving heartbeat NOT_FOUND for an admitted collaborator.
+    if (!this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(collaborator.id)) {
+      try { this.board.registerAgent({ agentId: collaborator.id, name: collaborator.name }); }
+      catch (error) { if (!(error instanceof AppError && error.code === 'AGENT_EXISTS')) throw error; }
+    }
     this.notify(); return collaborator;
   }
   configurePool(input: unknown) { const pool = this.pool.configure(input); this.notify(); return pool; }

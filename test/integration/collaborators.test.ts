@@ -126,6 +126,42 @@ describe('admitted collaborator MCP surface', () => {
 });
 
 describe('collaborator updates, stopping and persistence', () => {
+  it('repairs a missing board identity on a same-id retry after the admission failure window and a restart', async () => {
+    // Reviewer P2 window: the sidecar record committed, the board registration
+    // failed once. After closing/reopening both stores, a same-id configure
+    // retry must succeed, ensure the identity (one join notice, never two),
+    // keep id/cursor, and preserve the terminal revocation rule.
+    const goal = store.createTask({ title: 'Repaired goal' });
+    // Commit the sidecar record exactly as the pre-registration window leaves it.
+    const committed = runtime.collaborators.configure({ expectedVersion: 0, name: 'Window peer', harness: 'dsh', sessionRef: 'session-w', taskIds: [goal.id], enabled: true }, store).collaborator;
+    expect(store.board().agents.some(a => a.id === committed.id)).toBe(false);
+    expect(() => store.heartbeat(committed.id)).toThrow(/not found/i);
+
+    // Restart both stores; the shared teardown takes over the reopened handles.
+    await host.close(); await hostServer.close(); await runtime.close(); store.close();
+    const board2 = new Store(join(dir, 'board.sqlite'));
+    const reopened = new EventRuntime(board2, { databasePath: join(dir, 'board.sqlite'), serverEntry: 'unused', adapter: () => ({ open: async () => 'unused-thread', run: async () => {}, close: async () => {} }), fallbackMs: 60000, debounceMs: 5 });
+    expect(reopened.collaborators.get(committed.id).cursor).toBe(committed.cursor);
+
+    const repairHostServer = createMcpServer(board2, 'unused', reopened);
+    const [a, b] = InMemoryTransport.createLinkedPair(); await repairHostServer.connect(a);
+    const repairHost = new Client({ name: 'collaborator-repair-test', version: '1' }); await repairHost.connect(b);
+    store = board2; runtime = reopened; hostServer = repairHostServer; host = repairHost;
+    try {
+      const repaired = data<Collaborator>(await call(repairHost, 'collaborator_configure', { id: committed.id, expectedVersion: 1, name: 'Window peer', harness: 'dsh', sessionRef: 'session-w', taskIds: [goal.id], enabled: true }));
+      expect(repaired).toMatchObject({ id: committed.id, version: 2, cursor: committed.cursor, enabled: true });
+      expect(reopened.board.board().agents.some(a2 => a2.id === committed.id)).toBe(true); // identity ensured
+      const joinNotices = reopened.board.board().entries.filter(e => e.agentId === committed.id && e.summary === 'Agent joined: Window peer');
+      expect(joinNotices).toHaveLength(1); // exactly one notice, no duplicate on further retries
+      expect(() => reopened.board.heartbeat(committed.id)).not.toThrow();
+      await call(repairHost, 'collaborator_configure', { id: committed.id, expectedVersion: 2, name: 'Window peer', harness: 'dsh', sessionRef: 'session-w', taskIds: [goal.id], enabled: true });
+      expect(reopened.board.board().entries.filter(e => e.agentId === committed.id && e.summary === 'Agent joined: Window peer')).toHaveLength(1);
+      const revoked = data<Collaborator>(await call(repairHost, 'collaborator_configure', { id: committed.id, expectedVersion: 3, name: 'Window peer', harness: 'dsh', sessionRef: 'session-w', taskIds: [goal.id], enabled: false }));
+      expect(revoked).toMatchObject({ id: committed.id, enabled: false, revokedAt: expect.any(String) });
+      const terminal = await call(repairHost, 'collaborator_configure', { id: committed.id, expectedVersion: 4, name: 'Window peer', harness: 'dsh', sessionRef: 'session-w', taskIds: [goal.id], enabled: true });
+      expect(terminal.isError).toBe(true); expect(JSON.stringify(terminal.content)).toContain('COLLABORATOR_REVOKED');
+    } finally { /* the shared teardown closes the reopened handles */ }
+  });
   it('withholds out-of-scope goals from shared-history read, search and the compact board history', async () => {
     // Reviewer P1: a collaborator admitted only to goal A must not read goal-B
     // facts through the primary results of context_read/context_search or the
