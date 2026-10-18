@@ -54,7 +54,7 @@ window.addEventListener('message',async(event)=>{
 }
 
 async function assertCompactHeader(frame: ReturnType<Page['frameLocator']>, english = false) {
-  await expect(frame.getByRole('tab')).toHaveText(english ? ['Tasks', 'Resources', 'Shared board'] : ['任务管理', '资源池', '共享面板']);
+  await expect(frame.getByRole('tab')).toHaveText(english ? ['Tasks', 'Collaboration environment', 'Shared board'] : ['任务管理', '协作环境', '共享面板']);
   await expect(frame.getByRole('banner').getByRole('button')).toHaveCount(1);
   await expect(frame.getByRole('banner').getByRole('button', { name: english ? 'Refresh board' : '刷新面板' })).toBeVisible();
   await expect(frame.getByRole('button', { name: /自动认领|Auto-claim|讨论方案/ })).toHaveCount(0);
@@ -146,7 +146,7 @@ for (const mode of ['unsupported', 'mobile'] as const) {
       expect(host.calls.every(call => ['board_read', 'automation_read', 'runtime_read'].includes(call.name))).toBe(true);
       expect(host.messages).toEqual([]);
       expect(await host.tool<AutomationConfig>('automation_read')).toMatchObject({ state: 'off', desiredEnabled: true, actualStatus: null, version: 0 });
-      await host.frame.getByRole('tab', { name: '资源池', exact: true }).click();
+      await host.frame.getByRole('tab', { name: '协作环境', exact: true }).click();
       await expect(host.frame.getByRole('button', { name: '添加资源', exact: true })).toBeEnabled();
       await assertCompactHeader(host.frame);
     } finally { await host.close(); }
@@ -164,5 +164,5 @@ test('English initialization is localized while standalone preview stays clean a
   await expect(page.getByRole('banner').getByRole('button')).toHaveCount(1);
   await expect(page.getByRole('button', { name: /自动认领|Auto-claim/ })).toHaveCount(0);
   await expect(page.locator('.automation-notice')).toHaveCount(0);
-  await expect(page.getByRole('tab')).toHaveText(['任务管理', '资源池', '共享面板']);
+  await expect(page.getByRole('tab')).toHaveText(['任务管理', '协作环境', '共享面板']);
 });

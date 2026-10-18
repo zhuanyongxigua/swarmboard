@@ -34,6 +34,27 @@ it('persists a versioned grant for one goal, retains pool bindings and excludes 
   board.updateTask(goal.id, { expectedVersion: goal.version, status: 'done' }); expect(grants.active()).toEqual([]);
   expect(grants.list()).toHaveLength(1);
 });
+it('authorizes dsh alongside zcode with strict ids and no duplicates, surfaced to workers through the grant prompt', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'swarmboard-grants-dsh-')); cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+  const board = new Store(join(dir, 'board.sqlite')); cleanups.push(() => board.close());
+  const workers = new WorkerStore(join(dir, 'runtime.sqlite')); cleanups.push(() => workers.close());
+  const goal = board.createTask({ title: 'Dual harness goal' });
+  workers.savePool({ id: 'pool', version: 1, workspacePath: dir, size: 1, maxSize: 1, taskIds: [], enabled: true, state: 'active', error: '', memberIds: [] });
+  const grants = new ExecutionGrants(board, workers);
+  const base = { taskId: goal.id, expectedVersion: 0, projectPath: dir, executionWorkspace: dir, monitoring: true, enabled: true };
+  const both = grants.configure({ ...base, externalHarnesses: ['dsh', 'zcode'] });
+  expect(both).toMatchObject({ externalHarnesses: ['dsh', 'zcode'], version: 1, enabled: true });
+  expect(() => grants.configure({ ...base, externalHarnesses: ['dsh', 'dsh'] })).toThrow(/at most once/);
+  expect(() => grants.configure({ ...base, externalHarnesses: ['zcode', 'zcode'] })).toThrow(/at most once/);
+  expect(() => grants.configure({ ...base, externalHarnesses: ['dsh', 'unknown-harness'] })).toThrow();
+  const member = workers.register({ name: 'Equal peer', workspacePath: dir });
+  const prompt = workerPrompt('delivery', [], codexBackend.sessionIntro(member), workers.pool(), grants.active());
+  expect(prompt).toContain('TRUSTED_HOST_EXECUTION_GRANTS');
+  expect(prompt).toContain('dsh'); expect(prompt).toContain('zcode');
+  // No default routing: an explicit empty list stays empty and revokes none of
+  // the other boundaries; it is a deliberate host edit at the current version.
+  expect(grants.configure({ ...base, expectedVersion: 1, externalHarnesses: [] })).toMatchObject({ externalHarnesses: [], version: 2 });
+});
 it('rejects missing goals, malformed paths, unsupported harnesses and grants outside the pool subscription', () => {
   const board = new Store(); cleanups.push(() => board.close());
   const workers = new WorkerStore(':memory:'); cleanups.push(() => workers.close());

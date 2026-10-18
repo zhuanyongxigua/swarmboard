@@ -63,7 +63,7 @@ export class PoolLiveness {
     this.workers.saveLiveness(value);
   }
   activity(pool: Pool | null) {
-    const peers = pool ? this.workers.list().filter(w => w.poolId === pool.id) : this.workers.list();
+    const peers = pool ? pool.memberIds.map(id => this.workers.get(id)) : this.workers.list();
     const running = peers.filter(w => w.status === 'running').length;
     const idle = peers.filter(w => w.enabled && w.status === 'idle').length;
     const attention = peers.some(w => !w.enabled || w.status === 'error' || w.status === 'uncertain');
@@ -72,7 +72,7 @@ export class PoolLiveness {
       : ['stopped', 'stopping', 'completed', 'error'].includes(pool.state) ? pool.state
       : running ? 'running' : attention || watchdog?.state === 'attention' ? 'attention'
       : ['waiting','ready'].includes(pool.state) ? pool.state : 'idle';
-    return { members: peers.length, running, idle, state, executionMode: 'internal-only' as const,
+    return { members: peers.length, draining: peers.filter(w => w.retirement?.state === 'draining').length, running, idle, state, executionMode: 'internal-only' as const,
       watchdog: { state: watchdog?.state ?? 'inactive', attempts: watchdog?.attempts ?? 0,
         nextWakeAt: pool?.enabled && watchdog?.idleSince !== null && watchdog?.idleSince !== undefined && watchdog.state !== 'attention' ? new Date(watchdog.idleSince + this.idleMs).toISOString() : null },
     };

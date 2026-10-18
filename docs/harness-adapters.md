@@ -98,7 +98,7 @@ export const myBackend: HarnessBackend = {
 
 ## DSH 接入准备：映射、最小样例与缺口
 
-本节基于**本机可读的实际材料**：全局安装的 `@deepseek-ai/dsh@0.1.1-rc.2`、一份对已安装真实 Host 的独立实测兼容记录（2026-09-12 于本机测得），以及上游 master 的 SDK 文档。本任务**未实现** DSH 后端，以下“最小样例”是映射设计，不是已运行驱动；UI iframe 嵌入（参考项目 dashi-taskboard 的 `integrations/deepseek-harness`）不证明会话执行、唤醒或恢复。
+本节基于**本机可读的实际材料**：全局安装的 `@deepseek-ai/dsh@0.1.1-rc.2`、一份对已安装真实 Host 的独立实测兼容记录（2026-09-12 于本机测得），以及上游 master 的 SDK 文档。本任务**未实现** DSH 后端，以下“最小样例”是映射设计，不是已运行驱动；当前可执行的真实 DSH 接入缝是[外部协作者直接 MCP 路径](external-collaborators.md)，由 DSH 自己的 MCP client 使用同一看板，UI iframe 嵌入（参考项目 dashi-taskboard 的 `integrations/deepseek-harness`）不证明会话执行、唤醒或恢复。
 
 ### 能力映射（含证据等级）
 

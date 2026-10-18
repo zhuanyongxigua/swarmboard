@@ -9,7 +9,11 @@ import type { WorkerStore } from './worker-store.js';
 export const executionGrantSchema = z.object({
   taskId: z.string().min(1).max(128), expectedVersion: z.number().int().nonnegative(),
   projectPath: z.string().min(1).max(4096), executionWorkspace: z.string().min(1).max(4096),
-  externalHarnesses: z.array(z.enum(['zcode'])).max(1), monitoring: z.boolean(), enabled: z.boolean(),
+  // Explicitly supported external harness ids only, each at most once. No
+  // default routing: an absent harness is simply not authorized, and an
+  // unknown id is a validation error rather than a silent fallback.
+  externalHarnesses: z.array(z.enum(['zcode', 'dsh'])).max(2).refine(values => new Set(values).size === values.length, 'Each external harness may be listed at most once'),
+  monitoring: z.boolean(), enabled: z.boolean(),
 }).strict();
 export type ExecutionGrant = Omit<z.infer<typeof executionGrantSchema>, 'expectedVersion'> & { poolId: string; version: number };
 function directory(path: string) {

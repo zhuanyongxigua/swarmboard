@@ -47,10 +47,17 @@ export function createApp(options: AppOptions = {}) {
     try { if (!options.runtime) throw new AppError('RUNTIME_UNAVAILABLE', 'Event runtime is not active in this preview', 503); res.json(options.runtime.configurePool(req.body)); }
     catch (error) { next(error); }
   });
+  app.post('/api/pool/reduce', (req,res,next) => {
+    try { if (!options.runtime) throw new AppError('RUNTIME_UNAVAILABLE', 'Event runtime is not active in this preview', 503); res.json(options.runtime.reducePool(req.body)); }
+    catch (error) { next(error); }
+  });
   app.get('/api/board',(_req,res)=>res.json(store.board()));
+  app.get('/api/preferences',(_req,res)=>res.json(store.readPreferences()));
   const route = (method:'post'|'patch',path:string,operation:(req:Request)=>unknown)=>app[method](path,(req,res,next)=>{try{res.json(operation(req));}catch(error){next(error);}});
+  route('patch','/api/preferences',req=>{const value=store.writePreferences(req.body);options.runtime?.notify();return value;});
   route('post','/api/tasks',req=>store.createTask(req.body));
   route('patch','/api/tasks/:id',req=>store.updateTask(String(req.params.id),req.body));
+  route('patch','/api/tasks/:id/progress',req=>store.writeTaskProgress(String(req.params.id),req.body));
   route('post','/api/tasks/:id/claim',req=>store.claimTask(String(req.params.id),req.body));
   route('post','/api/tasks/:id/release',req=>store.releaseTask(String(req.params.id),req.body));
   route('post','/api/resources',req=>store.createResource(req.body));

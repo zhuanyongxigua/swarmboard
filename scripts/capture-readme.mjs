@@ -1,4 +1,4 @@
-// Rebuild public product screenshots from the actual UI and synthetic MCP data,
+// Rebuild public product screenshots from the actual UI and synthetic board data,
 // keeping the user's collaboration database and real development machines untouched.
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -34,12 +34,22 @@ async function capture(locale) {
     const machine = await call('resource_create', { name: 'dev-a', description: copy("共享开发环境 · 不同页面可并行验证"), accessNotes: copy("独立账号与工作目录；重启服务前先协商。") });
     await call('resource_create', { name: 'dev-b', description: copy("备用开发环境 · 适合构建与独立验证"), accessNotes: copy("开始前声明使用范围，结束后释放声明。") });
     await call('resource_create', { name: copy("回归数据集"), description: copy("登录与文件功能的示例测试数据"), accessNotes: copy("可并行读取；变更共用数据前通知其他使用者。") });
-    await call('task_create', { title: copy("补全搜索结果的空状态"), description: copy("没有匹配结果时，给出清晰提示和下一步操作。"), acceptanceCriteria: copy("空列表和搜索无结果两种情况均有提示。") });
+    const search = await call('task_create', { title: copy("补全搜索结果的空状态"), description: copy("没有匹配结果时，给出清晰提示和下一步操作。"), acceptanceCriteria: copy("空列表和搜索无结果两种情况均有提示。") });
+    await call('task_claim', { id: search.id, agentId: 'demo-ui', expectedVersion: 1 });
     await call('task_create', { title: copy("为文件上传增加失败重试"), description: copy("保留失败文件，让用户可以直接重试。"), acceptanceCriteria: copy("重试成功后不会产生重复文件。") });
     const login = await call('task_create', { title: copy("回归登录与权限校验"), description: copy("检查正常登录、错误密码和页面权限提示。"), acceptanceCriteria: copy("登录和权限用例均有可核对的结果。") });
     await call('task_claim', { id: login.id, agentId: 'demo-login', expectedVersion: 1 });
     const files = await call('task_create', { title: copy("验证文件预览与下载"), description: copy("覆盖文档预览、文件下载与异常提示。"), acceptanceCriteria: copy("支持格式可预览，下载内容与原件一致。") });
     await call('task_claim', { id: files.id, agentId: 'demo-files', expectedVersion: 1 });
+    // Seed reported estimates through the real Store contract, never by
+    // elapsed time, member count or a task-status-to-percentage mapping.
+    for (const [task, agentId, progress] of [
+      [login, 'demo-login', { percent: 70, state: 'active', phase: copy("检查结果核对"), verified: copy("已记录合成登录检查结果。"), remaining: copy("完成示例验收。") }],
+      [files, 'demo-files', { percent: 35, state: 'waiting', phase: copy("等待示例审核"), verified: copy("文件预览示例已准备。"), remaining: copy("等待示例接收人确认。") }],
+      [search, 'demo-ui', { percent: null, state: 'unknown', phase: copy("正在整理检查范围"), verified: '', remaining: copy("核对示例验收范围。") }],
+    ]) {
+      service.store.writeTaskProgress(task.id, { agentId, expectedVersion: service.store.readTask(task.id).version, progress });
+    }
     const review = await call('task_create', { title: copy("修复分页切换后的选中状态"), description: copy("翻页后清除旧页面的选中项，等待人工验收。"), acceptanceCriteria: copy("翻页后计数和操作对象保持一致。") });
     await call('task_claim', { id: review.id, agentId: 'demo-ui', expectedVersion: 1 });
     await call('task_update', { id: review.id, agentId: 'demo-ui', expectedVersion: 2, status: 'in_review' });
@@ -63,18 +73,38 @@ async function capture(locale) {
       await expect(page.locator('html')).toHaveAttribute('lang', locale);
       if (locale === 'en') expect(await page.locator('body').innerText()).not.toMatch(/[\u4e00-\u9fff]/);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.evaluate(() => document.fonts.ready);
     }
     await page.goto(`${service.url}/?lang=${locale}`);
     await expect(page.getByRole('button', { name: copy("查看任务 回归登录与权限校验"), exact: true })).toBeVisible();
     await expect(page.locator('.task-card')).toHaveCount(6);
+    await expect(page.locator('.task-progress')).toHaveCount(3);
+    for (const [state, percent] of [['active', 70], ['waiting', 35], ['unknown', null]]) {
+      const progress = page.locator(`.task-progress[data-progress-state="${state}"]`);
+      await expect(progress).toBeVisible();
+      const bar = progress.getByRole('progressbar');
+      if (percent === null) {
+        await expect(bar).not.toHaveAttribute('aria-valuenow');
+        await expect(progress.locator('.task-progress-unknown')).toBeVisible();
+        await expect(progress.locator('.task-progress-fill')).toHaveCount(0);
+      } else {
+        await expect(bar).toHaveAttribute('aria-valuenow', String(percent));
+        await expect(progress.locator('.task-progress-percent')).toHaveText(`${percent}%`);
+      }
+    }
     await checkLanguage();
     await page.screenshot({ path: path.join(output, 'tasks.png') });
-    await page.getByRole('tab', { name: copy("资源池"), exact: true }).click();
+    // Capture both collaboration-environment sections from the combined product UI.
+    await page.getByRole('tab', { name: new RegExp(`^(?:${copy("资源池")}|${copy("协作环境")})$`) }).click();
     await expect(page.locator('.resource-row')).toHaveCount(3);
+    await expect(page.locator('.preferences-panel')).toBeVisible();
+    await expect(page.getByRole('heading', { name: copy("个人偏好"), exact: true })).toBeVisible();
+    await expect(page.locator('.preference-text')).toHaveText(copy("尚无个人偏好。"));
+    await expect(page.locator('#preference-text')).toHaveValue('');
     await page.getByRole('button', { name: copy("查看资源 dev-a"), exact: true }).click();
     await expect(page.locator('.usage-line')).toHaveCount(2);
     await checkLanguage();
-    await page.screenshot({ path: path.join(output, 'resources.png') });
+    await page.screenshot({ path: path.join(output, 'resources.png'), fullPage: true });
     await page.getByRole('tab', { name: copy("共享面板"), exact: true }).click();
     await expect(page.getByRole('textbox')).toHaveCount(0);
     await expect(page.getByText(copy("约定：如需重启服务，先通知当前使用者，确认检查结束后再操作。"), { exact: true })).toBeVisible();

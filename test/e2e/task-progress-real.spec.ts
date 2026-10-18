@@ -1,0 +1,40 @@
+// Verify the integrated progress UI against real HTTP and disposable SQLite data, without model calls.
+import { test, expect } from '@playwright/test';
+
+test('real progress writes survive refresh and clear to unknown without completing the task', async ({ page, request }) => {
+  const created = await request.post('/api/tasks', { data: { title: 'Synthetic progress integration', description: 'Public local fixture' } });
+  expect(created.ok()).toBe(true);
+  let task = await created.json();
+  const started = await request.patch(`/api/tasks/${task.id}`, { data: { expectedVersion: task.version, status: 'in_progress' } });
+  expect(started.ok()).toBe(true); task = await started.json();
+  const progress = { percent: 70, state: 'active', phase: 'Synthetic verification', verified: 'Local integration passed', remaining: 'Public fixture acceptance' };
+  const written = await request.patch(`/api/tasks/${task.id}/progress`, { data: { expectedVersion: task.version, progress } });
+  expect(written.ok()).toBe(true); task = await written.json();
+  expect(task.status).toBe('in_progress');
+  expect(task.progress.reportedBy).toBe('human');
+  await page.goto('/');
+  const card = page.locator(`[data-card-id="${task.id}"]`);
+  await expect(card.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '70');
+  await card.locator('.task-progress-trigger').focus();
+  await expect(page.getByRole('tooltip')).toContainText('Local integration passed');
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await expect(card.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '70');
+  const waiting = await request.patch(`/api/tasks/${task.id}/progress`, { data: { expectedVersion: task.version, progress: { ...progress, percent: 100, state: 'waiting', phase: 'Awaiting synthetic review' } } });
+  expect(waiting.ok()).toBe(true); task = await waiting.json();
+  expect(task.status).toBe('in_progress');
+  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  await expect(card.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+  await expect(card).toContainText('等待中');
+  const cleared = await request.patch(`/api/tasks/${task.id}/progress`, { data: { expectedVersion: task.version, progress: null } });
+  expect(cleared.ok()).toBe(true); task = await cleared.json();
+  expect(task.status).toBe('in_progress'); expect(task.progress).toBeNull();
+  await page.reload();
+  await expect(card).toContainText('待评估');
+  await expect(card.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
+  const reviewed = await request.patch(`/api/tasks/${task.id}`, { data: { expectedVersion: task.version, status: 'in_review' } });
+  expect(reviewed.ok()).toBe(true);
+  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  await expect(page.locator('[data-status="in_review"]').locator(`[data-card-id="${task.id}"]`)).toBeVisible();
+  await expect(card.getByRole('progressbar')).toHaveCount(0);
+});

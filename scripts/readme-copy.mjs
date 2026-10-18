@@ -23,6 +23,14 @@ const english = {
   '验证文件预览与下载': 'Verify file preview and download',
   '覆盖文档预览、文件下载与异常提示。': 'Cover document previews, downloads and error messages.',
   '支持格式可预览，下载内容与原件一致。': 'Supported formats render correctly; downloads match the originals.',
+  '检查结果核对': 'Reviewing check results',
+  '已记录合成登录检查结果。': 'Synthetic login checks are recorded.',
+  '完成示例验收。': 'Complete the sample acceptance review.',
+  '等待示例审核': 'Waiting for sample review',
+  '文件预览示例已准备。': 'The file preview sample is ready.',
+  '等待示例接收人确认。': 'Wait for the sample reviewer to confirm.',
+  '正在整理检查范围': 'Assessing the check scope',
+  '核对示例验收范围。': 'Review the sample acceptance scope.',
   '修复分页切换后的选中状态': 'Fix selection after pagination',
   '翻页后清除旧页面的选中项，等待人工验收。': 'Clear selections after changing pages. Ready for review.',
   '翻页后计数和操作对象保持一致。': 'Selection counts and action targets remain consistent after pagination.',
@@ -42,7 +50,9 @@ const english = {
   '两项检查使用不同账号和浏览器会话，可以共用 dev-a。': 'Both checks can share dev-a using separate accounts and browser sessions.',
   '约定：如需重启服务，先通知当前使用者，确认检查结束后再操作。': 'Agreement: notify current users and wait for their checks to finish before restarting services.',
   '查看任务 回归登录与权限校验': 'View task Check login and permissions',
-  '资源池': 'Resources', '查看资源 dev-a': 'View resource dev-a', '共享面板': 'Shared board',
+  '个人偏好': 'Personal preferences',
+  '尚无个人偏好。': 'No personal preferences yet.',
+  '资源池': 'Resources', '协作环境': 'Collaboration environment', '查看资源 dev-a': 'View resource dev-a', '共享面板': 'Shared board',
 };
 export function screenshotCopy(locale, text) {
   if (locale !== 'en') return text;

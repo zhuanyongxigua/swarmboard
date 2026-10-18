@@ -5,7 +5,7 @@ test('shows registered event sessions and their blocker while retaining three bo
   await page.goto('/');
   await expect(page.getByText('事件协作 · 0 个工作会话')).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('Inspect the bound session before retrying');
-  await expect(page.getByRole('tab')).toHaveText(['任务管理', '资源池', '共享面板']);
+  await expect(page.getByRole('tab')).toHaveText(['任务管理', '协作环境', '共享面板']);
 });
 
 test('human pool stop and resume preserve the task board and show the confirmed lifecycle', async ({ page }) => {
@@ -26,7 +26,7 @@ test('human pool stop and resume preserve the task board and show the confirmed 
   await expect(page.getByRole('status')).toContainText('等待任务');
   expect(commands).toEqual([{ expectedVersion: 1, enabled: false }, { expectedVersion: 2, enabled: true }]);
   await expect(page.locator('.task-card')).toHaveCount(before);
-  await expect(page.getByRole('tab')).toHaveText(['任务管理', '资源池', '共享面板']);
+  await expect(page.getByRole('tab')).toHaveText(['任务管理', '协作环境', '共享面板']);
 });
 
 test('distinguishes idle members from executing peers and supports bounded recovery retry', async ({ page }) => {

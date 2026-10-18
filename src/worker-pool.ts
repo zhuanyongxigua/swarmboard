@@ -49,6 +49,47 @@ export class WorkerPool {
         state: data.enabled ? 'ready' : 'stopping' });
     });
   }
+  reduce(input: unknown) {
+    const data = parse(poolSchemas.reduce, input);
+    const pool = this.workers.pool();
+    if (!pool) throw new AppError('NOT_FOUND', 'Organization not found', 404);
+    const prior = this.workers.memberRetirementRequest(data.requestId);
+    // A response-lost retry reuses its original target, never a second member.
+    const candidates = pool.memberIds.slice().reverse().map(id => this.workers.get(id)).filter(w => !w.retirement);
+    const rank = (w: (typeof candidates)[number]) => (w.status === 'idle' || w.status === 'error' && !w.deliveryId ? 0 : w.status === 'running' ? 2 : 4) + (this.hasUsage(w.id) ? 1 : 0);
+    candidates.sort((a, b) => rank(a) - rank(b));
+    const memberId = prior?.memberId ?? candidates[0]?.id;
+    if (!memberId) throw new AppError('NO_RETIRABLE_MEMBER', 'All available members are already leaving', 409);
+    const result = this.workers.requestMemberRetirement({ ...data, memberId });
+    this.settleRetirements();
+    return { ...result, pool: this.workers.pool()!, member: this.workers.get(memberId) };
+  }
+  private hasUsage(id: string) { return !!this.board.db.prepare('SELECT 1 FROM usages WHERE agentId=? AND active=1 LIMIT 1').get(id); }
+  private reopenResourceAdmissions() {
+    const pool = this.workers.pool();
+    if (!pool) return;
+    const fenced = this.board.db.prepare('SELECT agentId FROM resource_admission_fences').all();
+    for (const row of fenced) {
+      const id = String(row.agentId);
+      if (!pool.memberIds.includes(id)) continue;
+      this.board.reopenResourceAdmission(id, () => {
+        const current = this.workers.pool(), worker = this.workers.get(id);
+        return !!current?.memberIds.includes(id) && !worker.retirement;
+      });
+    }
+  }
+  private settleRetirements() {
+    const pool = this.workers.pool();
+    if (!pool) return;
+    for (const id of pool.memberIds) {
+      const worker = this.workers.get(id);
+      if (worker.retirement?.state !== 'draining' || this.hasUsage(id)) continue;
+      const resolvedFailure = worker.status === 'error' && worker.retirement.resolution?.deliveryId === worker.deliveryId;
+      if (['running', 'uncertain'].includes(worker.status) || !resolvedFailure && (worker.deliveryId || worker.turnId || worker.deliveryPhase || worker.deliveryCursor !== null)) continue;
+      if (!this.board.closeResourceAdmission(id)) continue;
+      this.workers.completeMemberRetirement(id);
+    }
+  }
   private directory(pool: Pool, index: number) {
     const root = this.databasePath === ':memory:' ? join(tmpdir(), 'swarmboard-pools', pool.id)
       : join(dirname(this.databasePath), 'workspaces', pool.id);
@@ -76,11 +117,17 @@ export class WorkerPool {
     return realpathSync(target);
   }
   ensureMembers(pool: Pool) {
-    for (let index = 0; index < pool.size; index++) {
+    while (pool.memberIds.length < pool.size) {
       const fresh = this.workers.pool();
       if (!fresh?.enabled) return fresh ?? pool;
       pool = fresh;
-      if (pool.memberIds[index]) continue;
+      if (pool.memberIds.length >= pool.size) return pool;
+      const members = this.workers.list().filter(w => w.poolId === pool.id);
+      const orphan = members.find(w => !w.retirement && !pool.memberIds.includes(w.id));
+      if (orphan) { pool = this.workers.checkpointPool({ ...pool, memberIds: [...pool.memberIds, orphan.id] }); continue; }
+      const retired = members.find(w => w.retirement?.state === 'retired');
+      if (retired) { this.workers.restoreRetiredMember(retired.id); this.reopenResourceAdmissions(); pool = this.workers.pool()!; continue; }
+      const index = members.length;
       const workspacePath = this.directory(pool, index);
       // register is idempotently recoverable if the process exits before the
       // pool's member list was checkpointed.
@@ -93,6 +140,8 @@ export class WorkerPool {
     return pool;
   }
   sync(busy: boolean) {
+    this.reopenResourceAdmissions();
+    this.settleRetirements();
     let pool = this.workers.pool(); if (!pool) return null;
     if (pool.enabled && pool.scopeRefresh) {
       const refresh = pool.scopeRefresh;

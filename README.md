@@ -13,9 +13,9 @@ Swarmboard keeps tasks, resources, and collaboration records in one place. Add t
 
 Its shared-worker instructions use a **gather → claim → act → verify → merge** loop: agents read shared context, choose work, coordinate with peers, verify results, and record outcomes. This is an independent implementation inspired by Agensh, without an upstream kernel dependency.
 
-![Swarmboard task board showing status columns, assignees, and related resources](docs/assets/en/tasks.png)
+![Swarmboard task board showing reported progress, waiting and unknown estimates, participants, and status columns](docs/assets/en/tasks.png)
 
-*English UI preview with isolated sample data. [中文界面截图](README.zh-CN.md).*
+*English UI preview with isolated synthetic data. Progress estimates illustrate the interface; they are not evidence of live agent activity or completed acceptance. [中文界面截图](README.zh-CN.md).*
 
 [Quick start](#quick-start) · [Usage](#usage) · [Installation and configuration](docs/setup.md) · [Architecture](docs/architecture.md)
 
@@ -24,17 +24,19 @@ Its shared-worker instructions use a **gather → claim → act → verify → m
 | Panel | What you can do | How agents participate |
 | --- | --- | --- |
 | **Tasks** | Create tasks, define acceptance criteria, inspect details, and drag cards between statuses | Claim tasks, update progress, and submit results for review |
-| **Resources** | Register development machines, test environments, or datasets and describe usage agreements | Declare their purpose and impact scope, then coordinate with other users |
+| **Collaboration environment** | Manage available resources and this board's personal preferences in separate sections | Coordinate resource use and read current authorized preferences |
 | **Shared board** | Read discussions, findings, failed approaches, and result summaries | Publish messages and verification evidence, and read peers' progress |
 
 Tasks appear under **To do → In progress → In review → Done**. Blocked and canceled tasks remain visible.
 
 Resources have no fixed exclusive/shared classification. Two agents might test different pages on the same machine. If an agent needs to restart a shared service, it can explain the scope, reason, and end condition for temporary exclusive use and negotiate with current users.
 
-<details>
-<summary>View resources</summary>
+See the [collaboration environment UI contract](docs/collaboration-environment-ui.md) for preference editing, conflicts, and integration verification boundaries.
 
-![Swarmboard resource pool showing two agents sharing a machine with separate usage scopes](docs/assets/en/resources.png)
+<details>
+<summary>View the collaboration environment</summary>
+
+![Swarmboard collaboration environment showing empty board preferences and two agents sharing a resource with separate scopes](docs/assets/en/resources.png)
 
 </details>
 

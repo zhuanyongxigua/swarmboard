@@ -14,11 +14,18 @@ const optionalText = longText.default('');
 const id = z.string().trim().min(1).max(128);
 export const taskStatuses = ['todo', 'in_progress', 'in_review', 'done', 'blocked', 'canceled'] as const;
 export const entryKinds = ['OBSERVED', 'FACT', 'FAIL', 'CLAIM', 'PATCH_SUMMARY', 'MESSAGE'] as const;
+export const preferenceSources = ['human-input', 'main-chat-relay'] as const;
+const progressInput = z.object({
+  percent: z.number().min(0).max(100).nullable(), state: z.enum(['active', 'waiting', 'unknown']),
+  phase: z.string().trim().max(200), verified: z.string().max(4000), remaining: z.string().max(4000),
+}).strict().refine(value => value.state === 'unknown' ? value.percent === null : value.percent !== null && !!value.phase.trim() && !!value.verified.trim(), { message: 'Known progress needs a percentage, phase and verified basis; unknown progress must have no percentage' });
 const taskFields = { title: text, description: optionalText, acceptanceCriteria: optionalText };
 // Retain the legacy kind column/API field without requiring resource classification.
 const legacyResourceKind = z.string().trim().max(500);
 const resourceFields = { name: text, kind: legacyResourceKind.default(''), description: optionalText, capabilities: z.array(text).max(50).default([]), accessNotes: optionalText };
 export const schemas = {
+  preferencesUpdate: z.object({ text: longText, source: z.enum(preferenceSources), expectedVersion: z.number().int().nonnegative() }).strict(),
+  taskProgressUpdate: z.object({ expectedVersion: z.number().int().positive(), progress: progressInput.nullable(), agentId: id.optional() }).strict(),
   taskCreate: z.object({ ...taskFields, agentId: id.optional() }).strict(),
   taskUpdate: z.object({ expectedVersion: z.number().int().positive(), title: text.optional(), description: longText.optional(), acceptanceCriteria: longText.optional(), status: z.enum(taskStatuses).optional(), agentId: id.optional() }).strict(),
   taskList: z.object({ after: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(50).default(20), statuses: z.array(z.enum(taskStatuses)).min(1).max(6).default(['todo', 'in_progress', 'in_review', 'blocked']), query: z.string().trim().min(1).max(500).optional() }).strict(),
@@ -34,10 +41,12 @@ export const schemas = {
   usageUpdate: z.object({ agentId: id, expectedVersion: z.number().int().positive(), purpose: text.optional(), scope: longText.optional(), sharing: longText.optional() }).strict(),
   release: z.object({ agentId: id, expectedVersion: z.number().int().positive() }).strict(),
 };
-export interface Task { id: string; title: string; description: string; acceptanceCriteria: string; status: typeof taskStatuses[number]; assignee: string | null; participants: string[]; version: number; createdAt: string; updatedAt: string }
-export type TaskSummary = Omit<Task, 'description' | 'acceptanceCriteria'>;
+export interface TaskProgress extends z.infer<typeof progressInput> { updatedAt: string; reportedBy: string }
+export interface Task { id: string; title: string; description: string; acceptanceCriteria: string; status: typeof taskStatuses[number]; assignee: string | null; participants: string[]; progress: TaskProgress | null; version: number; createdAt: string; updatedAt: string }
+export type TaskSummary = Omit<Task, 'description' | 'acceptanceCriteria' | 'progress'> & { progress: Omit<TaskProgress, 'verified' | 'remaining'> | null };
 export interface Resource { id: string; name: string; kind: string; description: string; capabilities: string[]; accessNotes: string; version: number; createdAt: string; updatedAt: string }
 export interface Agent { id: string; name: string; lastSeenAt: string }
+export interface Preferences { boardId: string; text: string; source: typeof preferenceSources[number] | null; version: number; updatedAt: string | null }
 export interface Entry { id: number; kind: typeof entryKinds[number]; agentId: string; summary: string; detail: string; taskId?: string; resourceId?: string; recipientId?: string; createdAt: string }
 export interface Usage { id: string; resourceId: string; agentId: string; purpose: string; scope: string; sharing: string; taskId?: string; active: boolean; version: number; createdAt: string; updatedAt: string }
 export function parse<T>(schema: z.ZodType<T>, input: unknown): T {
@@ -70,7 +79,15 @@ export class Store {
       // Separate desktop MCP processes must inspect and apply migrations under the same write lock.
       this.transaction(() => {
         const version = Number((this.db.prepare('PRAGMA user_version').get() as {user_version: number}).user_version);
-        if (version > 5) throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500);
+        if (version > 8) throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500);
+        // Standalone review candidates reused v6; only the declared release sequence may upgrade.
+        if (version >= 6) {
+          const features = ['board_preferences', 'task_progress', 'resource_admission_fences'];
+          for (const [index, table] of features.entries()) {
+            const exists = !!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table);
+            if (exists !== (version >= index + 6)) throw new AppError('SCHEMA_VARIANT_MISMATCH', 'Database belongs to an incompatible unpublished schema candidate; restore its matching backup before upgrading', 500);
+          }
+        }
         if (version === 0) this.db.exec(`
           CREATE TABLE agents(id TEXT PRIMARY KEY, name TEXT NOT NULL, lastSeenAt TEXT NOT NULL);
           CREATE TABLE tasks(id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, acceptanceCriteria TEXT NOT NULL, status TEXT NOT NULL, assignee TEXT REFERENCES agents(id), version INTEGER NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
@@ -97,6 +114,22 @@ export class Store {
             UPDATE tasks SET assignee=NULL WHERE assignee IS NOT NULL;
             PRAGMA user_version=5;`);
         }
+        if (version < 6) this.db.exec(`
+          CREATE TABLE board_preferences(id INTEGER PRIMARY KEY CHECK(id=1), text TEXT NOT NULL, source TEXT CHECK(source IN ('human-input','main-chat-relay')), version INTEGER NOT NULL CHECK(version>=0), updatedAt TEXT);
+          INSERT INTO board_preferences VALUES(1,'',NULL,0,NULL);
+          PRAGMA user_version=6;
+        `);
+        if (version < 7) this.db.exec('CREATE TABLE task_progress(taskId TEXT PRIMARY KEY REFERENCES tasks(id),data TEXT NOT NULL); PRAGMA user_version=7;');
+        if (version < 8) this.db.exec(`
+          CREATE TABLE resource_admission_fences(agentId TEXT PRIMARY KEY REFERENCES agents(id));
+          CREATE TRIGGER usage_admission_insert BEFORE INSERT ON usages
+            WHEN NEW.active=1 AND EXISTS(SELECT 1 FROM resource_admission_fences WHERE agentId=NEW.agentId)
+            BEGIN SELECT RAISE(ABORT, 'Member resource admission is closed'); END;
+          CREATE TRIGGER usage_admission_update BEFORE UPDATE OF agentId,active ON usages
+            WHEN NEW.active=1 AND EXISTS(SELECT 1 FROM resource_admission_fences WHERE agentId=NEW.agentId)
+            BEGIN SELECT RAISE(ABORT, 'Member resource admission is closed'); END;
+          PRAGMA user_version=8;
+        `);
       });
     } catch (error) { this.db.close(); throw error; }
   }
@@ -115,6 +148,10 @@ export class Store {
   private decode(table: string, row: Record<string, unknown>) {
     const result = { ...row };
     if (table === 'tasks') result.participants = this.db.prepare('SELECT agentId FROM task_participants WHERE taskId=? AND active=1 ORDER BY agentId').all(String(result.id)).map(r => String(r.agentId));
+    if (table === 'tasks') {
+      const progress = this.db.prepare('SELECT data FROM task_progress WHERE taskId=?').get(String(result.id)) as { data: string } | undefined;
+      result.progress = progress ? JSON.parse(progress.data) as TaskProgress : null;
+    }
     if (table === 'resources') result.capabilities = JSON.parse(String(result.capabilities));
     if (table === 'usages') result.active = Boolean(result.active);
     for (const key of ['taskId', 'resourceId', 'recipientId']) if (result[key] === null) delete result[key];
@@ -132,7 +169,7 @@ export class Store {
   private checkVersion(actual: number, expected: number) { if (actual !== expected) throw new AppError('VERSION_CONFLICT', 'State changed; read the latest version before retrying', 409); }
   private touch(agentId: string) { this.db.prepare('UPDATE agents SET lastSeenAt = ? WHERE id = ?').run(new Date().toISOString(), agentId); }
   board() {
-    return this.transaction(() => ({ tasks: this.list<Task>('tasks'), resources: this.list<Resource>('resources'), usages: this.list<Usage>('usages'), agents: this.list<Agent>('agents'), entries: this.db.prepare('SELECT * FROM (SELECT * FROM entries ORDER BY id DESC LIMIT 100) ORDER BY id').all().map(row => this.decode('entries', row) as unknown as Entry), cursor: Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor) }));
+    return this.transaction(() => ({ preferences: this.readPreferences(), tasks: this.list<Task>('tasks'), resources: this.list<Resource>('resources'), usages: this.list<Usage>('usages'), agents: this.list<Agent>('agents'), entries: this.db.prepare('SELECT * FROM (SELECT * FROM entries ORDER BY id DESC LIMIT 100) ORDER BY id').all().map(row => this.decode('entries', row) as unknown as Entry), cursor: Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor) }));
   }
   readTask(taskId: string): Task { return this.get<Task>('tasks', taskId); }
   // Runtime lifecycle checks need states, never full human requirements or context.
@@ -150,7 +187,12 @@ export class Store {
     if (subscribedIds.length) { clauses.push(`id IN (${subscribedIds.map(() => '?').join(',')})`); values.push(...subscribedIds); }
     const rows = this.db.prepare(`SELECT rowid AS discoveryCursor,id,title,status,assignee,version,createdAt,updatedAt FROM tasks WHERE ${clauses.join(' AND ')} ORDER BY rowid LIMIT ?`).all(...values, query.limit + 1);
     const hasMore = rows.length > query.limit;
-    const items = rows.slice(0, query.limit).map(({ discoveryCursor: _, ...row }) => this.decode('tasks', row) as unknown as TaskSummary);
+    const items = rows.slice(0, query.limit).map(({ discoveryCursor: _, ...row }) => {
+      const task = this.decode('tasks', row) as unknown as Task;
+      const { verified: _verified, remaining: _remaining, ...compact } = task.progress ?? {};
+      void _verified; void _remaining;
+      return { ...task, progress: task.progress ? compact as Omit<TaskProgress, 'verified' | 'remaining'> : null } as TaskSummary;
+    });
     return { items, hasMore, cursor: items.length ? Number(rows[items.length - 1]!.discoveryCursor) : query.after };
   }
   readTaskPage(input: unknown) {
@@ -175,7 +217,7 @@ export class Store {
     return this.transaction(() => {
       const page = this.taskPage({}, subscribedIds);
       const visibility = Store.historyScopeClause(history ?? {});
-      return { tasks: page.items, taskPage: { cursor: page.cursor, hasMore: page.hasMore },
+      return { preferences: this.readPreferences(), tasks: page.items, taskPage: { cursor: page.cursor, hasMore: page.hasMore },
         resources: this.list<Resource>('resources'), usages: this.list<Usage>('usages'), agents: this.list<Agent>('agents'),
         entries: this.db.prepare(`SELECT id,kind,agentId,summary,substr(detail,1,1000) AS detail,length(detail)>1000 AS detailTruncated,taskId,resourceId,recipientId,createdAt FROM (SELECT * FROM entries ${visibility ? 'WHERE ' + visibility.clause : ''} ORDER BY id DESC LIMIT 20) ORDER BY id`).all(...(visibility?.values ?? [])).map(row => this.decode('entries', row)),
         cursor: Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor) };
@@ -184,6 +226,23 @@ export class Store {
   readAutomation(): AutomationConfig {
     const row = this.db.prepare('SELECT config FROM automation_config WHERE id=1').get() as { config: string } | undefined;
     return row ? JSON.parse(row.config) as AutomationConfig : { ...defaultAutomationConfig };
+  }
+  readPreferences(): Preferences {
+    const row = this.db.prepare('SELECT text,source,version,updatedAt FROM board_preferences WHERE id=1').get() as unknown as Omit<Preferences, 'boardId'>;
+    return { ...row, boardId: this.readAutomation().boardId };
+  }
+  // Trusted human-host boundary only: do not expose this mutator to bound agents.
+  // Source records declared provenance; it is never an authorization credential.
+  writePreferences(input: unknown): Preferences {
+    const data = parse(schemas.preferencesUpdate, input);
+    return this.transaction(() => {
+      const before = this.readPreferences(); this.checkVersion(before.version, data.expectedVersion);
+      const next = { ...before, text: data.text, source: data.source, version: before.version + 1, updatedAt: new Date().toISOString() };
+      // Keep a versioned empty row when clearing so stale drafts cannot resurrect it.
+      this.db.prepare('UPDATE board_preferences SET text=?,source=?,version=?,updatedAt=? WHERE id=1 AND version=?').run(next.text,next.source,next.version,next.updatedAt,before.version);
+      this.append({ kind: 'OBSERVED', agentId: 'host-preferences', summary: 'Personal preferences updated', detail: JSON.stringify({ signalId: 'BOARD_PREFERENCES_UPDATED', version: next.version, source: next.source, cleared: next.text === '' }) });
+      return next;
+    });
   }
   private saveAutomation(config: AutomationConfig): AutomationConfig {
     this.db.prepare('INSERT INTO automation_config(id,config) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET config=excluded.config').run(JSON.stringify(config));
@@ -255,9 +314,13 @@ export class Store {
     const { agentId, ...data } = parse(schemas.taskCreate, input);
     return this.transaction(() => {
       if (agentId) this.agent(agentId);
-      const now = new Date().toISOString(); const task: Task = { ...data, id: randomUUID(), status: 'todo', assignee: null, participants: [], version: 1, createdAt: now, updatedAt: now };
+      const now = new Date().toISOString(); const task: Task = { ...data, id: randomUUID(), status: 'todo', assignee: null, participants: [], progress: null, version: 1, createdAt: now, updatedAt: now };
       this.db.prepare('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?)').run(task.id,task.title,task.description,task.acceptanceCriteria,task.status,null,1,now,now);
-      this.append({kind:'OBSERVED',agentId:agentId ?? 'human',summary:`Task created: ${task.title}`,detail:'',taskId:task.id});
+      // Goal creation and revision carry the actual post-write status/version
+      // as semantic control metadata: any legitimately named host or participant
+      // emits them generically, so wake eligibility never depends on a default
+      // agentId, summary text, or a patch happening to include status.
+      this.append({kind:'OBSERVED',agentId:agentId ?? 'human',summary:`Task created: ${task.title}`,detail:JSON.stringify({version:task.version,status:task.status}),taskId:task.id});
       if (agentId) this.touch(agentId); return task;
     });
   }
@@ -271,9 +334,26 @@ export class Store {
       if (!Object.keys(patch).length) throw new AppError('VALIDATION_ERROR','Provide at least one task field');
       const next = { ...before, ...patch, assignee: patch.status === 'todo' ? null : before.assignee, version: before.version + 1, updatedAt: new Date().toISOString() };
       this.db.prepare('UPDATE tasks SET title=?,description=?,acceptanceCriteria=?,status=?,assignee=?,version=?,updatedAt=? WHERE id=?').run(next.title,next.description,next.acceptanceCriteria,next.status,next.assignee,next.version,next.updatedAt,taskId);
-      this.append({kind:'OBSERVED',agentId:agentId ?? 'human',summary:`Task updated: ${next.title} (${next.status})`,detail:JSON.stringify(patch),taskId});
+      this.append({kind:'OBSERVED',agentId:agentId ?? 'human',summary:`Task updated: ${next.title} (${next.status})`,detail:JSON.stringify({...patch,version:next.version,status:next.status}),taskId});
       if (patch.status === 'todo') this.db.prepare('UPDATE task_participants SET active=0 WHERE taskId=?').run(taskId);
       if (agentId) this.touch(agentId); return this.get<Task>('tasks', taskId);
+    });
+  }
+  writeTaskProgress(taskId: string, input: unknown): Task {
+    const data = parse(schemas.taskProgressUpdate, input);
+    return this.transaction(() => {
+      const before = this.readTask(taskId); this.checkVersion(before.version, data.expectedVersion);
+      if (data.agentId) { this.agent(data.agentId); if (!before.participants.includes(data.agentId)) throw new AppError('NOT_PARTICIPANT', 'Only an active participant may report progress on this shared goal', 403); }
+      const updatedAt = new Date().toISOString();
+      const progress: TaskProgress | null = data.progress ? { ...data.progress, updatedAt, reportedBy: data.agentId ?? 'human' } : null;
+      if (progress) this.db.prepare('INSERT INTO task_progress(taskId,data) VALUES(?,?) ON CONFLICT(taskId) DO UPDATE SET data=excluded.data').run(taskId, JSON.stringify(progress));
+      else this.db.prepare('DELETE FROM task_progress WHERE taskId=?').run(taskId);
+      // Progress is evidence-backed reporting, never a task-lifecycle transition.
+      this.db.prepare('UPDATE tasks SET version=version+1,updatedAt=? WHERE id=?').run(updatedAt, taskId);
+      const next = this.readTask(taskId);
+      this.append({ kind: 'OBSERVED', agentId: data.agentId ?? 'human', summary: `Task progress reported: ${before.title}`, detail: JSON.stringify({ version: next.version, status: next.status, progress: progress ? { percent: progress.percent, state: progress.state, phase: progress.phase } : null }), taskId });
+      if (data.agentId) this.touch(data.agentId);
+      return next;
     });
   }
   createResource(input: unknown): Resource {
@@ -282,7 +362,7 @@ export class Store {
       if (agentId) this.agent(agentId);
       const now = new Date().toISOString(); const resource = { ...data, id: randomUUID(), version: 1, createdAt: now, updatedAt: now };
       this.db.prepare('INSERT INTO resources VALUES(?,?,?,?,?,?,?,?,?)').run(resource.id,resource.name,resource.kind,resource.description,JSON.stringify(resource.capabilities),resource.accessNotes,1,now,now);
-      this.append({kind:'OBSERVED',agentId:agentId ?? 'human',summary:`Resource added: ${resource.name}`,detail:'',resourceId:resource.id});
+      this.append({kind:'OBSERVED',agentId:agentId ?? 'human',summary:`Resource added: ${resource.name}`,detail:JSON.stringify({version:resource.version}),resourceId:resource.id});
       if (agentId) this.touch(agentId); return resource;
     });
   }
@@ -296,7 +376,7 @@ export class Store {
       if (!Object.keys(patch).length) throw new AppError('VALIDATION_ERROR','Provide at least one resource field');
       const next = {...before,...patch,version:before.version+1,updatedAt:new Date().toISOString()};
       this.db.prepare('UPDATE resources SET name=?,kind=?,description=?,capabilities=?,accessNotes=?,version=?,updatedAt=? WHERE id=?').run(next.name,next.kind,next.description,JSON.stringify(next.capabilities),next.accessNotes,next.version,next.updatedAt,resourceId);
-      this.append({kind:'OBSERVED',agentId:agentId ?? 'human',summary:`Resource updated: ${next.name}`,detail:JSON.stringify(patch),resourceId}); if (agentId) this.touch(agentId); return next;
+      this.append({kind:'OBSERVED',agentId:agentId ?? 'human',summary:`Resource updated: ${next.name}`,detail:JSON.stringify({...patch,version:next.version}),resourceId}); if (agentId) this.touch(agentId); return next;
     });
   }
   registerAgent(input: unknown): Agent {
@@ -395,10 +475,30 @@ export class Store {
     return {items,cursor:hasMore ? items[items.length-1]!.id : Math.max(query.after,max),hasMore};
     });
   }
+  /** Commit the admission fence before the sidecar can remove membership.
+   *  Delayed writers serialize on this same board lock, including old clients
+   *  whose earlier MCP permission check can no longer be withdrawn. */
+  closeResourceAdmission(agentId: string) {
+    return this.transaction(() => {
+      if (this.db.prepare('SELECT 1 FROM usages WHERE agentId=? AND active=1 LIMIT 1').get(agentId)) return false;
+      this.db.prepare('INSERT OR IGNORE INTO resource_admission_fences(agentId) VALUES(?)').run(agentId);
+      return true;
+    });
+  }
+  reopenResourceAdmission(agentId: string, isRestored: () => boolean) {
+    // Recheck sidecar membership while holding the board lock. A new retirement
+    // must acquire this lock again before it can finalize, so a stale reopen
+    // cannot race past its final admission fence.
+    return this.transaction(() => {
+      if (!isRestored()) return;
+      this.db.prepare('DELETE FROM resource_admission_fences WHERE agentId=?').run(agentId);
+    });
+  }
   declareUsage(input: unknown): Usage {
     const data = parse(schemas.usage,input);
     return this.transaction(() => {
       this.agent(data.agentId); this.get('resources',data.resourceId); if (data.taskId) this.get('tasks',data.taskId);
+      if (this.db.prepare('SELECT 1 FROM resource_admission_fences WHERE agentId=?').get(data.agentId)) throw new AppError('MEMBER_RETIRED', 'Member resource admission is closed until membership is restored', 409);
       const now = new Date().toISOString(); const usage: Usage = {...data,id:randomUUID(),active:true,version:1,createdAt:now,updatedAt:now};
       this.db.prepare('INSERT INTO usages(id,resourceId,agentId,purpose,scope,sharing,taskId,active,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?)').run(usage.id,usage.resourceId,usage.agentId,usage.purpose,usage.scope,usage.sharing,usage.taskId ?? null,1,now,now);
       this.append({kind:'CLAIM',agentId:data.agentId,summary:`Resource use declared: ${data.purpose}`,detail:JSON.stringify({scope:data.scope,sharing:data.sharing}),resourceId:data.resourceId,...(data.taskId ? {taskId:data.taskId} : {})}); this.touch(data.agentId); return usage;
