@@ -68,6 +68,8 @@ task_read(id, offset, limit) 返回目标元数据和 description/acceptanceCrit
 
 ## 停止、等待与恢复
 
+成员容量通过版本化 `pool_configure` 的 `maxSize` 在线调整，保持当前 `size` 不变即可只调整上限，不创建新成员，也不需要重启监听器。达到配置上限后，“增加成员”按钮置灰；鼠标悬浮或键盘聚焦按钮外层时，显示“已达成员上限（N 人）”，其中 N 来自当前配置。成员容量不规定同伴的任务分工。
+
 - 全部订阅目标 done/canceled：安全收尾后 completed，关闭空闲 App Server 进程；会话历史、代码和证据保留。出现新的人类目标后复用原成员与 threadId。
 - 只剩 blocked/in_review：waiting，等待新事实、消息或人类状态变化；不把受阻伪装为完成，也不靠模型轮询。
 - 顶部停止按钮／pool_control：携带最新 expectedVersion 与 enabled=false，阻止新回合，已提交回合收尾。每次 MCP 工具返回提示停止；停止后的业务写入被拒绝，仍允许发布收尾记录、心跳和释放资源声明。不能取消已经发生的外部副作用。

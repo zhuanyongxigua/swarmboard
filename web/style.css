@@ -151,3 +151,9 @@ dialog::backdrop { background: light-dark(#0005, #0008); }
 
 .automation-notice { margin: 0; padding: 7px 22px; color: var(--muted); font-size: 11px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .pool-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.add-peer-control { position: relative; display: inline-flex; flex-shrink: 0; }
+.add-peer-control[tabindex] { cursor: not-allowed; }
+.add-peer-control:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.add-peer-control > button:disabled { pointer-events: none; }
+.member-limit-tooltip { position: absolute; top: calc(100% + 6px); right: 0; z-index: 10; width: max-content; max-width: min(240px, 80vw); padding: 6px 10px; border-radius: 6px; background: var(--button); color: var(--button-text); box-shadow: 0 2px 8px #0002; visibility: hidden; }
+.add-peer-control:hover .member-limit-tooltip, .add-peer-control:focus-visible .member-limit-tooltip { visibility: visible; }

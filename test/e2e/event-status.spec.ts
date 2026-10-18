@@ -83,3 +83,39 @@ test('shows all shared-goal participants instead of a single assignee', async ({
   await page.getByRole('button',{name:'查看任务 '+task.title,exact:true}).click();
   await expect(page.getByRole('dialog')).toContainText('Shared peer A');await expect(page.getByRole('dialog')).toContainText('Shared peer B');
 });
+
+for (const { language, maxSize, label, hint } of [
+  { language: 'zh-CN', maxSize: 10, label: '增加成员', hint: '已达成员上限（10 人）' },
+  { language: 'en', maxSize: 12, label: 'Add member', hint: 'Member limit reached (12)' },
+]) test(`explains the configured member limit on hover and keyboard focus (${language})`, async ({ page }, testInfo) => {
+  const pool = { id: 'same-pool', workspacePath: '/synthetic/project', taskIds: [], size: maxSize - 1, maxSize, enabled: true, version: 8, state: 'active', error: '' };
+  const commands: unknown[] = [];
+  await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'events', workers: [], error: '', pool } }));
+  await page.route('**/api/pool/configure', route => {
+    const request = route.request().postDataJSON(); commands.push(request);
+    pool.size = request.size; pool.version++;
+    return route.fulfill({ json: pool });
+  });
+  await page.goto(`/?lang=${language}`);
+  const button = page.getByRole('button', { name: label, exact: true });
+  await expect(button).toBeEnabled();
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+  await button.click();
+  await expect(button).toBeDisabled();
+  expect(commands).toEqual([{ workspacePath: pool.workspacePath, taskIds: [], size: maxSize, maxSize, expectedVersion: 8 }]);
+  const control = button.locator('..');
+  await control.hover();
+  await expect(page.getByRole('tooltip')).toBeVisible();
+  await expect(page.getByRole('tooltip')).toHaveText(hint);
+  await expect(button).toHaveAccessibleDescription(hint);
+  await page.screenshot({ path: testInfo.outputPath('member-limit-tooltip.png') });
+  await page.getByRole('heading', { name: 'Swarmboard', exact: true }).hover();
+  await expect(page.getByRole('tooltip')).toBeHidden();
+  await page.getByRole('button', { name: language === 'en' ? 'Refresh board' : '刷新面板' }).focus();
+  await page.keyboard.press('Tab');
+  await expect(control).toBeFocused();
+  await expect(page.getByRole('tooltip')).toBeVisible();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('tooltip')).toBeHidden();
+  expect(commands).toHaveLength(1);
+});

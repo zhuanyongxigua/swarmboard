@@ -114,6 +114,9 @@ function Workspace() {
   const [automationError, setAutomationError] = useState('');
   const [eventRuntime, setEventRuntime] = useState<RuntimeStatus | null>(null);
   const [poolBusy, setPoolBusy] = useState(false);
+  const memberLimit = eventRuntime?.pool?.maxSize ?? 8;
+  const memberLimitReached = !!eventRuntime?.pool && eventRuntime.pool.size >= memberLimit;
+  const memberLimitHint = t('已达成员上限（{limit} 人）').replace('{limit}', String(memberLimit));
   async function controlPool(enabled?: boolean) {
     const pool = eventRuntime?.pool; if (!pool || poolBusy) return;
     setPoolBusy(true);
@@ -343,7 +346,10 @@ function Workspace() {
     </header>
     {eventRuntime?.pool || eventRuntime?.workers.length ? <div className="automation-notice" role="status">
       {eventRuntime.pool ? <div className="pool-controls"><span>{t('自协作池')} · {eventRuntime.activity?.members ?? eventRuntime.workers.filter(w => w.poolId === eventRuntime.pool?.id).length} {t('个成员')} · {eventRuntime.activity?.running ?? eventRuntime.workers.filter(w => w.poolId === eventRuntime.pool?.id && w.status === 'running').length} {t('个正在执行')} · {t(({ ready: '等待任务', active: '有未完成目标，当前空闲', idle: '有未完成目标，当前空闲', running: '协作中', waiting: '等待前置或验收', completed: '任务完成，已停止', stopping: '正在安全停止', stopped: '已停止', error: '需要处理', attention: '需要处理' } as Record<string,string>)[eventRuntime.activity?.state ?? eventRuntime.pool.state] ?? eventRuntime.pool.state)}{eventRuntime.activity?.executionMode === 'internal-only' ? ` · ${t('仅内部协作')}` : ''}</span>
-        {eventRuntime.pool.workspacePath ? <button type="button" className="secondary" disabled={poolBusy || !eventRuntime.pool.enabled || eventRuntime.pool.size >= (eventRuntime.pool.maxSize ?? 8)} onClick={() => void addPeer()}>{t('增加成员')}</button> : null}
+        {eventRuntime.pool.workspacePath ? <span className="add-peer-control" tabIndex={memberLimitReached ? 0 : undefined}>
+          <button type="button" className="secondary" disabled={poolBusy || !eventRuntime.pool.enabled || memberLimitReached} aria-describedby={memberLimitReached ? 'member-limit-tooltip' : undefined} onClick={() => void addPeer()}>{t('增加成员')}</button>
+          {memberLimitReached ? <span id="member-limit-tooltip" className="member-limit-tooltip" role="tooltip">{memberLimitHint}</span> : null}
+        </span> : null}
         <button type="button" className="secondary" disabled={poolBusy} onClick={() => void controlPool()}>{t(eventRuntime.pool.enabled ? '停止协作' : '恢复协作')}</button></div>
         : <span>{t('事件协作')} · {eventRuntime.workers.filter(w => w.enabled).length} {t('个工作会话')}</span>}
       {eventRuntime.ciWatches?.some(w => w.state === 'watching') ? <p className="subtle">{t('等待 CI 结果，完成后通知全体成员')}</p> : null}
