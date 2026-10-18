@@ -35,6 +35,10 @@
 
 `npm run test:host -- /path/to/codex` 使用实际 Codex app-server 的插件加载器，分别在两个隔离的 CODEX_HOME 安装仅启动命令不同的副本：绝对命令必须被拒绝，允许的裸命令必须发现工具、原生入口及真实 HTML 资源。使用合成 HOME、NVM 和数据库，不访问用户数据、不创建模型会话。CI 额外使用固定版本 `@openai/codex@0.162.1` 跑此回归；本机交付还用当前桌面捆绑 CLI 验证。原始 SDK 启动成功和 `plugin list` 中 installed/enabled 都不能代替这层验证。
 
+## 外部协作者
+
+`test/integration/collaborators.test.ts` 使用真实 SQLite 与官方 MCP 客户端检查：版本化接入（显式非空范围、cost 作为看板数据原样保存）、与池成员的分离计数、终态撤销与版本冲突、协作者工具面（管理工具不注册）、绑定身份与越界读写拒绝、直接协作（CLAIM 加入参与、FACT/FAIL/MESSAGE）、每次工具调用附加的范围内游标更新且无重复、撤销/终态目标后的 `COLLABORATOR_STOPPED` 写入围栏与清理豁免、以及接入与游标的重启持久化。`test/mcp/desktop.test.ts` 在真实打包 stdio 子进程（`SWARMBOARD_COLLABORATOR_ID`）中验证同一角色。拉取式更新是有依据的降级：文件/数据库访问不构成事件唤醒证明，因此不声称能唤醒外部 harness；真实外部连接另需显式验收。
+
 ## 会话后端契约与装配
 
 `test/harness/adapter-contract.ts` 是可复用的共享契约套件：echo 参考后端（`test/unit/echo-backend.test.ts`）与官方 Codex 适配（`test/unit/codex-adapter-contract.test.ts`，经 `SWARMBOARD_CODEX` 指向 model-free 协议夹具）跑同一组用例——稳定会话身份、回执与完成核查（含适配器重启后按投递标记核查）、未知身份返回 unknown、中断提交返回 uncertain、声明能力与实现一致。`test/unit/harness-registry.test.ts` 检查默认兼容、显式选择与未知后端报错；`test/integration/harness-assembly.test.ts` 用真实 OS 进程验证事件守护进程在 echo/codex 下干净启停、未知配置以诊断退出；`test/integration/harness-backend.test.ts` 在真实 SQLite 上验证后端身份持久化、跨后端拒绝并保持排队与人工暂停、未绑定 worker 改绑、以及从台账核查不确定投递而不重放。便携包回归确认参考后端进入打包产物并在真实子进程中生效。这些是确定性证据：不证明真实模型遵循协作规则，也不证明 DSH 已接入；真实 harness 验收单列于 verification.md。

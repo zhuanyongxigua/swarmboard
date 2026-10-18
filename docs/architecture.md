@@ -18,6 +18,7 @@ flowchart LR
 
 - `src/store.ts`：输入验证、状态变更、版本检查、归属检查、SQLite 事务及事件。
 - `src/harness/`：与宿主无关的会话契约（`contract.ts`）、后端注册与配置装配（`registry.ts`，`SWARMBOARD_HARNESS`）及确定性 echo 参考后端；官方 Codex 适配位于 `src/codex-session.ts`。见 [Harness 适配与扩展](harness-adapters.md)。
+- `src/collaborators.ts`：宿主接入的外部协作者——独立稳定身份、显式范围、终态撤销、成本记录与拉取式更新。见 [外部协作者](external-collaborators.md)。
 - `src/app.ts`：本地 HTTP API、Streamable HTTP MCP 传输、同源和可选 Bearer 检查。
 - `src/mcp.ts`：工具、协作 prompt、`board_open` 和 UI 资源注册；声明官方 `global` / `thread` entrypoints。
 - `src/stdio.ts`：由桌面宿主启动的本地 stdio 服务，正常输出仅用于 MCP 协议。

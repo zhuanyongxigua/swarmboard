@@ -38,7 +38,7 @@ if (process.platform !== 'win32') {
 await writeFile(path.join(destination, 'mcp.json'), JSON.stringify(mcp, null, 2) + '\n');
 
 await mkdir(path.join(destination, 'docs'), { recursive: true });
-for (const name of ['architecture.md', 'testing.md', 'verification.md', 'setup.md', 'setup.zh-CN.md', 'event-workers.md', 'harness-adapters.md']) {
+for (const name of ['architecture.md', 'testing.md', 'verification.md', 'setup.md', 'setup.zh-CN.md', 'event-workers.md', 'harness-adapters.md', 'external-collaborators.md']) {
   await cp(path.join(root, 'docs', name), path.join(destination, 'docs', name));
 }
 // Keep the README image links usable in the portable plugin as well as on GitHub.

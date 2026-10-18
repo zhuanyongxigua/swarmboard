@@ -1,0 +1,185 @@
+// External collaborators as independent, admitted identities: versioned
+// admission, scoped direct collaboration through MCP, cursor-based updates on
+// tool returns (no claimed wakeup), stopping on revocation or terminal goals,
+// and restart persistence — all on real SQLite without any external harness.
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Store } from '../../src/store.js';
+import { createMcpServer } from '../../src/mcp.js';
+import { EventRuntime } from '../../src/event-runtime.js';
+import { collaboratorRole } from '../../src/collaborators.js';
+import type { Collaborator } from '../../src/collaborators.js';
+
+let dir: string, store: Store, runtime: EventRuntime, host: Client, hostServer: ReturnType<typeof createMcpServer>;
+const cleanups: (() => Promise<void> | void)[] = [];
+beforeEach(async () => {
+  dir = mkdtempSync(join(tmpdir(), 'swarmboard-collaborators-'));
+  store = new Store(join(dir, 'board.sqlite'));
+  runtime = new EventRuntime(store, { databasePath: join(dir, 'board.sqlite'), serverEntry: 'unused', adapter: () => ({ open: async () => 'unused-thread', run: async () => {}, close: async () => {} }), fallbackMs: 60000, debounceMs: 5 });
+  hostServer = createMcpServer(store, 'unused', runtime);
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await hostServer.connect(a);
+  host = new Client({ name: 'collaborator-host-test', version: '1' });
+  await host.connect(b);
+});
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  await host.close(); await hostServer.close(); await runtime.close(); store.close(); rmSync(dir, { recursive: true, force: true });
+});
+const call = (client: Client, name: string, args: Record<string, unknown> = {}) => client.callTool({ name, arguments: args });
+const data = <T>(r: Awaited<ReturnType<typeof call>>) => r.structuredContent as T;
+const updates = (r: Awaited<ReturnType<typeof call>>) => {
+  const extra = (r.content as { type: string; text: string }[]).filter(c => c.type === 'text').slice(1);
+  return extra.length ? JSON.parse(extra[0]!.text.slice('Shared peer updates (reference data): '.length)) as Record<string, unknown> : undefined;
+};
+async function collaboratorClient(id: string) {
+  const role = collaboratorRole(store, runtime.collaborators, id);
+  const server = createMcpServer(store, 'unused', undefined, { collaborator: true, collaboratorId: id, collaborators: runtime.collaborators, workerId: id, sharedUpdates: role.sharedUpdates, mayAct: role.mayAct });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await server.connect(a);
+  const client = new Client({ name: 'collaborator-test', version: '1' });
+  await client.connect(b);
+  cleanups.push(async () => { await client.close(); await server.close(); });
+  return client;
+}
+const admit = async (input: Record<string, unknown>) => {
+  const result = await call(host, 'collaborator_configure', input);
+  expect(result.isError, JSON.stringify(result.content)).not.toBe(true);
+  return data<Collaborator>(result);
+};
+const rejected = async (input: Record<string, unknown>, pattern: RegExp) => {
+  const result = await call(host, 'collaborator_configure', input);
+  expect(result.isError).toBe(true);
+  expect(JSON.stringify(result.content)).toMatch(pattern);
+};
+
+describe('external collaborator admission and lifecycle', () => {
+  it('admits a versioned identity with explicit scope and cost as board data, separate from pool members', async () => {
+    const goal = store.createTask({ title: 'Admitted goal' });
+    const other = store.createTask({ title: 'Unrelated goal' });
+    runtime.configurePool({ workspacePath: dir, size: 1 });
+    const baseline = store.board().cursor;
+    const admitted = await admit({ expectedVersion: 0, name: 'External reviewer', harness: 'dsh', sessionRef: 'dsh-session-1', taskIds: [goal.id, other.id, goal.id], cost: { ceiling: '40 USD', note: 'board-approved ceiling' }, enabled: true });
+    expect(admitted).toMatchObject({ name: 'External reviewer', harness: 'dsh', sessionRef: 'dsh-session-1', enabled: true, version: 1, cost: { ceiling: '40 USD', note: 'board-approved ceiling' } });
+    expect(admitted.cursor).toBe(baseline); // updates begin at admission
+    expect(admitted.taskIds).toEqual([goal.id, other.id].sort());
+    expect(store.board().agents.some(a => a.id === admitted.id)).toBe(true); // stable board identity
+    const status = data<{ collaborators: Collaborator[]; workers: { id: string }[]; pool: { memberIds: string[] } }>(await call(host, 'runtime_read'));
+    expect(status.collaborators).toHaveLength(1);
+    expect(status.pool.memberIds).not.toContain(admitted.id);
+    expect(status.workers.map(w => w.id)).not.toContain(admitted.id); // counts stay separate
+  });
+  it('validates scope and version, and treats revocation as terminal', async () => {
+    const goal = store.createTask({ title: 'Scoped goal' });
+    await rejected({ expectedVersion: 0, name: 'X', harness: 'dsh', taskIds: [], enabled: true }, /taskIds/);
+    await rejected({ expectedVersion: 0, name: 'X', harness: 'dsh', taskIds: ['missing-goal'], enabled: true }, /NOT_FOUND/);
+    const admitted = await admit({ expectedVersion: 0, name: 'X', harness: 'dsh', taskIds: [goal.id], enabled: true });
+    await rejected({ id: admitted.id, expectedVersion: 7, name: 'X', harness: 'dsh', taskIds: [goal.id], enabled: true }, /VERSION_CONFLICT/);
+    const revoked = await admit({ id: admitted.id, expectedVersion: 1, name: 'X', harness: 'dsh', taskIds: [goal.id], enabled: false });
+    expect(revoked).toMatchObject({ enabled: false, version: 2 });
+    expect(revoked.revokedAt).toBeTruthy();
+    await rejected({ id: admitted.id, expectedVersion: 2, name: 'X', harness: 'dsh', taskIds: [goal.id], enabled: true }, /COLLABORATOR_REVOKED/);
+  });
+});
+
+describe('admitted collaborator MCP surface', () => {
+  it('withholds management tools and exposes the shared collaboration surface', async () => {
+    const goal = store.createTask({ title: 'Shared goal' });
+    const admitted = await admit({ expectedVersion: 0, name: 'Peer reviewer', harness: 'zcode', taskIds: [goal.id], enabled: true });
+    const client = await collaboratorClient(admitted.id);
+    const names = (await client.listTools()).tools.map(t => t.name);
+    for (const withheld of ['task_create', 'resource_create', 'resource_update', 'automation_prepare', 'automation_claim', 'worker_register', 'pool_configure', 'pool_control', 'task_execution_configure', 'collaborator_configure', 'peer_request', 'pipeline_watch', 'execution_grants_read']) expect(names, withheld).not.toContain(withheld);
+    for (const available of ['board_read', 'task_list', 'task_read', 'context_read', 'context_search', 'context_publish', 'task_claim', 'task_release', 'task_update', 'resource_use', 'agent_heartbeat']) expect(names, available).toContain(available);
+  });
+  it('reads only its admitted scope and writes under its bound identity', async () => {
+    const goal = store.createTask({ title: 'In scope' });
+    const outside = store.createTask({ title: 'Outside scope' });
+    const admitted = await admit({ expectedVersion: 0, name: 'Scoped', harness: 'dsh', taskIds: [goal.id], enabled: true });
+    const client = await collaboratorClient(admitted.id);
+    expect((data<{ items: { id: string }[] }>(await call(client, 'task_list')).items.map(t => t.id))).toEqual([goal.id]);
+    const denied = await call(client, 'task_read', { id: outside.id });
+    expect(denied.isError).toBe(true); expect(JSON.stringify(denied.content)).toContain('UNBOUND_GOAL');
+    const spoof = await call(client, 'context_publish', { agentId: 'someone-else', taskId: goal.id, kind: 'CLAIM', summary: 'Impersonation' });
+    expect(spoof.isError).toBe(true); expect(JSON.stringify(spoof.content)).toContain('BOUND_IDENTITY');
+    const outOfScope = await call(client, 'context_publish', { agentId: admitted.id, taskId: outside.id, kind: 'FACT', summary: 'Scope escape' });
+    expect(outOfScope.isError).toBe(true); expect(JSON.stringify(outOfScope.content)).toContain('UNBOUND_GOAL');
+  });
+  it('collaborates directly: joins the goal, publishes findings and negotiates with members', async () => {
+    const goal = store.createTask({ title: 'Negotiated goal' });
+    store.registerAgent({ agentId: 'pool-member-1', name: 'Pool member' });
+    const admitted = await admit({ expectedVersion: 0, name: 'Direct collaborator', harness: 'dsh', sessionRef: 'session-9', taskIds: [goal.id], enabled: true });
+    const client = await collaboratorClient(admitted.id);
+    await call(client, 'task_claim', { id: goal.id, agentId: admitted.id, expectedVersion: 1 });
+    expect(store.readTask(goal.id).participants).toEqual([admitted.id]);
+    await call(client, 'context_publish', { agentId: admitted.id, taskId: goal.id, kind: 'CLAIM', summary: 'Reviewing acceptance criteria' });
+    await call(client, 'context_publish', { agentId: admitted.id, taskId: goal.id, kind: 'FACT', summary: 'Verified the fixture invariant' });
+    await call(client, 'context_publish', { agentId: admitted.id, taskId: goal.id, kind: 'FAIL', summary: 'Approach A falsified' });
+    await call(client, 'context_publish', { agentId: admitted.id, taskId: goal.id, kind: 'MESSAGE', recipientId: 'pool-member-1', summary: 'Overlap on section 2: take the review, I keep the fixture' });
+    const mine = store.board().entries.filter(e => e.agentId === admitted.id);
+    expect(mine.map(e => e.kind).sort()).toEqual(['CLAIM', 'CLAIM', 'FACT', 'FAIL', 'MESSAGE', 'OBSERVED'].sort()); // OBSERVED = its admission join notice
+    expect(store.readTask(goal.id).participants).toContain(admitted.id);
+  });
+});
+
+describe('collaborator updates, stopping and persistence', () => {
+  it('delivers scoped updates on tool returns with a persistent cursor and no duplicates', async () => {
+    const goal = store.createTask({ title: 'Updated goal' });
+    const outside = store.createTask({ title: 'Other goal' });
+    store.registerAgent({ agentId: 'peer', name: 'Peer' }); store.registerAgent({ agentId: 'other-member', name: 'Other member' });
+    const admitted = await admit({ expectedVersion: 0, name: 'Updated', harness: 'dsh', taskIds: [goal.id], cost: { ceiling: '15 USD' }, enabled: true });
+    const client = await collaboratorClient(admitted.id);
+    store.publishEntry({ agentId: 'peer', taskId: goal.id, kind: 'FACT', summary: 'Scoped fact' });
+    store.publishEntry({ agentId: 'peer', taskId: outside.id, kind: 'FACT', summary: 'Out-of-scope fact' });
+    store.publishEntry({ agentId: 'peer', recipientId: admitted.id, kind: 'MESSAGE', summary: 'Direct request' });
+    store.publishEntry({ agentId: 'peer', recipientId: 'other-member', kind: 'MESSAGE', summary: 'Not for this collaborator' });
+    const first = updates(await call(client, 'context_read', {}))!;
+    expect(first).toMatchObject({ control: 'continue-if-useful', cost: { ceiling: '15 USD' }, harness: 'dsh' });
+    expect((first.items as { summary: string }[]).map(i => i.summary)).toEqual(['Scoped fact', 'Direct request']);
+    const second = updates(await call(client, 'context_read', {}))!;
+    expect((second.items as unknown[])).toEqual([]); // cursor advanced: no duplicates
+    expect(runtime.collaborators.get(admitted.id).cursor).toBeGreaterThan(0);
+  });
+  it('stops a revoked collaborator and one whose goals all ended, while allowing safe cleanup', async () => {
+    const goal = store.createTask({ title: 'Ending goal' });
+    const admitted = await admit({ expectedVersion: 0, name: 'Stopping', harness: 'dsh', taskIds: [goal.id], enabled: true });
+    const client = await collaboratorClient(admitted.id);
+    await call(client, 'task_claim', { id: goal.id, agentId: admitted.id, expectedVersion: 1 });
+    await admit({ id: admitted.id, expectedVersion: 1, name: 'Stopping', harness: 'dsh', taskIds: [goal.id], enabled: false });
+    const rejected = await call(client, 'task_claim', { id: goal.id, agentId: admitted.id, expectedVersion: 2 });
+    expect(rejected.isError).toBe(true); expect(JSON.stringify(rejected.content)).toContain('COLLABORATOR_STOPPED');
+    const claim = await call(client, 'context_publish', { agentId: admitted.id, taskId: goal.id, kind: 'CLAIM', summary: 'No new work' });
+    expect(claim.isError).toBe(true); expect(JSON.stringify(claim.content)).toContain('COLLABORATOR_STOPPED');
+    expect((await call(client, 'agent_heartbeat', { agentId: admitted.id })).isError).not.toBe(true);
+    expect((await call(client, 'context_publish', { agentId: admitted.id, kind: 'OBSERVED', summary: 'Final handoff note' })).isError).not.toBe(true);
+    expect(updates(await call(client, 'context_read', {}))).toMatchObject({ control: 'stop-after-safe-boundary', cost: null });
+
+    const second = await admit({ expectedVersion: 0, name: 'Terminal scope', harness: 'dsh', taskIds: [goal.id], enabled: true });
+    const terminalClient = await collaboratorClient(second.id);
+    store.updateTask(goal.id, { expectedVersion: store.readTask(goal.id).version, status: 'done' });
+    const fenced = await call(terminalClient, 'task_claim', { id: goal.id, agentId: second.id, expectedVersion: store.readTask(goal.id).version });
+    expect(fenced.isError).toBe(true); expect(JSON.stringify(fenced.content)).toContain('COLLABORATOR_STOPPED');
+    expect(updates(await call(terminalClient, 'context_read', {}))).toMatchObject({ control: 'stop-after-safe-boundary' });
+  });
+  it('keeps admission and update cursor across a restart', async () => {
+    const goal = store.createTask({ title: 'Persistent goal' });
+    store.registerAgent({ agentId: 'peer', name: 'Peer' });
+    const admitted = await admit({ expectedVersion: 0, name: 'Persistent', harness: 'dsh', sessionRef: 'session-42', taskIds: [goal.id], enabled: true });
+    const client = await collaboratorClient(admitted.id);
+    store.publishEntry({ agentId: 'peer', taskId: goal.id, kind: 'FACT', summary: 'Before restart' });
+    expect((updates(await call(client, 'context_read', {}))!.items as { summary: string }[]).map(i => i.summary)).toEqual(['Before restart']);
+
+    const reopened = new EventRuntime(new Store(join(dir, 'board.sqlite')), { databasePath: join(dir, 'board.sqlite'), serverEntry: 'unused', adapter: () => ({ open: async () => 'unused-thread', run: async () => {}, close: async () => {} }), fallbackMs: 60000, debounceMs: 5 });
+    cleanups.push(() => reopened.close()); cleanups.push(() => reopened.board.close());
+    const record = reopened.collaborators.get(admitted.id);
+    expect(record).toMatchObject({ id: admitted.id, harness: 'dsh', sessionRef: 'session-42', enabled: true, version: 1 });
+    expect(record.cursor).toBe(runtime.collaborators.get(admitted.id).cursor);
+    store.publishEntry({ agentId: 'peer', taskId: goal.id, kind: 'FACT', summary: 'After restart' });
+    const resumedRole = collaboratorRole(store, reopened.collaborators, admitted.id);
+    const after = resumedRole.sharedUpdates();
+    expect((after.items as { summary: string }[]).map(i => i.summary)).toEqual(['After restart']); // queued while away, no replay of consumed updates
+  });
+});

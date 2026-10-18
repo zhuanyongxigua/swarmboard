@@ -1,3 +1,10 @@
+# 外部协作者最小切片（2026-10-18）
+
+- 按产品要求把外部 agent 落地为独立身份协作者：宿主经 `collaborator_configure` 版本化接入（名称、harness 标签、sessionRef、显式非空目标范围、可选 cost 记录、enabled），接入即注册稳定看板 agentId 并发布加入事件；撤销为终态（记录 revokedAt，不可重启用/改范围）。`runtime_read`/`/api/runtime` 新增 `collaborators` 列表，与池成员/worker 分开计数；池组织、执行授权与 Codex 会话路径不变。
+- 协作者 MCP 子进程由外部 harness 自行启动（`SWARMBOARD_COLLABORATOR_ID`，未知 id 启动报错，不运行事件 runtime）：与池成员相同的协作面（范围内有界读取、CLAIM/FACT/FAIL/MESSAGE、参与/释放、资源声明），管理工具不注册，写入绑定身份并按接入范围围栏（越界 `UNBOUND_GOAL`）。更新为拉取式：每次工具调用附加游标以来的范围内事件（持久游标、entry-id 去重、忙碌排队、重启不重放），control 信号与 `COLLABORATOR_STOPPED` 围栏在撤销或范围内目标全部终态时停止新写入、保留清理操作。这是有依据的降级：不声称能唤醒外部 harness（文件/数据库访问不构成唤醒证明）；harness 字段是追踪标签，无任何真实外部 harness 连接。
+- cost 仅作看板数据原样记录与透传（自由文本 ceiling/note；未记录为 null，不是"无上限"，也不内置厂商费率或强制）。审批交接为共享面板请求，不自动批准。
+- 新增 `test/integration/collaborators.test.ts`（真实 SQLite + 官方 MCP 客户端，8 例）与 `test/mcp/desktop.test.ts` 真实打包子进程协作者用例；完整 `npm run check` 通过：**206/206** 服务/协议/集成（覆盖率门槛不变；`src/collaborators.ts` 行/函数 100%、分支 90.32%）、**28/28** Chromium。文档见 `docs/external-collaborators.md`。真实外部 harness 连接、其模型行为与成本度量未验收、不声称；界面展示为已记录的后续项。
+
 # Harness 协作内核与适配层（2026-10-18）
 
 - 协作内核不再依赖具体 harness：`SessionAdapter`/`UncertainDelivery`/能力声明移入 `src/harness/contract.ts`，`src/event-runtime.ts` 经注册表取得后端；官方 Codex 适配完整接回新契约，现网默认行为不变。`SWARMBOARD_HARNESS` 是唯一配置缝，桌面 stdio 与事件守护进程共用，未知后端以 `UNKNOWN_HARNESS` 启动报错，绝不静默回落。新增确定性 echo 参考后端（`deterministic: true`，无模型，sidecar 台账）证明扩展不改内核。

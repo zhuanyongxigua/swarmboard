@@ -12,6 +12,7 @@ import { WorkerPool } from './worker-pool.js';
 import { PoolLiveness } from './pool-liveness.js';
 import { PipelineEvents, type PipelineReader } from './pipeline-events.js';
 import { ExecutionGrants } from './execution-grants.js';
+import { CollaboratorStore } from './collaborators.js';
 import { notificationDelay, notificationSettings, type NotificationOptions } from './notification-batch.js';
 
 export interface RuntimeOptions extends NotificationOptions {
@@ -27,6 +28,7 @@ export class EventRuntime {
   readonly pool: WorkerPool;
   readonly ci: PipelineEvents;
   readonly grants: ExecutionGrants;
+  readonly collaborators: CollaboratorStore;
   private liveness: PoolLiveness;
   private scanning?: Promise<void>;
   private token = randomUUID();
@@ -50,6 +52,7 @@ export class EventRuntime {
     this.workers = new WorkerStore(this.statePath);
     this.pool = new WorkerPool(this.workers, board, options.databasePath);
     this.grants = new ExecutionGrants(board, this.workers);
+    this.collaborators = new CollaboratorStore(this.statePath);
     this.liveness = new PoolLiveness(board, this.workers, options.idleMs ?? 10 * 60 * 1000);
     this.ci = new PipelineEvents(board, this.workers, options.pipelineReader, options.now, () => !this.closed && this.workers.owns(this.token));
   }
@@ -105,7 +108,7 @@ export class EventRuntime {
     if (activity.state === 'idle' && this.ci.hasPending()) activity.state = 'waiting';
     return { mode: 'events' as const,
       backend: { id: this.backend.id, displayName: this.backend.displayName, deterministic: this.backend.deterministic === true, capabilities: this.backend.capabilities },
-      owner: this.workers.owner(), workers: this.workers.list(), pool: this.workers.pool(), activity, executionGrants: this.grants.list(), ciWatches: this.ci.list(), notifications: { ...this.notificationPolicy, nextWakeAt: this.nextBatchWakeAt }, error: this.lastError };
+      owner: this.workers.owner(), workers: this.workers.list(), pool: this.workers.pool(), collaborators: this.collaborators.list(), activity, executionGrants: this.grants.list(), ciWatches: this.ci.list(), notifications: { ...this.notificationPolicy, nextWakeAt: this.nextBatchWakeAt }, error: this.lastError };
   }
   configureExecutionGrant(input: unknown) {
     const grant = this.grants.configure(input);
@@ -115,6 +118,14 @@ export class EventRuntime {
     this.notify(); return grant;
   }
   hasWorkers() { return this.workers.list().length > 0 || this.workers.pool() !== null; }
+  // Host-only admission/lifecycle for external collaborators. The runtime never
+  // delivers turns to them; it registers their stable board identity and keeps
+  // their scoped record for the collaborator MCP role.
+  configureCollaborator(input: unknown) {
+    const { collaborator, created } = this.collaborators.configure(input, this.board);
+    if (created && !this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(collaborator.id)) this.board.registerAgent({ agentId: collaborator.id, name: collaborator.name });
+    this.notify(); return collaborator;
+  }
   configurePool(input: unknown) { const pool = this.pool.configure(input); this.notify(); return pool; }
   controlPool(input: unknown) { const pool = this.pool.control(input); this.notify(); return pool; }
   register(input: unknown) {

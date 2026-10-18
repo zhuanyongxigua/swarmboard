@@ -127,6 +127,7 @@ npm run check
 - [Installation and configuration](docs/setup.md): desktop setup, upgrades, database paths, and development preview.
 - [Architecture and collaboration semantics](docs/architecture.md) (Chinese): MCP tools, version checks, resource negotiation, and runtime boundaries.
 - [Harness adapters](docs/harness-adapters.md) (Chinese): the harness-neutral session contract, backend registry/configuration (`SWARMBOARD_HARNESS`), capability matrix, how to add a backend, and DSH integration prep.
+- [External collaborators](docs/external-collaborators.md) (Chinese): admitting independent external agents as scoped board collaborators with identity, lifecycle, cost records, and pull-based updates.
 - [Test layers](docs/testing.md) / [verification records](docs/verification.md) (Chinese): behavioral coverage and actual execution evidence.
 - Rebuild both English and Chinese UI screenshots with `npm run docs:screenshots` (English preview: `?lang=en`; Chinese: `?lang=zh-CN`). It uses a temporary database and sample data, with no model calls or access to real development machines.
 

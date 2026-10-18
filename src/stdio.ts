@@ -8,6 +8,7 @@ import { Store } from './store.js';
 import { EventRuntime } from './event-runtime.js';
 import { resolveHarness } from './harness/registry.js';
 import { WorkerStore } from './worker-store.js';
+import { CollaboratorStore, collaboratorRole } from './collaborators.js';
 import { PipelineEvents } from './pipeline-events.js';
 import { ExecutionGrants } from './execution-grants.js';
 
@@ -21,11 +22,18 @@ export async function startStdioServer(options: StdioOptions = {}) {
   const backend = resolveHarness();
   const databasePath = options.dbPath ?? defaultDatabasePath();
   const store = new Store(databasePath);
-  const runtime = process.env.SWARMBOARD_DISABLE_RUNTIME === '1' ? undefined : new EventRuntime(store, { databasePath, serverEntry: fileURLToPath(import.meta.url), backend, autoPool: true });
+  const collaboratorId = process.env.SWARMBOARD_COLLABORATOR_ID;
+  const sidecar = databasePath === ':memory:' ? ':memory:' : databasePath + '.runtime.sqlite';
+  // A collaborator child never runs the event runtime: Swarmboard does not
+  // wake external harnesses, and file/database access alone proves no wakeup.
+  const collaboratorState = collaboratorId ? new CollaboratorStore(sidecar) : undefined;
+  if (collaboratorId) collaboratorState!.get(collaboratorId); // unknown id = startup error
+  const role = collaboratorState && collaboratorId ? collaboratorRole(store, collaboratorState, collaboratorId) : undefined;
+  const runtime = collaboratorId || process.env.SWARMBOARD_DISABLE_RUNTIME === '1' ? undefined : new EventRuntime(store, { databasePath, serverEntry: fileURLToPath(import.meta.url), backend, autoPool: true });
   runtime?.start();
   const poolMember = process.env.SWARMBOARD_POOL_MEMBER === '1';
   const workerId = process.env.SWARMBOARD_WORKER_ID;
-  const peerState = poolMember && workerId ? new WorkerStore(databasePath + '.runtime.sqlite') : undefined;
+  const peerState = poolMember && workerId ? new WorkerStore(sidecar) : undefined;
   let updateCursor = peerState && workerId ? (peerState.get(workerId).deliveryCursor ?? peerState.get(workerId).cursor) : 0;
   const mayAct = () => {
     const pool = peerState?.pool();
@@ -40,11 +48,15 @@ export async function startStdioServer(options: StdioOptions = {}) {
     const compact = items.map(e => ({ ...e, detail: e.detail.slice(0, 1000), detailTruncated: e.detail.length > 1000 }));
     return { control: mayAct() ? 'continue-if-useful' : 'stop-after-safe-boundary', executionGrants: new ExecutionGrants(store, peerState!).active(), organization: { memberIds: pool.memberIds, size: pool.size, maxSize: pool.maxSize }, items: compact, hasMore: events.hasMore };
   };
-  const server = createMcpServer(store, widgetPath, runtime, { poolMember, ...(peerState ? { sharedUpdates, mayAct, peers: peerState, workerId, ci: new PipelineEvents(store, peerState) } : {}) });
+  const server = createMcpServer(store, widgetPath, runtime, {
+    poolMember,
+    ...(peerState ? { sharedUpdates, mayAct, peers: peerState, workerId, ci: new PipelineEvents(store, peerState) } : {}),
+    ...(collaboratorState && collaboratorId && role ? { collaborator: true, collaboratorId, collaborators: collaboratorState, sharedUpdates: role.sharedUpdates, mayAct: role.mayAct, workerId: collaboratorId } : {}),
+  });
   const transport = new StdioServerTransport();
   let closing: Promise<void> | undefined;
   const close = () => closing ??= (async () => {
-    try { await runtime?.close(); await server.close(); } finally { peerState?.close(); store.close(); }
+    try { await runtime?.close(); await server.close(); } finally { collaboratorState?.close(); peerState?.close(); store.close(); }
   })();
   try { await server.connect(transport); }
   catch (error) { await close(); throw error; }
