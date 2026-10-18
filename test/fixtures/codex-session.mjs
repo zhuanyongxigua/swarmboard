@@ -14,6 +14,11 @@ createInterface({ input: process.stdin }).on('line', line => {
   if (method === 'initialize') send({ id, result: {} });
   if (method === 'thread/start' || method === 'thread/resume') {
     if (params.sandbox !== 'workspace-write' || params.approvalPolicy !== 'on-request') { send({ id, error: { code: 400 } }); return; }
+    if (params.threadId === 'required-worker-thread' && !process.argv.includes('mcp_servers.swarmboard_worker.required=true')) { send({ id, error: { code: 412 } }); return; }
+    if (params.threadId === 'delayed-resume-thread') {
+      setTimeout(() => send({ id, result: { thread: { id: params.threadId, cwd: params.cwd } } }), 1200);
+      return;
+    }
     // Simulate unbounded history hydration stalling a metadata-only resume.
     if (method === 'thread/resume' && params.threadId === 'large-history-thread' && params.excludeTurns !== true) return;
     if (params.threadId === 'resume-timeout-thread') return;

@@ -6,11 +6,21 @@ import type { Worker } from '../../src/worker-store.js';
 const sessions: CodexSession[] = [];
 afterEach(async () => { await Promise.all(sessions.splice(0).map(s => s.close())); });
 const worker = { id: 'worker', workspacePath: process.cwd(), threadId: null } as Worker;
-function session(onApproval?: () => void) {
-  const s = new CodexSession({ databasePath: ':memory:', serverEntry: 'unused', binary: resolve('test/fixtures/codex-session.mjs'), requestTimeoutMs: 3000, onApproval });
+function session(onApproval?: () => void, requestTimeoutMs = 3000, openTimeoutMs = 3000) {
+  const s = new CodexSession({ databasePath: ':memory:', serverEntry: 'unused', binary: resolve('test/fixtures/codex-session.mjs'), requestTimeoutMs, openTimeoutMs, onApproval });
   sessions.push(s); return s;
 }
 describe('official App Server session adapter', () => {
+  it('allows bounded slow MCP startup without extending the turn submission timeout', async () => {
+    const s = session(undefined, 500, 2500), started = vi.fn();
+    const id = await s.open({ ...worker, threadId: 'delayed-resume-thread' });
+    expect(id).toBe('delayed-resume-thread');
+    await expect(s.run(id, 'timeout', started)).rejects.toBeInstanceOf(UncertainDelivery);
+    expect(started).not.toHaveBeenCalled();
+  });
+  it('requires the worker coordination MCP when resuming a bound peer', async () => {
+    expect(await session().open({ ...worker, threadId: 'required-worker-thread' })).toBe('required-worker-thread');
+  });
   it('separates an existing-thread resume timeout from an ambiguous model submission', async () => {
     const s = session();
     try { await s.open({ ...worker, threadId: 'resume-timeout-thread' }); expect.fail('Expected timeout'); }

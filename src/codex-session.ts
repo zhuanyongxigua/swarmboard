@@ -18,7 +18,7 @@ export class CodexSession implements SessionAdapter {
   private turns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
   private early = new Map<string, any>();
   private initialized?: Promise<void>;
-  constructor(private options: { databasePath: string; serverEntry: string; workerId?: string; poolMember?: boolean; binary?: string; requestTimeoutMs?: number; onApproval?: () => void }) {}
+  constructor(private options: { databasePath: string; serverEntry: string; workerId?: string; poolMember?: boolean; binary?: string; requestTimeoutMs?: number; openTimeoutMs?: number; onApproval?: () => void }) {}
   private start() {
     return this.initialized ??= (async () => {
       const bundled = '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex';
@@ -31,6 +31,7 @@ export class CodexSession implements SessionAdapter {
         ...config('mcp_servers.swarmboard.command', process.execPath),
         ...config('mcp_servers.swarmboard.enabled', false),
         ...config('mcp_servers.swarmboard_worker.command', process.execPath),
+        ...config('mcp_servers.swarmboard_worker.required', true),
         ...config('mcp_servers.swarmboard_worker.args', [this.options.serverEntry]),
         ...config('mcp_servers.swarmboard_worker.env.SWARMBOARD_DB_PATH', this.options.databasePath),
         ...config('mcp_servers.swarmboard_worker.env.SWARMBOARD_DISABLE_RUNTIME', '1'),
@@ -43,12 +44,12 @@ export class CodexSession implements SessionAdapter {
       lines.on('line', line => { try { this.receive(JSON.parse(line)); } catch { /* Ignore non-protocol diagnostics. */ } });
       const failed = () => this.fail(new Error('Codex App Server disconnected; inspect the bound session before retrying'));
       this.child.once('error', failed); this.child.once('exit', failed); this.child.stdin.on('error', failed); this.child.stdout.on('error', failed);
-      await this.request('initialize', { clientInfo: { name: 'swarmboard-event-worker', title: 'Swarmboard event worker', version: '0.8.2' }, capabilities: { experimentalApi: true } });
+      await this.request('initialize', { clientInfo: { name: 'swarmboard-event-worker', title: 'Swarmboard event worker', version: '0.8.3' }, capabilities: { experimentalApi: true } });
       this.send({ method: 'initialized' });
     })();
   }
   private send(message: unknown) { this.child!.stdin.write(JSON.stringify(message) + '\n'); }
-  private request(method: string, params: unknown): Promise<any> {
+  private request(method: string, params: unknown, timeoutMs = this.options.requestTimeoutMs ?? 30000): Promise<any> {
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -58,7 +59,7 @@ export class CodexSession implements SessionAdapter {
         reject(['turn/start', 'thread/start'].includes(method)
           ? new UncertainDelivery(`${method} timed out; delivery outcome is unknown`)
           : new Error(`${method} timed out`));
-      }, this.options.requestTimeoutMs ?? 30000);
+      }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer }); this.send({ id, method, params });
     });
   }
@@ -99,7 +100,10 @@ export class CodexSession implements SessionAdapter {
     const response = await this.request(worker.threadId ? 'thread/resume' : 'thread/start', {
       ...(worker.threadId ? { threadId: worker.threadId, excludeTurns: true } : {}), cwd: worker.workspacePath,
       sandbox: 'workspace-write', approvalPolicy: 'on-request',
-    });
+    // Resuming also initializes MCP dependencies. Six real concurrent resumes
+    // took 42-50s, so startup has its own bounded budget; turn/start keeps the
+    // shorter acknowledgement timeout and its uncertainty protection.
+    }, this.options.openTimeoutMs ?? 90000);
     if (!response.thread?.id || response.thread.cwd !== worker.workspacePath || worker.threadId && response.thread.id !== worker.threadId) throw new Error('Codex did not bind the expected workspace');
     return response.thread.id as string;
   }

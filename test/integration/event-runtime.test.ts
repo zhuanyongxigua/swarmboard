@@ -27,7 +27,7 @@ function session() {
 }
 describe('event-driven persistent workers', () => {
   it('keeps queued events and the original session after a real transport resume timeout', async () => {
-    const adapter = new CodexSession({ databasePath: ':memory:', serverEntry: 'unused', binary: resolve('test/fixtures/codex-session.mjs'), requestTimeoutMs: 1000 });
+    const adapter = new CodexSession({ databasePath: ':memory:', serverEntry: 'unused', binary: resolve('test/fixtures/codex-session.mjs'), requestTimeoutMs: 1000, openTimeoutMs: 1000 });
     const run = vi.spyOn(adapter, 'run'), f = fixture(adapter);
     const worker = f.runtime.register({ name: 'Builder', workspacePath: f.dir });
     f.runtime.workers.save({ ...worker, threadId: 'resume-timeout-thread' });

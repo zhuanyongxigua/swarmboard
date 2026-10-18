@@ -79,6 +79,8 @@ task_read(id, offset, limit) 返回目标元数据和 description/acceptanceCrit
 
 0.8.2 增加持久化 deliveryPhase：opening 在恢复会话前记录，submitting 在调用 turn/start 前记录，running 在收到 turnId 后记录。已有 threadId 的恢复超时属于连接失败，尚未提交模型回合，保留游标与原身份并置 error，不再标成业务执行不明。重启核查只有在 opening、已有 threadId 且没有 turnId 的证据成立时，才允许转为可显式恢复的 error；缺少阶段的旧检查点仅兼容精确的旧 `thread/resume timed out; delivery outcome is unknown` 诊断。submitting/running、无此证据的旧检查点及新建会话确认丢失仍保持 uncertain，不以“没有 turnId”推断未执行。
 
+0.8.3 区分启动与普通请求预算：thread/start 与 thread/resume 要等待 MCP 初始化，默认最多 90 秒；initialize、turn/start 确认和只读请求仍是 30 秒，不延长模型提交的不确定窗口。真实六成员并发恢复实验测得 42–50 秒，原 30 秒预算会在依赖完成前结束连接；这与 active writer 是两种不同故障，重启客户端不能替代合理的启动预算。swarmboard_worker 设为 required，缺少协调 MCP 时启动失败，不能带着缺失的共享工具进入模型回合。保持全部成员并发、自组织及原身份，不增加任务定时器、中心分工或盲目重试。
+
 如果官方 App Server 返回 active writer，说明另一个连接仍持有该会话。运行时显示明确的连接占用原因，不强杀桌面进程、不删除锁、不换会话或盲目重试。先暂停组织，关闭占用的聊天视图或由用户正常重启占用客户端；确认占用已释放后，对旧 uncertain 检查点执行 worker_reconcile，再用最新版本显式启用 error 成员，最后恢复组织。恢复不推进未处理事件游标，不改变目标状态。若客户端仍持有写入权，恢复会再次停在 error，需要解决连接生命周期，不能宣称业务已恢复。
 
 ## 执行与权限

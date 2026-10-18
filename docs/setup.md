@@ -95,7 +95,7 @@ The command builds the current source, starts a temporary loopback service, writ
 
 ## Troubleshooting
 
-**A peer reports thread/resume timeout or active writer.** Pause the organization. Version 0.8.2 distinguishes an existing-session connection failure from an uncertain model submission using durable delivery phases. An active writer belongs to another connection: close its chat view or normally restart its owning client, then follow the [recovery gates](event-workers.md) to enable the original peer. Do not delete locks, replace conversations, add task timers, or blindly replay unconfirmed turns.
+**A peer reports thread/resume timeout or active writer.** Pause the organization. Durable delivery phases distinguish connection failure from an uncertain model submission. Version 0.8.3 allows up to 90 seconds for session/MCP startup while ordinary requests retain their 30-second budget; six real concurrent resumes took 42–50 seconds. A timeout alone does not prove writer ownership. An explicit active writer error belongs to another connection: close its chat view or normally restart its owning client, then follow the [recovery gates](event-workers.md) to enable the original peer. Do not delete locks, replace conversations, add task timers, or blindly replay unconfirmed turns.
 
 **Swarmboard is missing from the directory or sidebar.** Confirm that `dist/desktop/plugin.json` exists. Inspect the source with `codex plugin marketplace list`, then check the plugin's installed and enabled state. Restart the desktop app after changing the local plugin files.
 

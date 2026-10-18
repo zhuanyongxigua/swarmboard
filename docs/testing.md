@@ -70,6 +70,8 @@ worker-pool 集成覆盖全板新增多目标广播、忙碌与空闲成员同�
 
 `npm run test:ownership` 使用本机官方 Codex CLI、临时 CODEX_HOME 和隔离目录。一个 `:` 空操作 shell 回合建立可持久化的合成历史；两个独立 App Server 验证 active writer 排他、只读 metadata 可访问，以及正常退出持有者后第二个连接恢复同一 threadId。该检查不调用 turn/start、不使用模型或真实聊天，不等于实际业务会话已释放或恢复。脚本遵循 rationale 注释约定；普通 CI 不依赖桌面 CLI，此项在有官方 CLI 的宿主显式运行。
 
+0.8.3 的慢启动夹具刻意在普通请求预算之后、启动预算之内返回：旧实现先红色失败，修复后能恢复原 threadId，随后丢失 turn/start 确认仍按原短预算报 uncertain。另一用例验证 required 协调 MCP 配置实际进入子进程 argv。真实并发验收可在显式暂停且没有未决回合的授权看板运行 `node scripts/verify-peer-resume.mjs --live /absolute/board.sqlite /absolute/dist/server/stdio.js`；它使用生产适配器、原成员与原会话，仅建立和关闭连接，不调用模型或改游标，不能替代业务回合启动与产出的验收。
+
 默认持续序列为 5 轮；加大但仍有界的检查：
 
 ```sh
