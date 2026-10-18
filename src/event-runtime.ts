@@ -10,6 +10,7 @@ import { workerPrompt } from './worker-prompt.js';
 import { WorkerPool } from './worker-pool.js';
 import { PoolLiveness } from './pool-liveness.js';
 import { PipelineEvents, type PipelineReader } from './pipeline-events.js';
+import { ExecutionGrants } from './execution-grants.js';
 
 export interface RuntimeOptions {
   databasePath: string; serverEntry: string;
@@ -22,6 +23,7 @@ export class EventRuntime {
   readonly workers: WorkerStore;
   readonly pool: WorkerPool;
   readonly ci: PipelineEvents;
+  readonly grants: ExecutionGrants;
   private liveness: PoolLiveness;
   private scanning?: Promise<void>;
   private token = randomUUID();
@@ -36,6 +38,7 @@ export class EventRuntime {
   constructor(readonly board: Store, readonly options: RuntimeOptions) {
     this.workers = new WorkerStore(options.databasePath === ':memory:' ? ':memory:' : options.databasePath + '.runtime.sqlite');
     this.pool = new WorkerPool(this.workers, board, options.databasePath);
+    this.grants = new ExecutionGrants(board, this.workers);
     this.liveness = new PoolLiveness(board, this.workers, options.idleMs ?? 10 * 60 * 1000);
     this.ci = new PipelineEvents(board, this.workers, options.pipelineReader, options.now, () => !this.closed && this.workers.owns(this.token));
   }
@@ -89,7 +92,14 @@ export class EventRuntime {
   status() {
     const activity = this.liveness.activity(this.workers.pool());
     if (activity.state === 'idle' && this.ci.hasPending()) activity.state = 'waiting';
-    return { mode: 'events' as const, owner: this.workers.owner(), workers: this.workers.list(), pool: this.workers.pool(), activity, ciWatches: this.ci.list(), error: this.lastError };
+    return { mode: 'events' as const, owner: this.workers.owner(), workers: this.workers.list(), pool: this.workers.pool(), activity, executionGrants: this.grants.list(), ciWatches: this.ci.list(), error: this.lastError };
+  }
+  configureExecutionGrant(input: unknown) {
+    const grant = this.grants.configure(input);
+    const agentId = `host-grants:${grant.poolId}`;
+    if (!this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(agentId)) this.board.registerAgent({ agentId, name: 'Host execution policy' });
+    this.board.publishSystemEntryOnce({ agentId, taskId: grant.taskId, kind: 'OBSERVED', summary: 'Host execution grant updated', detail: JSON.stringify({ version: grant.version, enabled: grant.enabled }) });
+    this.notify(); return grant;
   }
   hasWorkers() { return this.workers.list().length > 0 || this.workers.pool() !== null; }
   configurePool(input: unknown) { const pool = this.pool.configure(input); this.notify(); return pool; }
@@ -252,7 +262,7 @@ export class EventRuntime {
       if (!current.enabled || poolStopped) { this.workers.save({ ...current, threadId, status: 'idle', deliveryId: null, deliveryCursor: null, turnId: null, deliveryPhase: undefined }); return; }
       this.workers.save({ ...current, threadId, deliveryPhase: 'submitting' });
       submitted = true;
-      await adapter.run(threadId, workerPrompt(worker, worker.deliveryId!, events, worker.poolId ? this.workers.pool() : null), turnId => {
+      await adapter.run(threadId, workerPrompt(worker, worker.deliveryId!, events, worker.poolId ? this.workers.pool() : null, worker.poolId ? this.grants.active() : []), turnId => {
         const latest = this.workers.get(worker.id); this.workers.save({ ...latest, turnId, deliveryPhase: 'running' });
       });
       if (!this.workers.owns(this.token)) return;

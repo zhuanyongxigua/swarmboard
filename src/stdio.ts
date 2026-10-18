@@ -8,6 +8,7 @@ import { Store } from './store.js';
 import { EventRuntime } from './event-runtime.js';
 import { WorkerStore } from './worker-store.js';
 import { PipelineEvents } from './pipeline-events.js';
+import { ExecutionGrants } from './execution-grants.js';
 
 export interface StdioOptions { dbPath?: string; widgetPath?: string }
 
@@ -33,7 +34,7 @@ export async function startStdioServer(options: StdioOptions = {}) {
     const events = store.readEntries({ after: updateCursor, limit: 100 }); updateCursor = events.cursor;
     const items = events.items.filter(e => e.agentId !== workerId && (!e.taskId || !pool.taskIds.length || pool.taskIds.includes(e.taskId)) && (!e.recipientId || e.recipientId === workerId));
     const compact = items.map(e => ({ ...e, detail: e.detail.slice(0, 1000), detailTruncated: e.detail.length > 1000 }));
-    return { control: mayAct() ? 'continue-if-useful' : 'stop-after-safe-boundary', organization: { memberIds: pool.memberIds, size: pool.size, maxSize: pool.maxSize }, items: compact, hasMore: events.hasMore };
+    return { control: mayAct() ? 'continue-if-useful' : 'stop-after-safe-boundary', executionGrants: new ExecutionGrants(store, peerState!).active(), organization: { memberIds: pool.memberIds, size: pool.size, maxSize: pool.maxSize }, items: compact, hasMore: events.hasMore };
   };
   const server = createMcpServer(store, widgetPath, runtime, { poolMember, ...(peerState ? { sharedUpdates, mayAct, peers: peerState, workerId, ci: new PipelineEvents(store, peerState) } : {}) });
   const transport = new StdioServerTransport();

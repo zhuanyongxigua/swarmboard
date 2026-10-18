@@ -18,6 +18,33 @@ afterEach(async () => { await client.close(); await runtime.close(); await serve
 const call = (name: string, args: Record<string, unknown> = {}) => client.callTool({ name, arguments: args });
 const data = (r: Awaited<ReturnType<typeof call>>) => r.structuredContent as Record<string, any>;
 describe('event worker MCP management', () => {
+  it('configures host-owned execution grants without changing task or pool state and exposes only reads to peers', async () => {
+    const goal = store.createTask({ title: 'Independent host-authorized project' });
+    const pool = runtime.configurePool({ workspacePath: tmpdir(), size: 1 });
+    const worker = runtime.workers.register({ name: 'Equal peer', workspacePath: tmpdir() });
+    runtime.workers.save({ ...worker, poolId: pool.id });
+    runtime.workers.savePool({ ...pool, memberIds: [worker.id] });
+    const input = { taskId: goal.id, expectedVersion: 0, projectPath: tmpdir(), executionWorkspace: tmpdir(), externalHarnesses: ['zcode'], monitoring: true, enabled: true };
+    const configured = await call('task_execution_configure', input);
+    expect(configured.isError, JSON.stringify(configured.content)).not.toBe(true);
+    expect(data(configured)).toMatchObject({ version: 1, taskId: goal.id });
+    expect(data(await call('runtime_read')).executionGrants).toHaveLength(1);
+    expect(store.readTask(goal.id)).toMatchObject({ status: 'todo', version: 1 });
+    expect(runtime.workers.pool()).toMatchObject({ id: pool.id, version: pool.version, workspacePath: pool.workspacePath });
+    const peer = createMcpServer(store, 'unused', runtime, { poolMember: true, peers: runtime.workers, workerId: worker.id });
+    const [a,b] = InMemoryTransport.createLinkedPair(); await peer.connect(a);
+    const session = new Client({ name: 'grant-peer', version: '1' }); await session.connect(b);
+    try {
+      const names = (await session.listTools()).tools.map(t => t.name);
+      expect(names).toContain('execution_grants_read'); expect(names).not.toContain('task_execution_configure');
+      expect(names).not.toContain('pool_control');
+      const read = await session.callTool({ name: 'execution_grants_read', arguments: {} });
+      expect((read.structuredContent as { grants: unknown[] }).grants).toHaveLength(1);
+      await call('task_execution_configure', { ...input, expectedVersion: 1, enabled: false });
+      const revoked = await session.callTool({ name: 'execution_grants_read', arguments: {} });
+      expect((revoked.structuredContent as { grants: unknown[] }).grants).toEqual([]);
+    } finally { await session.close(); await peer.close(); }
+  });
   it('configures a default three-peer organization without creating or assigning human tasks', async () => {
     const pool = data(await call('pool_configure', { workspacePath: tmpdir() }));
     expect(pool).toMatchObject({ size: 3, enabled: true, memberIds: [], state: 'ready' });
