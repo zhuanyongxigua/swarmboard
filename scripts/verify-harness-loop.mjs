@@ -1,6 +1,7 @@
 // One isolated-board real Codex closed loop through the harness registry: a
 // single real model turn must use the swarmboard_worker MCP to write back to
-// the synthetic board. Explicit --live only; never the business board.
+// the synthetic board. Explicit --live only; isolated database and workspace
+// only, never a live board.
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -44,7 +45,7 @@ try {
       evidence.completedAt = new Date().toISOString();
       evidence.threadId = settled.threadId; evidence.turnId = settled.turnId ?? null; evidence.cursor = settled.cursor;
       evidence.boardEntries = board.board().entries.map(e => ({ id: e.id, kind: e.kind, agentId: e.agentId, summary: e.summary.slice(0, 200) }));
-      evidence.limits = 'One real official Codex session and turn on an isolated synthetic board; proves the registry-selected backend executes a real turn and the model wrote back through swarmboard_worker MCP. It does not test DSH, approvals, or business boards.';
+      evidence.limits = 'One real official Codex session and turn on an isolated synthetic board; proves the registry-selected backend executes a real turn and the model wrote back through swarmboard_worker MCP. It does not test DSH, approvals, or live boards.';
       writeFileSync(join(root, 'evidence.json'), JSON.stringify(evidence, null, 2));
       console.log(JSON.stringify({ passed: true, root, workerId: worker.id, threadId: settled.threadId, backend: backend.id, binaryVersion }));
       break;
