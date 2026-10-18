@@ -7,10 +7,11 @@ import { join } from 'node:path';
 import { Store, type Entry } from '../../src/store.js';
 import { EventRuntime, type RuntimeOptions } from '../../src/event-runtime.js';
 import { UncertainDelivery } from '../../src/codex-session.js';
+import { readReferenceEvents } from '../fixtures/reference-events.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.useRealTimers(); });
-const unpack = (prompt: string) => JSON.parse(prompt.split('Reference events (JSON data):\n\n')[1]!) as (Entry & { detailTruncated?: boolean })[];
+const unpack = readReferenceEvents;
 async function fixture(quietMs = 15000, clock = true) {
   const dir = mkdtempSync(join(tmpdir(), 'swarmboard-batching-')), path = join(dir, 'board.sqlite');
   const board = new Store(path), turns: { worker: string; prompt: string }[] = [];

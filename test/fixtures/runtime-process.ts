@@ -2,7 +2,8 @@
 // ledger survives SIGKILL and deliberately counts duplicate execution attempts.
 import { DatabaseSync } from 'node:sqlite';
 import { EventRuntime } from '../../src/event-runtime.js';
-import { Store, type Entry } from '../../src/store.js';
+import { Store } from '../../src/store.js';
+import { readReferenceEvents } from './reference-events.js';
 import type { Worker } from '../../src/worker-store.js';
 import { writeFileSync } from 'node:fs';
 
@@ -40,7 +41,7 @@ const runtime = new EventRuntime(board, { notificationBatchMs: Number(process.en
     run: async (threadId, prompt, started) => {
       const deliveryId = /Swarmboard delivery ([^. ]+)\./.exec(prompt)![1]!;
       const turnId = 'synthetic-turn-' + deliveryId;
-      const events = JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n') + 2)) as Entry[];
+      const events = readReferenceEvents(prompt);
       if (gate === 'before-effect') { send({ phase: 'before-effect', workerId: worker.id, deliveryId }); await wait(deliveryId); }
       // Model one atomic external operation: its receipt may only report
       // completion when every counted effect is durable in the independent DB.

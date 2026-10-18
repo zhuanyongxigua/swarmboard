@@ -91,12 +91,15 @@ describe('native automation configuration and claiming', () => {
     let store = new Store(path);
     try {
       const task = store.createTask({ title: 'Pre-upgrade task' }); const resource = store.createResource({ name: 'Existing machine' }); const before = store.board();
-      store.db.exec('DROP TRIGGER usage_admission_insert; DROP TRIGGER usage_admission_update; DROP TABLE resource_admission_fences; DROP TABLE task_participants; DROP TABLE automation_bindings; DROP TABLE automation_config; PRAGMA user_version=2;');
+      // v2 predates automation identity, participants and all three product-control tables.
+      store.db.exec('DROP TRIGGER usage_admission_insert; DROP TRIGGER usage_admission_update; DROP TABLE resource_admission_fences; DROP TABLE task_progress; DROP TABLE board_preferences; DROP TABLE task_participants; DROP TABLE automation_bindings; DROP TABLE automation_config; PRAGMA user_version=2;');
+      expect(store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row => row.name)).toEqual(['agents', 'entries', 'resources', 'tasks', 'usages']);
       store.close(); store = new Store(path);
-      expect(store.board()).toEqual(before); expect(store.board().tasks[0]?.id).toBe(task.id); expect(store.board().resources[0]?.id).toBe(resource.id);
+      // The board identity is first created by v3; v2 has no preferences to preserve.
+      expect(store.board()).toEqual({ ...before, preferences: { boardId: store.readAutomation().boardId, text: '', source: null, version: 0, updatedAt: null } }); expect(store.board().tasks[0]?.id).toBe(task.id); expect(store.board().resources[0]?.id).toBe(resource.id);
       expect(store.readAutomation()).toMatchObject({ state: 'off', version: 0 });
-      expect(store.db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 6 });
-    } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+      expect(store.db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 8 });
+    } finally { if (store.db.isOpen) store.close(); rmSync(dir, { recursive: true, force: true }); }
   });
   it('turns unknown setup outcomes into durable read-only recovery and never permits a fresh creation retry', () => {
     const dir = mkdtempSync(join(tmpdir(), 'swarmboard-recovery-')); const path = join(dir, 'board.sqlite');
@@ -179,12 +182,14 @@ describe('native automation configuration and claiming', () => {
     const dir = mkdtempSync(join(tmpdir(), 'swarmboard-default-migration-')); const path = join(dir, 'board.sqlite'); let store = new Store(path);
     try {
       const task = store.createTask({ title: 'Retained legacy task' }); const old = { ...store.readAutomation(), desiredEnabled: false, state: 'off', automationId: 'legacy-native', actualStatus: 'PAUSED', projectId: 'legacy-project', workspacePath: dir, version: 7 };
-      store.db.prepare('UPDATE automation_config SET config=? WHERE id=1').run(JSON.stringify(old)); store.db.exec('DROP TRIGGER usage_admission_insert; DROP TRIGGER usage_admission_update; DROP TABLE resource_admission_fences; DROP TABLE task_participants; PRAGMA user_version=3'); store.close(); store = new Store(path);
+      store.db.prepare('UPDATE automation_config SET config=? WHERE id=1').run(JSON.stringify(old)); store.db.exec('DROP TRIGGER usage_admission_insert; DROP TRIGGER usage_admission_update; DROP TABLE resource_admission_fences; DROP TABLE task_progress; DROP TABLE board_preferences; DROP TABLE task_participants; PRAGMA user_version=3');
+      expect(store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row => row.name)).toEqual(['agents', 'automation_bindings', 'automation_config', 'entries', 'resources', 'tasks', 'usages']);
+      store.close(); store = new Store(path);
       const migrated = store.readAutomation(); expect(migrated).toMatchObject({ desiredEnabled: true, automationId: 'legacy-native', actualStatus: 'PAUSED', workspacePath: dir, version: 8 });
       expect(store.board().tasks[0]?.id).toBe(task.id); store.close(); store = new Store(path); expect(store.readAutomation()).toEqual(migrated);
       const pending = store.prepareAutomation({ action: 'pause', expectedVersion: migrated.version }); store.confirmAutomation({ expectedVersion: pending.version, requestId: pending.requestId, automationId: 'legacy-native', status: 'PAUSED', model: 'host-default', reasoningEffort: 'high', projectId: 'legacy-project' });
       store.close(); store = new Store(path); expect(store.readAutomation().desiredEnabled).toBe(false); expect(store.ensureAutomation().setupPrompt).toBeNull();
-    } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+    } finally { if (store.db.isOpen) store.close(); rmSync(dir, { recursive: true, force: true }); }
   });
   it('gives global workers explicit target checks and ends empty boards before registering identities', () => {
     const prompt = buildWorkerPrompt('', 'board-default');

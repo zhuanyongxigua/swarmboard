@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { Store } from '../../src/store.js';
 import { EventRuntime } from '../../src/event-runtime.js';
 import type { SessionAdapter } from '../../src/codex-session.js';
+import { readReferenceEvents } from '../fixtures/reference-events.js';
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 function fixture() {
@@ -46,7 +47,7 @@ describe('equal peer organization', () => {
     f.finishes.get(busy)!(); await vi.waitFor(() => expect(f.runtime.workers.get(busy).status).toBe('idle'));
     await drain(true);
     for (const [id] of original) {
-      const events = f.turns.filter(t => t.worker === id).flatMap(t => JSON.parse(t.prompt.split('Reference events (JSON data):\n\n')[1]!) as {taskId?:string;summary:string}[]);
+      const events = f.turns.filter(t => t.worker === id).flatMap(t => readReferenceEvents(t.prompt));
       const created = events.filter(e => e.summary.startsWith('Task created:')).map(e => e.taskId);
       expect(created).toHaveLength(601); expect(new Set(created)).toEqual(new Set(goals.map(g => g.id)));
     }
