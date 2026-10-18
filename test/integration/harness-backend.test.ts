@@ -11,6 +11,7 @@ import { EventRuntime } from '../../src/event-runtime.js';
 import { echoBackend } from '../../src/harness/echo-backend.js';
 import { codexBackend } from '../../src/codex-session.js';
 import type { HarnessBackend, SessionAdapter } from '../../src/harness/contract.js';
+import { UncertainDelivery } from '../../src/harness/contract.js';
 import { approvalPauseMessage } from '../../src/worker-store.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -120,6 +121,54 @@ describe('harness backend identity at the runtime boundary', () => {
     expect(paused.error).toContain(approvalPauseMessage);
     expect(paused.error).toContain(`harness backend 'codex'`);
     expect(echoTurns(f.path)).toHaveLength(0);
+  });
+  it('keeps an unresolved delivery uncertain across backend switches and reconciles it once without replay', async () => {
+    // Reviewer P1 sequence: a genuinely submitted-but-unacknowledged delivery
+    // (saved thread/turn/delivery ids) must not degrade into a restartable
+    // error under a foreign backend, and after the original backend returns it
+    // must be inspected and confirmed without resubmitting the batch.
+    const runs: string[] = [];
+    let rejectRun: ((error: Error) => void) | undefined;
+    const hangingAdapter: SessionAdapter = {
+      open: async w => w.threadId ?? 'codex-thread',
+      run: async (_threadId, prompt, started) => { runs.push(prompt); started('codex-turn-1'); return new Promise<void>((_resolve, reject) => { rejectRun = reject; }); },
+      inspect: async () => 'completed' as const,
+      close: async () => { rejectRun?.(new UncertainDelivery('connection lost before completion')); rejectRun = undefined; },
+    };
+    const f = fixture({ adapter: hangingAdapter });
+    const worker = f.runtime.register({ name: 'Unresolved peer', workspacePath: f.dir });
+    f.store.registerAgent({ agentId: 'peer', name: 'Peer' });
+    const goal = f.store.createTask({ title: 'Shared goal' });
+    for (const summary of ['first payload', 'second payload']) f.store.publishEntry({ agentId: 'peer', recipientId: worker.id, kind: 'MESSAGE', summary });
+    await f.runtime.scan();
+    await vi.waitFor(() => expect(f.runtime.workers.get(worker.id)).toMatchObject({ status: 'running', turnId: 'codex-turn-1' }), { timeout: 4000 });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toContain('first payload'); expect(runs[0]).toContain('second payload');
+    const pending = f.runtime.workers.get(worker.id);
+    expect(pending.deliveryCursor).toBe(f.store.board().cursor);
+
+    // Closing the first runtime loses the turn's completion: the real close
+    // path leaves an honest uncertain checkpoint with phase and ids intact.
+    const switched = await f.reopen({ backend: echoBackend });
+    const preserved = switched.workers.get(worker.id);
+    expect(preserved).toMatchObject({ status: 'uncertain', threadId: 'codex-thread', turnId: 'codex-turn-1', deliveryId: pending.deliveryId, deliveryCursor: pending.deliveryCursor, deliveryPhase: pending.deliveryPhase, cursor: pending.cursor });
+    await switched.scan();
+    const mismatched = switched.workers.get(worker.id);
+    expect(mismatched.status).toBe('uncertain'); // never a restartable error
+    expect(mismatched).toMatchObject({ threadId: 'codex-thread', turnId: 'codex-turn-1', deliveryId: pending.deliveryId, deliveryCursor: pending.deliveryCursor, deliveryPhase: pending.deliveryPhase });
+    expect(mismatched.error).toContain(`harness backend 'codex'`);
+    expect(mismatched.error).toContain(`not the configured 'echo'`);
+    expect(echoTurns(f.path)).toHaveLength(0); // the foreign backend replays nothing
+    expect(() => switched.workers.update({ id: worker.id, expectedVersion: mismatched.version, enabled: true })).toThrow(/Inspect/);
+
+    const restored = await f.reopen({ adapter: hangingAdapter });
+    restored.workers.requestReconcile({ id: worker.id, expectedVersion: restored.workers.get(worker.id).version });
+    await restored.scan(); await idle(restored, worker.id);
+    expect(restored.workers.get(worker.id)).toMatchObject({ status: 'idle', cursor: pending.deliveryCursor, deliveryId: null, turnId: null, threadId: 'codex-thread' });
+    await restored.scan();
+    expect(runs).toHaveLength(1); // inspection confirmed the batch; nothing resubmitted
+    expect(echoTurns(f.path)).toHaveLength(0);
+    expect(f.store.readTask(goal.id).status).toBe('todo');
   });
   it('rebinds a worker that never bound any session identifiers', async () => {
     const f = fixture(); // registered under the default codex backend, never delivered

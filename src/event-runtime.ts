@@ -215,8 +215,16 @@ export class EventRuntime {
       if (worker.backendId !== this.backend.id && (worker.threadId || worker.turnId || worker.deliveryId)) {
         const adapter = this.adapters.get(worker.id);
         if (adapter) { await adapter.close(); this.adapters.delete(worker.id); }
-        if (worker.status !== 'error') this.workers.save({ ...worker, status: 'error',
-          error: this.recoveryError(worker, `Bound session belongs to harness backend '${worker.backendId}', not the configured '${this.backend.id}'; restore that backend configuration before reusing this worker's session identifiers`) });
+        const diagnostic = `Bound session belongs to harness backend '${worker.backendId}', not the configured '${this.backend.id}'`;
+        if (worker.status === 'running' || worker.status === 'uncertain') {
+          // An unresolved delivery must never become a restartable error:
+          // keep the uncertain state, delivery phase and identifiers so the
+          // original backend can inspect and reconcile them before any
+          // resubmission; worker_update keeps refusing to enable it.
+          if (worker.status !== 'uncertain' || !worker.error.includes(diagnostic)) this.workers.save({ ...worker, status: 'uncertain',
+            error: this.recoveryError(worker, `${diagnostic}; the unresolved delivery keeps its checkpoints and is inspected after that backend is restored, never replayed here`) });
+        } else if (worker.status !== 'error') this.workers.save({ ...worker, status: 'error',
+          error: this.recoveryError(worker, `${diagnostic}; restore that backend configuration before reusing this worker's session identifiers`) });
         continue;
       }
       if (worker.status === 'error' || this.running.has(worker.id)) continue;

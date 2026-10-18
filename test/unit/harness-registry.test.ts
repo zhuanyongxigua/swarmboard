@@ -18,11 +18,11 @@ describe('harness backend registry', () => {
     expect(knownHarnesses).toEqual(['codex', 'echo']);
   });
   it('fails loudly for an unknown backend instead of silently falling back', () => {
-    for (const value of ['dsh', 'zcode']) {
+    for (const value of ['dsh', 'zcode', 'constructor', '__proto__', 'toString', 'hasOwnProperty']) {
       const env = value === '' ? {} : { SWARMBOARD_HARNESS: value };
       const error = (() => { try { resolveHarness(env); } catch (thrown) { return thrown as { code?: string; message: string }; } })();
-      expect(error).toBeTruthy();
-      expect(error!.code).toBe('UNKNOWN_HARNESS');
+      expect(error, value).toBeTruthy();
+      expect(error!.code, value).toBe('UNKNOWN_HARNESS');
       expect(error!.message).toMatch(/Unknown harness backend/);
       expect(error!.message).toContain('codex, echo');
     }
