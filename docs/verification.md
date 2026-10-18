@@ -1,3 +1,9 @@
+# 协作者共享历史范围修复（独立 review P1，2026-10-18）
+
+- 针对 d0b4aff 的独立 review P1：只接入目标 A 的外部协作者可以经 `context_read`/`context_search` 的主结果与 `board_read` 紧凑历史读到目标 B 的条目（此前仅 `task_read`/`task_list` 与附加更新被过滤）。修复将共享历史可见性放入存储查询：协作者角色的 `readEntries` 与 `peerBoard` 紧凑历史只返回已接入目标相关条目、无目标绑定公告与发给本人的定向消息；发给其他成员的定向消息与主结果、附加更新一致地被保留；过滤在 SQL 内完成，分页与游标不消费范围外条目。池成员与宿主的既有历史视图不变。
+- 针对性回归（两个合成目标 + 真实 SQLite + 官方 in-memory MCP）：越界 `task_read` 返回 `UNBOUND_GOAL`、目标 B 事实不出现在 `context_read`/`context_search`/`board_read`，目标 A 事实、无目标公告与发给本人的定向消息为正向对照，limit=1 起步的有界游标遍历收集到的集合与全量读取一致且无越界条目。
+- 完整 `npm run check` 通过：**208/208** 服务/协议/集成、**28/28** Chromium；修复提交 7433938 的必需 CI 通过（两次 verify）。此前的未知投递 P1/P2 修复保持不变；未使用真实看板数据或外部 harness。
+
 # 后端切换与注册表修复（独立 review P1/P2，2026-10-18）
 
 - 独立 review 发现的 P1：已有 thread/turn/delivery 标识的 running/uncertain 投递在后端不匹配分支被降级为可重启的 error，`worker_update` 清除标识后会把同一批事件再次提交（隔离复现一次重复）。修复为该分支保留 uncertain 状态、deliveryPhase 与全部标识，并在诊断中说明须待原后端恢复后先核查再决定；`worker_update` 对未决投递仍拒绝启用，普通 idle 不匹配仍是可操作 error。新增针对性回归（真实 EventRuntime/WorkerStore + 挂起适配器）：挂起回合经真实 close 路径留下 uncertain 检查点 → 切到 echo 后状态/阶段/标识不变且 echo 零提交、启用被拒 → 切回 codex 后经 requestReconcile 以 inspect 确认，游标推进且 run 恰好一次（无重复）。
