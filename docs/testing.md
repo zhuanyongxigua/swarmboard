@@ -37,7 +37,7 @@
 
 ## 外部协作者
 
-`test/integration/collaborators.test.ts` 使用真实 SQLite 与官方 MCP 客户端检查：版本化接入（显式非空范围、cost 作为看板数据原样保存）、与池成员的分离计数、终态撤销与版本冲突、协作者工具面（管理工具不注册）、绑定身份与越界读写拒绝、直接协作（CLAIM 加入参与、FACT/FAIL/MESSAGE）、每次工具调用附加的范围内游标更新且无重复、撤销/终态目标后的 `COLLABORATOR_STOPPED` 写入围栏与清理豁免、以及接入与游标的重启持久化。`test/mcp/desktop.test.ts` 在真实打包 stdio 子进程（`SWARMBOARD_COLLABORATOR_ID`）中验证同一角色。拉取式更新是有依据的降级：文件/数据库访问不构成事件唤醒证明，因此不声称能唤醒外部 harness；真实外部连接另需显式验收。
+`test/integration/collaborators.test.ts` 使用真实 SQLite 与官方 MCP 客户端检查：版本化接入（显式非空范围、cost 作为看板数据原样保存）、与池成员的分离计数、终态撤销与版本冲突、协作者工具面（管理工具不注册）、绑定身份与越界读写拒绝、直接协作（CLAIM 加入参与、FACT/FAIL/MESSAGE）、每次工具调用附加的范围内游标更新且无重复、撤销/终态目标后的 `COLLABORATOR_STOPPED` 写入围栏与清理豁免、以及接入与游标的重启持久化。`test/mcp/desktop.test.ts` 在真实打包 stdio 子进程（`SWARMBOARD_COLLABORATOR_ID`）中验证同一角色。共享历史范围回归以两个合成目标验证：只接入目标 A 的协作者读不到目标 B 的事实（`context_read`/`context_search` 主结果与 `board_read` 紧凑历史一致执行范围，发给他人的定向消息同样不出现在主结果），范围内正向条目、无目标公告与有界分页游标保持成立。拉取式更新是有依据的降级：文件/数据库访问不构成事件唤醒证明，因此不声称能唤醒外部 harness；真实外部连接另需显式验收。
 
 ## 会话后端契约与装配
 

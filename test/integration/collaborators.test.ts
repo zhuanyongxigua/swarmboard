@@ -126,6 +126,49 @@ describe('admitted collaborator MCP surface', () => {
 });
 
 describe('collaborator updates, stopping and persistence', () => {
+  it('withholds out-of-scope goals from shared-history read, search and the compact board history', async () => {
+    // Reviewer P1: a collaborator admitted only to goal A must not read goal-B
+    // facts through the primary results of context_read/context_search or the
+    // compact board history; in-scope positives and bounded cursors must hold.
+    const goalA = store.createTask({ title: 'Admitted goal A' });
+    const goalB = store.createTask({ title: 'Withheld goal B' });
+    store.registerAgent({ agentId: 'peer', name: 'Peer' });
+    const admitted = await admit({ expectedVersion: 0, name: 'Scoped historian', harness: 'dsh', taskIds: [goalA.id], enabled: true });
+    const client = await collaboratorClient(admitted.id);
+    const denied = await call(client, 'task_read', { id: goalB.id });
+    expect(denied.isError).toBe(true); expect(JSON.stringify(denied.content)).toContain('UNBOUND_GOAL');
+    const factA = store.publishEntry({ agentId: 'peer', taskId: goalA.id, kind: 'FACT', summary: 'A-fact needle: verified invariant' });
+    const factB = store.publishEntry({ agentId: 'peer', taskId: goalB.id, kind: 'FACT', summary: 'B-fact needle: must stay unreadable' });
+    const ownDirect = store.publishEntry({ agentId: 'peer', recipientId: admitted.id, kind: 'MESSAGE', summary: 'Direct to the collaborator' });
+    store.publishEntry({ agentId: 'peer', recipientId: 'peer', kind: 'MESSAGE', summary: 'Direct to someone else' });
+    const notice = store.publishEntry({ agentId: 'peer', kind: 'OBSERVED', summary: 'Unlinked board notice' });
+
+    const history = data<{ items: { id: number }[]; cursor: number; hasMore: boolean }>(await call(client, 'context_read', { limit: 50 }));
+    const ids = history.items.map(i => i.id);
+    expect(ids).toContain(factA.id);
+    expect(ids).toContain(ownDirect.id);
+    expect(ids).toContain(notice.id);          // unlinked notices stay visible
+    expect(ids).not.toContain(factB.id);       // out-of-scope goal stays unreadable
+    expect(history.hasMore).toBe(false);
+
+    const leak = await call(client, 'context_search', { query: 'B-fact needle' });
+    expect(data<{ items: unknown[] }>(leak).items).toEqual([]);
+    expect(JSON.stringify(leak)).not.toContain('must stay unreadable');
+    const hit = data<{ items: { id: number }[] }>(await call(client, 'context_search', { query: 'A-fact needle' }));
+    expect(hit.items.map(i => i.id)).toEqual([factA.id]);
+
+    const board = data<{ entries: { id: number }[]; tasks: { id: string }[] }>(await call(client, 'board_read'));
+    expect(board.entries.map(e => e.id)).not.toContain(factB.id);
+    expect(board.entries.map(e => e.id)).toContain(factA.id);
+    expect(board.tasks.map(t => t.id)).toEqual([goalA.id]);
+
+    // Bounded pagination still walks the full in-scope history exactly once.
+    const first = data<{ items: { id: number }[]; cursor: number; hasMore: boolean }>(await call(client, 'context_read', { limit: 1 }));
+    expect(first.items).toHaveLength(1); expect(first.hasMore).toBe(true);
+    const second = data<{ items: { id: number }[]; cursor: number; hasMore: boolean }>(await call(client, 'context_read', { limit: 50, after: first.cursor }));
+    const collected = [...first.items.map(i => i.id), ...second.items.map(i => i.id)];
+    expect(collected).toEqual(ids); // same in-scope set, in order, nothing extra
+  });
   it('delivers scoped updates on tool returns with a persistent cursor and no duplicates', async () => {
     const goal = store.createTask({ title: 'Updated goal' });
     const outside = store.createTask({ title: 'Other goal' });

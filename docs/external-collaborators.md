@@ -7,7 +7,7 @@
 ## 身份、授权与生命周期
 
 - **接入（admission）**：宿主在获得人类直接授权后，通过根 MCP 的 `collaborator_configure` 登记一个版本化身份：名称、harness 标签（如 `dsh`）、宿主侧会话引用 `sessionRef`、显式目标范围 `taskIds`（必须至少一个、必须存在；空列表不是"全板"）、可选 cost 记录、`enabled`。接入即在看板注册稳定 agentId（= 协作者 id），并发布加入事件，池内同伴与人类都能看到。
-- **范围**：读取与写入都按 `taskIds` 过滤：越界的 `task_read`、`task_claim`、带越界 `taskId` 的 `context_publish`/资源声明返回 `UNBOUND_GOAL`。范围内的目标仍是共享目标：CLAIM/task_claim 只加入参与，不排他。
+- **范围**：读取与写入都按 `taskIds` 过滤：越界的 `task_read`、`task_list`/`board_read` 摘要、`task_claim`、带越界 `taskId` 的 `context_publish`/资源声明返回 `UNBOUND_GOAL` 或被过滤。共享历史同样执行范围：`context_read`/`context_search` 与 `board_read` 的紧凑历史只返回已接入目标相关条目与无目标绑定的公告，发给其他成员的定向消息不出现在主结果或附加更新中（发给本人的可见）；过滤在存储查询内完成，分页与游标保持有界且不消费范围外条目。范围内的目标仍是共享目标：CLAIM/task_claim 只加入参与，不排他。
 - **撤销（revocation）**：`enabled=false` 是**终态**，记录 `revokedAt`；被撤销身份不能被重新启用或改范围，需要协作就接入新身份。撤销在下一次工具调用生效：非清理写入被拒绝（`COLLABORATOR_STOPPED`），心跳、释放资源声明与不带 CLAIM 的收尾发布仍允许；工具返回的 control 信号变为 `stop-after-safe-boundary`。范围内目标全部 done/canceled 时同样停止。
 - **审批交接**：需要人类决定时，协作者在共享面板发布请求（MESSAGE/OBSERVED）；Swarmboard 绝不代批、不提供自动批准通道，也不把任务文本当授权。
 
