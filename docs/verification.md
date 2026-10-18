@@ -1,3 +1,9 @@
+# 后端切换与注册表修复（独立 review P1/P2，2026-10-18）
+
+- 独立 review 发现的 P1：已有 thread/turn/delivery 标识的 running/uncertain 投递在后端不匹配分支被降级为可重启的 error，`worker_update` 清除标识后会把同一批事件再次提交（隔离复现一次重复）。修复为该分支保留 uncertain 状态、deliveryPhase 与全部标识，并在诊断中说明须待原后端恢复后先核查再决定；`worker_update` 对未决投递仍拒绝启用，普通 idle 不匹配仍是可操作 error。新增针对性回归（真实 EventRuntime/WorkerStore + 挂起适配器）：挂起回合经真实 close 路径留下 uncertain 检查点 → 切到 echo 后状态/阶段/标识不变且 echo 零提交、启用被拒 → 切回 codex 后经 requestReconcile 以 inspect 确认，游标推进且 run 恰好一次（无重复）。
+- 同 review 的 P2：`resolveHarness` 用普通对象查找会接受原型链键（如 `constructor`）当作后端。改为 Map 查找，并把这些键加入 UNKNOWN_HARNESS 负例测试。
+- 完整 `npm run check` 通过：**207/207** 服务/协议/集成、**28/28** Chromium，覆盖率门槛不变；主分支通知合并行为与池/协作者路径未改。修复提交 32bd327 的必需 CI 通过（两次 verify）。本条为源码/隔离测试结论，不是生产事故报告。
+
 # 外部协作者最小切片（2026-10-18）
 
 - 按产品要求把外部 agent 落地为独立身份协作者：宿主经 `collaborator_configure` 版本化接入（名称、harness 标签、sessionRef、显式非空目标范围、可选 cost 记录、enabled），接入即注册稳定看板 agentId 并发布加入事件；撤销为终态（记录 revokedAt，不可重启用/改范围）。`runtime_read`/`/api/runtime` 新增 `collaborators` 列表，与池成员/worker 分开计数；池组织、执行授权与 Codex 会话路径不变。
