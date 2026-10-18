@@ -24,7 +24,11 @@ export class PoolLiveness {
     let value: Liveness = this.workers.liveness() ?? { fingerprint, attempts: 0, idleSince: null, state: 'inactive', pending: null };
     if (value.fingerprint !== fingerprint) value = { fingerprint, attempts: 0, idleSince: null, state: 'inactive', pending: null };
     const peers = pool.memberIds.map(id => this.workers.get(id));
-    const eligible = tasks.some(t => ['todo','in_progress'].includes(t.status)) && pool.enabled && pool.state === 'active' && peers.length > 0 && peers.every(w => w.enabled && w.status === 'idle');
+    // A protected member (human pause, approval wait, error, unresolved
+    // delivery) never receives recovery and never blocks the healthy subset;
+    // genuine activity still suppresses recovery through queuedOrBusy.
+    const healthy = peers.filter(w => w.enabled && w.status === 'idle');
+    const eligible = tasks.some(t => ['todo','in_progress'].includes(t.status)) && pool.enabled && pool.state === 'active' && healthy.length > 0;
     if (!eligible || queuedOrBusy) {
       this.workers.saveLiveness({ ...value, idleSince: null, state: value.state === 'attention' ? 'attention' : 'inactive' }); return;
     }
@@ -32,7 +36,9 @@ export class PoolLiveness {
       if (value.idleSince === null) value = { ...value, idleSince: now, state: 'watching' };
       else if (now - value.idleSince >= this.idleMs) {
         const attention = value.attempts >= 2;
-        const recipientId = attention ? undefined : pool.memberIds[value.attempts % pool.memberIds.length]!;
+        // Rotate recovery over dispatchable members only; a protected peer
+        // must not consume a nudge it can never act on.
+        const recipientId = attention ? undefined : healthy[value.attempts % healthy.length]!.id;
         value = { ...value, attempts: value.attempts + (attention ? 0 : 1), idleSince: null, state: attention ? 'attention' : 'nudged', pending: {
           agentId: 'runtime-' + pool.id, kind: attention ? 'OBSERVED' : 'MESSAGE',
           summary: attention ? 'IDLE_ATTENTION: goals remain idle after two recovery attempts' : 'IDLE_RECOVERY: inspect stranded human goals and continue useful work',

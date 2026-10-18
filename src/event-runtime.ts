@@ -207,7 +207,13 @@ export class EventRuntime {
     const before = this.workers.pool();
     const busy = !!before && before.memberIds.some(id => this.running.has(id) || ['running', 'uncertain'].includes(this.workers.get(id).status));
     const pool = this.pool.sync(busy);
-    const pending = busy || !!pool?.memberIds.some(id => { const batch = this.batch(this.workers.get(id)); return batch.events.length > 0 || batch.hasMore; });
+    // Only dispatchable members' unread events gate recovery: a protected
+    // member's stale cursor (human/approval pause, error, unresolved delivery)
+    // must not permanently block the healthy subset. Busy covers running and
+    // uncertain members regardless of enabled, so unknown deliveries still
+    // suppress recovery.
+    const dispatchable = new Set(pool?.memberIds.filter(id => { const member = this.workers.get(id); return member.enabled && member.status === 'idle'; }) ?? []);
+    const pending = busy || !!pool?.memberIds.some(id => { if (!dispatchable.has(id)) return false; const batch = this.batch(this.workers.get(id)); return batch.events.length > 0 || batch.hasMore; });
     this.liveness.sync(pool, this.options.now?.() ?? Date.now(), pending, this.ci.list().filter(w => w.state === 'watching').map(w => w.taskId));
     for (const worker of this.workers.list()) {
       // A configured organization replaces legacy individual execution. Keep
@@ -294,7 +300,12 @@ export class EventRuntime {
   }
   private async reconcile(worker: Worker) {
     try {
-      if (worker.deliveryPhase === 'opening' && worker.threadId && !worker.turnId) {
+      // Opening phase with no submitted turn is deterministically unreached:
+      // threadId is persisted before run is ever called, so opening without a
+      // turnId means no model turn exists whether the session never opened
+      // (threadId null) or its resume timed out pre-submission. Both clear
+      // without any RPC; identifiers stay for inspection.
+      if (worker.deliveryPhase === 'opening' && !worker.turnId) {
         this.workers.save({ ...this.workers.get(worker.id), status: 'error',
           error: this.recoveryError(worker, 'Session recovery ended before turn/start; no model turn was submitted. Resolve the connection error, then enable this worker to retry queued events') });
         return;
