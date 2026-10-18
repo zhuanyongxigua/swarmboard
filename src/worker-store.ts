@@ -17,6 +17,10 @@ export const workerSchemas = {
 };
 export interface Worker {
   poolId?: string;
+  /** Backend that owns this worker's session identifiers. Readers normalize
+   *  missing values to 'codex': pre-backend-identity sessions can only be
+   *  Codex, and a different configured backend must refuse to resume them. */
+  backendId?: string;
   id: string; name: string; workspacePath: string; taskIds: string[]; threadId: string | null;
   enabled: boolean; version: number; cursor: number;
   status: 'idle' | 'running' | 'error' | 'uncertain'; error: string;
@@ -26,6 +30,12 @@ export interface Worker {
 }
 export function processAlive(pid: number) {
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
+}
+// Sessions persisted before backend identity existed can only belong to the
+// official Codex backend; normalizing on read keeps old databases usable and
+// blocks a differently configured backend from resuming their identifiers.
+function normalizeWorker(worker: Worker): Worker {
+  return worker.backendId ? worker : { ...worker, backendId: 'codex' };
 }
 export class WorkerStore {
   readonly db: DatabaseSync;
@@ -46,11 +56,11 @@ export class WorkerStore {
     try { const value = fn(); this.db.exec('COMMIT'); return value; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
-  list(): Worker[] { return this.db.prepare('SELECT data FROM workers ORDER BY id').all().map(row => JSON.parse(String(row.data)) as Worker); }
+  list(): Worker[] { return this.db.prepare('SELECT data FROM workers ORDER BY id').all().map(row => normalizeWorker(JSON.parse(String(row.data)) as Worker)); }
   get(id: string) {
     const row = this.db.prepare('SELECT data FROM workers WHERE id=?').get(id);
     if (!row) throw new AppError('NOT_FOUND', 'Worker not found', 404);
-    return JSON.parse(String(row.data)) as Worker;
+    return normalizeWorker(JSON.parse(String(row.data)) as Worker);
   }
   register(input: unknown) {
     const data = parse(workerSchemas.register, input);

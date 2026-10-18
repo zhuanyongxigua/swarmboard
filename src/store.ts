@@ -160,12 +160,24 @@ export class Store {
     return { ...task, description: task.description.slice(query.offset, end), acceptanceCriteria: task.acceptanceCriteria.slice(query.offset, end),
       textPage: { offset: query.offset, nextOffset: end, hasMore: task.description.length > end || task.acceptanceCriteria.length > end } };
   }
-  peerBoard(subscribedIds: string[] = []) {
+  // Shared-history visibility for an admitted reader: entries linked to goals
+  // outside the admitted set stay unreadable, and direct messages addressed to
+  // someone else are withheld the same way the runtime's update attachments
+  // withhold them. Unlinked board notices stay visible.
+  static historyScopeClause(scope: { taskIds?: string[]; recipientId?: string }): { clause: string; values: (string | number)[] } | undefined {
+    if (!scope.taskIds?.length && !scope.recipientId) return undefined;
+    const clauses: string[] = []; const values: (string | number)[] = [];
+    if (scope.taskIds?.length) { clauses.push(`(taskId IS NULL OR taskId IN (${scope.taskIds.map(() => '?').join(',')}))`); values.push(...scope.taskIds); }
+    if (scope.recipientId) { clauses.push('(recipientId IS NULL OR recipientId = ?)'); values.push(scope.recipientId); }
+    return { clause: clauses.join(' AND '), values };
+  }
+  peerBoard(subscribedIds: string[] = [], history?: { taskIds?: string[]; recipientId?: string }) {
     return this.transaction(() => {
       const page = this.taskPage({}, subscribedIds);
+      const visibility = Store.historyScopeClause(history ?? {});
       return { tasks: page.items, taskPage: { cursor: page.cursor, hasMore: page.hasMore },
         resources: this.list<Resource>('resources'), usages: this.list<Usage>('usages'), agents: this.list<Agent>('agents'),
-        entries: this.db.prepare('SELECT id,kind,agentId,summary,substr(detail,1,1000) AS detail,length(detail)>1000 AS detailTruncated,taskId,resourceId,recipientId,createdAt FROM (SELECT * FROM entries ORDER BY id DESC LIMIT 20) ORDER BY id').all().map(row => this.decode('entries', row)),
+        entries: this.db.prepare(`SELECT id,kind,agentId,summary,substr(detail,1,1000) AS detail,length(detail)>1000 AS detailTruncated,taskId,resourceId,recipientId,createdAt FROM (SELECT * FROM entries ${visibility ? 'WHERE ' + visibility.clause : ''} ORDER BY id DESC LIMIT 20) ORDER BY id`).all(...(visibility?.values ?? [])).map(row => this.decode('entries', row)),
         cursor: Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor) };
     });
   }
@@ -367,12 +379,16 @@ export class Store {
       return this.append(data);
     });
   }
-  readEntries(input: unknown = {}) {
+  readEntries(input: unknown = {}, scope?: { taskIds?: string[]; recipientId?: string }) {
     const query = parse(schemas.context,input);
     return this.transaction(() => {
     const clauses = ['id > ?']; const values: (string|number)[] = [query.after];
     for (const key of ['kind','agentId','taskId','resourceId'] as const) if (query[key] !== undefined) {clauses.push(`${key} = ?`);values.push(query[key]);}
     if (query.query) { clauses.push("instr(lower(summary || char(10) || detail), lower(?)) > 0"); values.push(query.query); }
+    // Applied inside the query so bounded pagination and cursors stay exact for
+    // an admitted reader: out-of-scope rows are never consumed by its cursor.
+    const visibility = Store.historyScopeClause(scope ?? {});
+    if (visibility) { clauses.push(visibility.clause); values.push(...visibility.values); }
     const rows = this.db.prepare(`SELECT * FROM entries WHERE ${clauses.join(' AND ')} ORDER BY id LIMIT ?`).all(...values,query.limit+1);
     const hasMore = rows.length > query.limit; const items = rows.slice(0,query.limit).map(row => this.decode('entries',row) as unknown as Entry);
     const max = Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor);

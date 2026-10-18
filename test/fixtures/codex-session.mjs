@@ -4,6 +4,9 @@
 import { createInterface } from 'node:readline';
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
 let turn = 0;
+// Turn ids started in this process, so thread/read can report real completed
+// turns to clients that inspect by the turnId they received from turn/start.
+const startedTurns = [];
 createInterface({ input: process.stdin }).on('line', line => {
   const message = JSON.parse(line);
   if (!message.method) {
@@ -30,13 +33,15 @@ createInterface({ input: process.stdin }).on('line', line => {
   if (method === 'thread/read') {
     const status = { 'failed-thread': 'failed', 'interrupted-thread': 'interrupted', 'active-thread': 'inProgress' }[params.threadId] ?? 'completed';
     const items = [{ type: params.threadId === 'assistant-only' ? 'agentMessage' : 'userMessage', content: [{ type: 'inputText', text: 'delivery-needle' }] }];
-    send({ id, result: { thread: { turns: params.threadId === 'empty-thread' ? [] : [{ id: 'saved-turn', status, items }] } } });
+    const turns = [{ id: 'saved-turn', status, items }, ...startedTurns.map(id => ({ id, status: 'completed', items }))];
+    send({ id, result: { thread: { turns: params.threadId === 'empty-thread' ? [] : turns } } });
   }
   if (method === 'turn/start') {
     const text = params.input[0].text;
     if (text === 'timeout') return;
     if (text === 'disconnect') { process.exit(0); }
     const tid = 'turn-' + (++turn);
+    startedTurns.push(tid);
     if (text === 'early') send({ method: 'turn/completed', params: { turn: { id: tid, status: 'completed' } } });
     send({ id, result: { turn: { id: tid } } });
     if (text === 'disconnect-after-ack') { setTimeout(() => process.exit(0), 20); return; }

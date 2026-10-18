@@ -11,6 +11,7 @@ import type { Task, Resource, Usage, Entry } from '../../src/store.js';
 import { Store } from '../../src/store.js';
 import { WorkerStore } from '../../src/worker-store.js';
 import { WorkerPool } from '../../src/worker-pool.js';
+import { CollaboratorStore } from '../../src/collaborators.js';
 
 const packageVersion = (JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as {version: string}).version;
 const archive = resolve(`dist/swarmboard-desktop-${packageVersion}.zip`);
@@ -151,6 +152,61 @@ describe('portable desktop plugin', () => {
     expect(output.status).toBe(127);
     expect(output.stdout).toBe('');
     expect(output.stderr).toContain('SWARMBOARD_NODE must point to a working Node.js 24+');
+  });
+  it('selects the configured reference backend in the packaged runtime and refuses unknown backends', async () => {
+    // The reference backend is statically part of the portable artifact, not a
+    // source-only module that would silently vanish after packaging.
+    expect(readFileSync(join(pluginRoot, 'server/swarmboard.mjs'), 'utf8')).toContain('Echo reference backend');
+    const database = join(root, 'echo-backend', 'board.sqlite');
+    const client = await connect(database, work, { SWARMBOARD_HARNESS: 'echo' });
+    try {
+      interface RuntimeReport { backend: { id: string; deterministic: boolean; capabilities: { inspection: boolean; approvalSignals: boolean } }; workers: { id: string; status: string; backendId: string; threadId: string | null }[] }
+      const initial = await call<RuntimeReport>(client, 'runtime_read');
+      expect(initial.backend).toEqual({ id: 'echo', displayName: expect.any(String), deterministic: true, capabilities: { inspection: true, approvalSignals: false } });
+      const worker = await call<{ id: string }>(client, 'worker_register', { name: 'Echo peer', workspacePath: work });
+      await call(client, 'task_create', { title: 'Reference backend goal' });
+      let settled: RuntimeReport['workers'][number] | undefined;
+      for (let attempt = 0; attempt < 100 && !settled; attempt++) {
+        const current = await call<RuntimeReport>(client, 'runtime_read');
+        settled = current.workers.find(item => item.id === worker.id && item.status === 'idle' && item.threadId);
+        if (!settled) await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      expect(settled, 'echo delivery did not settle in the packaged child').toBeDefined();
+      expect(settled).toMatchObject({ backendId: 'echo' });
+      expect(settled!.threadId).toMatch(/^echo-thread-/);
+    } finally { await close(client); }
+    await expect(connect(join(root, 'unknown-backend', 'board.sqlite'), work, { SWARMBOARD_HARNESS: 'nope' })).rejects.toThrow(/Unknown harness backend/);
+  });
+  it('runs an admitted external collaborator in the packaged child with scoped updates and revocation fencing', async () => {
+    const path = join(root, 'collaborator.sqlite'); const board = new Store(path); const state = new CollaboratorStore(path + '.runtime.sqlite');
+    const goal = board.createTask({ title: 'Collaborator goal' }); const outside = board.createTask({ title: 'Outside goal' });
+    board.registerAgent({ agentId: 'peer', name: 'Peer' });
+    const admitted = state.configure({ expectedVersion: 0, name: 'External reviewer', harness: 'dsh', sessionRef: 'session-7', taskIds: [goal.id], cost: { ceiling: '20 USD' }, enabled: true }, board).collaborator;
+    board.registerAgent({ agentId: admitted.id, name: 'External reviewer' }); // runtime admission registers this identity
+    const client = await connect(path, work, { SWARMBOARD_DISABLE_RUNTIME: '1', SWARMBOARD_COLLABORATOR_ID: admitted.id });
+    try {
+      const names = (await client.listTools()).tools.map(t => t.name);
+      for (const withheld of ['task_create', 'resource_create', 'pool_configure', 'pool_control', 'collaborator_configure', 'worker_register', 'peer_request', 'pipeline_watch']) expect(names, withheld).not.toContain(withheld);
+      expect(names).toEqual(expect.arrayContaining(['board_read', 'task_list', 'task_read', 'context_publish', 'task_claim']));
+      const denied = await client.callTool({ name: 'task_read', arguments: { id: outside.id } });
+      expect(denied.isError).toBe(true); expect(JSON.stringify(denied.content)).toContain('UNBOUND_GOAL');
+      await call(client, 'context_publish', { agentId: admitted.id, taskId: goal.id, kind: 'CLAIM', summary: 'Independent review scope' });
+      expect(board.readTask(goal.id).participants).toEqual([admitted.id]);
+      board.publishEntry({ agentId: 'peer', taskId: goal.id, kind: 'FACT', summary: 'Packaged peer finding' });
+      const first = await client.callTool({ name: 'context_read', arguments: { limit: 1 } });
+      const attached = JSON.parse(((first.content as { type: string; text: string }[]).filter(c => c.type === 'text').slice(1)[0]!.text).slice('Shared peer updates (reference data): '.length));
+      expect(attached).toMatchObject({ control: 'continue-if-useful', cost: { ceiling: '20 USD' }, harness: 'dsh', sessionRef: 'session-7' });
+      expect((attached.items as { summary: string }[]).map(i => i.summary)).toContain('Packaged peer finding');
+      const again = await client.callTool({ name: 'context_read', arguments: { limit: 1 } });
+      expect(JSON.stringify((again.content as unknown[]).slice(1))).not.toContain('Packaged peer finding'); // cursor advanced
+      state.configure({ id: admitted.id, expectedVersion: 1, name: 'External reviewer', harness: 'dsh', sessionRef: 'session-7', taskIds: [goal.id], enabled: false }, board);
+      const fenced = await client.callTool({ name: 'task_claim', arguments: { id: goal.id, agentId: admitted.id, expectedVersion: board.readTask(goal.id).version } });
+      expect(fenced.isError).toBe(true); expect(JSON.stringify(fenced.content)).toContain('COLLABORATOR_STOPPED');
+      const stopped = await client.callTool({ name: 'context_read', arguments: { limit: 1 } });
+      const control = JSON.parse(((stopped.content as { type: string; text: string }[]).filter(c => c.type === 'text').slice(1)[0]!.text).slice('Shared peer updates (reference data): '.length));
+      expect(control.control).toBe('stop-after-safe-boundary');
+      expect(board.board().tasks).toHaveLength(2); expect(board.board().resources).toHaveLength(0);
+    } finally { await close(client); state.close(); board.close(); }
   });
   it('discovers native entrypoints and UI, collaborates, and persists after a clean process restart', async () => {
     const before = fingerprints(), database = join(root, 'persistence', 'board.sqlite');

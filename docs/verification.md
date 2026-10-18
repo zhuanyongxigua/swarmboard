@@ -1,3 +1,35 @@
+# 协作者接入自修复（独立 review P2，2026-10-18）
+
+- 独立 review P2：sidecar 接入提交与看板身份注册分属两个库；注册在提交后失败一次时，重启后用同一 id/当前版本的 `collaborator_configure` 重试会成功却跳过注册（旧实现仅 `created` 时确保），心跳保持 NOT_FOUND。修复为每次成功 configure 都幂等确保看板身份（他进程并发 AGENT_EXISTS 视为已确保），重试即修复且恰好一条加入通知；id/游标不变、终态撤销规则不变。隔离回归复现窗口→关闭并重开两个 SQLite 库→同 id 重试→身份就位、单一加入通知、心跳可用、游标保持、撤销仍终态。
+- 完整 `npm run check` 通过：**209/209** 服务/协议/集成、**28/28** Chromium；修复提交 4f696e3 的必需 CI 通过（两次 verify）。此前未知投递 P1/P2 与共享历史范围修复保持不变；无生产事故声明，未动活动宿主。
+
+# 协作者共享历史范围修复（独立 review P1，2026-10-18）
+
+- 针对 d0b4aff 的独立 review P1：只接入目标 A 的外部协作者可以经 `context_read`/`context_search` 的主结果与 `board_read` 紧凑历史读到目标 B 的条目（此前仅 `task_read`/`task_list` 与附加更新被过滤）。修复将共享历史可见性放入存储查询：协作者角色的 `readEntries` 与 `peerBoard` 紧凑历史只返回已接入目标相关条目、无目标绑定公告与发给本人的定向消息；发给其他成员的定向消息与主结果、附加更新一致地被保留；过滤在 SQL 内完成，分页与游标不消费范围外条目。池成员与宿主的既有历史视图不变。
+- 针对性回归（两个合成目标 + 真实 SQLite + 官方 in-memory MCP）：越界 `task_read` 返回 `UNBOUND_GOAL`、目标 B 事实不出现在 `context_read`/`context_search`/`board_read`，目标 A 事实、无目标公告与发给本人的定向消息为正向对照，limit=1 起步的有界游标遍历收集到的集合与全量读取一致且无越界条目。
+- 完整 `npm run check` 通过：**208/208** 服务/协议/集成、**28/28** Chromium；修复提交 7433938 的必需 CI 通过（两次 verify）。此前的未知投递 P1/P2 修复保持不变；未使用真实看板数据或外部 harness。
+
+# 后端切换与注册表修复（独立 review P1/P2，2026-10-18）
+
+- 独立 review 发现的 P1：已有 thread/turn/delivery 标识的 running/uncertain 投递在后端不匹配分支被降级为可重启的 error，`worker_update` 清除标识后会把同一批事件再次提交（隔离复现一次重复）。修复为该分支保留 uncertain 状态、deliveryPhase 与全部标识，并在诊断中说明须待原后端恢复后先核查再决定；`worker_update` 对未决投递仍拒绝启用，普通 idle 不匹配仍是可操作 error。新增针对性回归（真实 EventRuntime/WorkerStore + 挂起适配器）：挂起回合经真实 close 路径留下 uncertain 检查点 → 切到 echo 后状态/阶段/标识不变且 echo 零提交、启用被拒 → 切回 codex 后经 requestReconcile 以 inspect 确认，游标推进且 run 恰好一次（无重复）。
+- 同 review 的 P2：`resolveHarness` 用普通对象查找会接受原型链键（如 `constructor`）当作后端。改为 Map 查找，并把这些键加入 UNKNOWN_HARNESS 负例测试。
+- 完整 `npm run check` 通过：**207/207** 服务/协议/集成、**28/28** Chromium，覆盖率门槛不变；主分支通知合并行为与池/协作者路径未改。修复提交 32bd327 的必需 CI 通过（两次 verify）。本条为源码/隔离测试结论，不是生产事故报告。
+
+# 外部协作者最小切片（2026-10-18）
+
+- 按产品要求把外部 agent 落地为独立身份协作者：宿主经 `collaborator_configure` 版本化接入（名称、harness 标签、sessionRef、显式非空目标范围、可选 cost 记录、enabled），接入即注册稳定看板 agentId 并发布加入事件；撤销为终态（记录 revokedAt，不可重启用/改范围）。`runtime_read`/`/api/runtime` 新增 `collaborators` 列表，与池成员/worker 分开计数；池组织、执行授权与 Codex 会话路径不变。
+- 协作者 MCP 子进程由外部 harness 自行启动（`SWARMBOARD_COLLABORATOR_ID`，未知 id 启动报错，不运行事件 runtime）：与池成员相同的协作面（范围内有界读取、CLAIM/FACT/FAIL/MESSAGE、参与/释放、资源声明），管理工具不注册，写入绑定身份并按接入范围围栏（越界 `UNBOUND_GOAL`）。更新为拉取式：每次工具调用附加游标以来的范围内事件（持久游标、entry-id 去重、忙碌排队、重启不重放），control 信号与 `COLLABORATOR_STOPPED` 围栏在撤销或范围内目标全部终态时停止新写入、保留清理操作。这是有依据的降级：不声称能唤醒外部 harness（文件/数据库访问不构成唤醒证明）；harness 字段是追踪标签，无任何真实外部 harness 连接。
+- cost 仅作看板数据原样记录与透传（自由文本 ceiling/note；未记录为 null，不是"无上限"，也不内置厂商费率或强制）。审批交接为共享面板请求，不自动批准。
+- 新增 `test/integration/collaborators.test.ts`（真实 SQLite + 官方 MCP 客户端，8 例）与 `test/mcp/desktop.test.ts` 真实打包子进程协作者用例；完整 `npm run check` 通过：**206/206** 服务/协议/集成（覆盖率门槛不变；`src/collaborators.ts` 行/函数 100%、分支 90.32%）、**28/28** Chromium。文档见 `docs/external-collaborators.md`。真实外部 harness 连接、其模型行为与成本度量未验收、不声称；界面展示为已记录的后续项。
+
+# Harness 协作内核与适配层（2026-10-18）
+
+- 协作内核不再依赖具体 harness：`SessionAdapter`/`UncertainDelivery`/能力声明移入 `src/harness/contract.ts`，`src/event-runtime.ts` 经注册表取得后端；官方 Codex 适配完整接回新契约，现网默认行为不变。`SWARMBOARD_HARNESS` 是唯一配置缝，桌面 stdio 与事件守护进程共用，未知后端以 `UNKNOWN_HARNESS` 启动报错，绝不静默回落。新增确定性 echo 参考后端（`deterministic: true`，无模型，sidecar 台账）证明扩展不改内核。
+- Worker 持久化 `backendId`：历史数据读取时归一为 `codex`（非破坏迁移，暂停/授权/检查点保留）；已绑定会话标识的 worker 在后端不匹配时拒绝投递与核查并保持事件排队，人工审批暂停原因保留；未绑定标识的新 worker 可改绑。`runtime_read`/`/api/runtime` 如实返回所选后端与能力。
+- 新增共享契约套件（echo 与 Codex 经 model-free 协议夹具跑同一用例）、注册表单测、真实守护进程装配测试（echo/codex 干净启停、未知配置退出码 1）、真实 SQLite 的后端身份集成回归（拒绝跨后端、暂停保留、台账核查恢复不重放）与便携包真实子进程选择 echo/拒绝未知后端测试。协议夹具增加记录已启动 turnId 的加法修改，原断言全部保留。
+- 完整 `npm run check` 通过（合并 main 的通知合并特性后，最终提交 9766241）：lint、typecheck、构建、便携打包、**197/197** 服务/协议/集成（覆盖率门槛未降低；`src/harness` 行/语句/函数 100%、分支 96.96%，codex-session 行 100%、event-runtime 行 94%+）与 **28/28** Chromium。事件守护进程在 stdout 输出停止处理器安装后的就绪行，装配测试等待该信号而非与启动竞速。DSH 侧交付基于本机安装的 `@deepseek-ai/dsh@0.1.1-rc.2`、一份本机真实 Host 实测兼容记录与上游 SDK 文档的映射、样例骨架与缺口清单（`docs/harness-adapters.md`），未实现、未运行真实 DSH 驱动。
+- 隔离看板真实 Codex 最小闭环 `node scripts/verify-harness-loop.mjs --live` **passed=true**：注册表默认 codex 后端经官方桌面捆绑 CLI **0.163.0-alpha.10.2** 建立真实会话 threadId `01a14ce8-f2e4-7fe1-8df9-eaf3d70a5101`，45 秒完成一个真实模型回合；模型按目标经 swarmboard_worker MCP 注册身份并发布 `LOOP_CLAIM` 事实（核对隔离工作区 AGENTS.md fixture），游标推进到 3。临时数据库/工作区已清理，凭据未读取。该证据不覆盖 DSH、审批流程或业务看板。
+
 # 0.8.4 单任务宿主执行授权（2026-10-18）
 
 - 修复“任务卡已转述人类授权，但原会话仍只有源项目/INTERNAL_ONLY 边界”的启动缺口。根 MCP 提供版本化 task_execution_configure；授权与目标和组织绑定，保存在运行时 sidecar，包含项目读取范围、独立执行目录、明确的 Zcode 和监控许可。保持默认策略、原组织与会话不变。

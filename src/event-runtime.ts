@@ -3,19 +3,22 @@
 import { watch, existsSync, type FSWatcher } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { Store, type Entry } from './store.js';
+import { AppError, Store, type Entry } from './store.js';
 import { WorkerStore, approvalPauseMessage, type Worker } from './worker-store.js';
-import { CodexSession, UncertainDelivery, type SessionAdapter } from './codex-session.js';
+import { UncertainDelivery, type HarnessBackend, type SessionAdapter } from './harness/contract.js';
+import { resolveHarness } from './harness/registry.js';
 import { workerPrompt } from './worker-prompt.js';
 import { WorkerPool } from './worker-pool.js';
 import { PoolLiveness } from './pool-liveness.js';
 import { PipelineEvents, type PipelineReader } from './pipeline-events.js';
 import { ExecutionGrants } from './execution-grants.js';
+import { CollaboratorStore } from './collaborators.js';
 import { notificationDelay, notificationSettings, type NotificationOptions } from './notification-batch.js';
 
 export interface RuntimeOptions extends NotificationOptions {
   databasePath: string; serverEntry: string;
   adapter?: (worker: Worker) => SessionAdapter;
+  backend?: HarnessBackend;
   fallbackMs?: number; debounceMs?: number; keepAlive?: boolean; autoPool?: boolean;
   now?: () => number; idleMs?: number;
   pipelineReader?: PipelineReader;
@@ -25,6 +28,7 @@ export class EventRuntime {
   readonly pool: WorkerPool;
   readonly ci: PipelineEvents;
   readonly grants: ExecutionGrants;
+  readonly collaborators: CollaboratorStore;
   private liveness: PoolLiveness;
   private scanning?: Promise<void>;
   private token = randomUUID();
@@ -39,11 +43,16 @@ export class EventRuntime {
   private adapters = new Map<string, SessionAdapter>();
   private closed = false;
   private lastError = '';
+  private readonly backend: HarnessBackend;
+  private readonly statePath: string;
   constructor(readonly board: Store, readonly options: RuntimeOptions) {
     this.notificationPolicy = notificationSettings(options);
-    this.workers = new WorkerStore(options.databasePath === ':memory:' ? ':memory:' : options.databasePath + '.runtime.sqlite');
+    this.statePath = options.databasePath === ':memory:' ? ':memory:' : options.databasePath + '.runtime.sqlite';
+    this.backend = options.backend ?? resolveHarness();
+    this.workers = new WorkerStore(this.statePath);
     this.pool = new WorkerPool(this.workers, board, options.databasePath);
     this.grants = new ExecutionGrants(board, this.workers);
+    this.collaborators = new CollaboratorStore(this.statePath);
     this.liveness = new PoolLiveness(board, this.workers, options.idleMs ?? 10 * 60 * 1000);
     this.ci = new PipelineEvents(board, this.workers, options.pipelineReader, options.now, () => !this.closed && this.workers.owns(this.token));
   }
@@ -97,7 +106,9 @@ export class EventRuntime {
   status() {
     const activity = this.liveness.activity(this.workers.pool());
     if (activity.state === 'idle' && this.ci.hasPending()) activity.state = 'waiting';
-    return { mode: 'events' as const, owner: this.workers.owner(), workers: this.workers.list(), pool: this.workers.pool(), activity, executionGrants: this.grants.list(), ciWatches: this.ci.list(), notifications: { ...this.notificationPolicy, nextWakeAt: this.nextBatchWakeAt }, error: this.lastError };
+    return { mode: 'events' as const,
+      backend: { id: this.backend.id, displayName: this.backend.displayName, deterministic: this.backend.deterministic === true, capabilities: this.backend.capabilities },
+      owner: this.workers.owner(), workers: this.workers.list(), pool: this.workers.pool(), collaborators: this.collaborators.list(), activity, executionGrants: this.grants.list(), ciWatches: this.ci.list(), notifications: { ...this.notificationPolicy, nextWakeAt: this.nextBatchWakeAt }, error: this.lastError };
   }
   configureExecutionGrant(input: unknown) {
     const grant = this.grants.configure(input);
@@ -107,6 +118,22 @@ export class EventRuntime {
     this.notify(); return grant;
   }
   hasWorkers() { return this.workers.list().length > 0 || this.workers.pool() !== null; }
+  // Host-only admission/lifecycle for external collaborators. The runtime never
+  // delivers turns to them; it registers their stable board identity and keeps
+  // their scoped record for the collaborator MCP role.
+  configureCollaborator(input: unknown) {
+    const { collaborator } = this.collaborators.configure(input, this.board);
+    // The sidecar commit and the board registration are separate stores. If an
+    // earlier attempt committed the record but failed before registering, any
+    // later successful configure — including a same-id retry after a restart —
+    // idempotently repairs the missing identity with exactly one join notice,
+    // instead of leaving heartbeat NOT_FOUND for an admitted collaborator.
+    if (!this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(collaborator.id)) {
+      try { this.board.registerAgent({ agentId: collaborator.id, name: collaborator.name }); }
+      catch (error) { if (!(error instanceof AppError && error.code === 'AGENT_EXISTS')) throw error; }
+    }
+    this.notify(); return collaborator;
+  }
   configurePool(input: unknown) { const pool = this.pool.configure(input); this.notify(); return pool; }
   controlPool(input: unknown) { const pool = this.pool.control(input); this.notify(); return pool; }
   register(input: unknown) {
@@ -180,7 +207,13 @@ export class EventRuntime {
     const before = this.workers.pool();
     const busy = !!before && before.memberIds.some(id => this.running.has(id) || ['running', 'uncertain'].includes(this.workers.get(id).status));
     const pool = this.pool.sync(busy);
-    const pending = busy || !!pool?.memberIds.some(id => { const batch = this.batch(this.workers.get(id)); return batch.events.length > 0 || batch.hasMore; });
+    // Only dispatchable members' unread events gate recovery: a protected
+    // member's stale cursor (human/approval pause, error, unresolved delivery)
+    // must not permanently block the healthy subset. Busy covers running and
+    // uncertain members regardless of enabled, so unknown deliveries still
+    // suppress recovery.
+    const dispatchable = new Set(pool?.memberIds.filter(id => { const member = this.workers.get(id); return member.enabled && member.status === 'idle'; }) ?? []);
+    const pending = busy || !!pool?.memberIds.some(id => { if (!dispatchable.has(id)) return false; const batch = this.batch(this.workers.get(id)); return batch.events.length > 0 || batch.hasMore; });
     this.liveness.sync(pool, this.options.now?.() ?? Date.now(), pending, this.ci.list().filter(w => w.state === 'watching').map(w => w.taskId));
     for (const worker of this.workers.list()) {
       // A configured organization replaces legacy individual execution. Keep
@@ -189,6 +222,23 @@ export class EventRuntime {
         if (this.running.has(worker.id)) continue;
         const adapter = this.adapters.get(worker.id);
         if (adapter) { await adapter.close(); this.adapters.delete(worker.id); }
+        continue;
+      }
+      // Session/turn identifiers from another backend must never be silently
+      // consumed here; only an unbound worker (no identifiers yet) may rebind.
+      if (worker.backendId !== this.backend.id && (worker.threadId || worker.turnId || worker.deliveryId)) {
+        const adapter = this.adapters.get(worker.id);
+        if (adapter) { await adapter.close(); this.adapters.delete(worker.id); }
+        const diagnostic = `Bound session belongs to harness backend '${worker.backendId}', not the configured '${this.backend.id}'`;
+        if (worker.status === 'running' || worker.status === 'uncertain') {
+          // An unresolved delivery must never become a restartable error:
+          // keep the uncertain state, delivery phase and identifiers so the
+          // original backend can inspect and reconcile them before any
+          // resubmission; worker_update keeps refusing to enable it.
+          if (worker.status !== 'uncertain' || !worker.error.includes(diagnostic)) this.workers.save({ ...worker, status: 'uncertain',
+            error: this.recoveryError(worker, `${diagnostic}; the unresolved delivery keeps its checkpoints and is inspected after that backend is restored, never replayed here`) });
+        } else if (worker.status !== 'error') this.workers.save({ ...worker, status: 'error',
+          error: this.recoveryError(worker, `${diagnostic}; restore that backend configuration before reusing this worker's session identifiers`) });
         continue;
       }
       if (worker.status === 'error' || this.running.has(worker.id)) continue;
@@ -225,7 +275,7 @@ export class EventRuntime {
         if (this.nextBatchWakeAt === null || deadline < this.nextBatchWakeAt) this.nextBatchWakeAt = deadline;
         continue;
       }
-      const delivering = this.workers.save({ ...worker, status: 'running', deliveryId: randomUUID(), deliveryCursor: batch.cursor, turnId: null, deliveryPhase: 'opening', error: '' });
+      const delivering = this.workers.save({ ...worker, status: 'running', deliveryId: randomUUID(), deliveryCursor: batch.cursor, turnId: null, deliveryPhase: 'opening', error: '', backendId: this.backend.id });
       const promise = this.deliver(delivering, batch.events).finally(() => { this.running.delete(worker.id); this.notify(); });
       this.running.set(worker.id, promise);
     }
@@ -235,9 +285,9 @@ export class EventRuntime {
     }
   }
   private session(worker: Worker) {
-    const adapter = this.adapters.get(worker.id) ?? this.options.adapter?.(worker) ?? new CodexSession({
-      databasePath: this.options.databasePath, serverEntry: this.options.serverEntry,
-      workerId: worker.id, poolMember: !!worker.poolId,
+    const adapter = this.adapters.get(worker.id) ?? this.options.adapter?.(worker) ?? this.backend.createSession({
+      databasePath: this.options.databasePath, statePath: this.statePath, serverEntry: this.options.serverEntry,
+      worker,
       onApproval: () => { this.workers.pauseForApproval(worker.id); },
     });
     this.adapters.set(worker.id, adapter); return adapter;
@@ -250,7 +300,12 @@ export class EventRuntime {
   }
   private async reconcile(worker: Worker) {
     try {
-      if (worker.deliveryPhase === 'opening' && worker.threadId && !worker.turnId) {
+      // Opening phase with no submitted turn is deterministically unreached:
+      // threadId is persisted before run is ever called, so opening without a
+      // turnId means no model turn exists whether the session never opened
+      // (threadId null) or its resume timed out pre-submission. Both clear
+      // without any RPC; identifiers stay for inspection.
+      if (worker.deliveryPhase === 'opening' && !worker.turnId) {
         this.workers.save({ ...this.workers.get(worker.id), status: 'error',
           error: this.recoveryError(worker, 'Session recovery ended before turn/start; no model turn was submitted. Resolve the connection error, then enable this worker to retry queued events') });
         return;
@@ -281,7 +336,7 @@ export class EventRuntime {
       if (!current.enabled || poolStopped) { this.workers.save({ ...current, threadId, status: 'idle', deliveryId: null, deliveryCursor: null, turnId: null, deliveryPhase: undefined }); return; }
       this.workers.save({ ...current, threadId, deliveryPhase: 'submitting' });
       submitted = true;
-      await adapter.run(threadId, workerPrompt(worker, worker.deliveryId!, events, worker.poolId ? this.workers.pool() : null, worker.poolId ? this.grants.active() : []), turnId => {
+      await adapter.run(threadId, workerPrompt(worker.deliveryId!, events, this.backend.sessionIntro(worker), worker.poolId ? this.workers.pool() : null, worker.poolId ? this.grants.active() : []), turnId => {
         const latest = this.workers.get(worker.id); this.workers.save({ ...latest, turnId, deliveryPhase: 'running' });
       });
       if (!this.workers.owns(this.token)) return;

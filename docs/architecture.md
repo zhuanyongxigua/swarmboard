@@ -17,6 +17,8 @@ flowchart LR
 ```
 
 - `src/store.ts`：输入验证、状态变更、版本检查、归属检查、SQLite 事务及事件。
+- `src/harness/`：与宿主无关的会话契约（`contract.ts`）、后端注册与配置装配（`registry.ts`，`SWARMBOARD_HARNESS`）及确定性 echo 参考后端；官方 Codex 适配位于 `src/codex-session.ts`。见 [Harness 适配与扩展](harness-adapters.md)。
+- `src/collaborators.ts`：宿主接入的外部协作者——独立稳定身份、显式范围、终态撤销、成本记录与拉取式更新。见 [外部协作者](external-collaborators.md)。
 - `src/app.ts`：本地 HTTP API、Streamable HTTP MCP 传输、同源和可选 Bearer 检查。
 - `src/mcp.ts`：工具、协作 prompt、`board_open` 和 UI 资源注册；声明官方 `global` / `thread` entrypoints。
 - `src/stdio.ts`：由桌面宿主启动的本地 stdio 服务，正常输出仅用于 MCP 协议。
@@ -53,7 +55,7 @@ Agent 心跳是会话活动信息。界面把超过两分钟未报告的会话�
 
 持久事件向相关平等同伴传播；忙碌时排队，并在成功 MCP 工具返回附加新记录。无可推进目标的空队列不启动模型；有目标却全员空闲时由持久检查点限次提醒原会话，不创建任务级定时聊天。全部目标完成／取消后关闭空闲模型进程，受阻／待验收时等待事件；版本化停止控制阻止新回合并允许安全收尾。新目标复用同一组织。生产事件入口不初始化宿主 cron，兼容接口不代表定时会话会继续创建。
 
-专用官方 Codex App Server 使用正常 CLI 登录、workspace-write 和 on-request，不自动审批、不从任务文字推导目录授权。不确定投递先核查，不盲目重放。详细绑定、恢复、工具范围和验收见[事件工作会话](event-workers.md)。
+专用官方 Codex App Server 使用正常 CLI 登录、workspace-write 和 on-request，不自动审批、不从任务文字推导目录授权。不确定投递先核查，不盲目重放。协作内核不依赖具体 harness：会话差异在适配层，后端身份与 worker 持久绑定，跨后端不解释旧会话标识；详细契约、能力矩阵与新增后端步骤见 [Harness 适配与扩展](harness-adapters.md)，绑定、恢复、工具范围和验收见[事件工作会话](event-workers.md)。
 
 ## 与 Agensh 的关系
 

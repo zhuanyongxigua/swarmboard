@@ -4,13 +4,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { existsSync } from 'node:fs';
 import type { Worker } from './worker-store.js';
-export interface SessionAdapter {
-  open(worker: Worker): Promise<string>;
-  run(threadId: string, prompt: string, onStarted: (turnId: string) => void): Promise<void>;
-  inspect?(threadId: string, turnId: string | null, deliveryId: string): Promise<'completed' | 'failed' | 'active' | 'unknown'>;
-  close(): Promise<void>;
-}
-export class UncertainDelivery extends Error {}
+import { UncertainDelivery, type HarnessBackend, type SessionAdapter } from './harness/contract.js';
+export { UncertainDelivery, type SessionAdapter } from './harness/contract.js';
 export class CodexSession implements SessionAdapter {
   private child?: ChildProcessWithoutNullStreams;
   private sequence = 0;
@@ -140,3 +135,15 @@ export class CodexSession implements SessionAdapter {
     });
   }
 }
+
+export const codexBackend: HarnessBackend = {
+  id: 'codex',
+  displayName: 'Official Codex App Server (ChatGPT Desktop CLI login)',
+  capabilities: { inspection: true, approvalSignals: true },
+  sessionIntro: worker => `You are ${worker.id}, a persistent Swarmboard worker in your existing official Codex session. Keep this stable agentId. Read the applicable AGENTS.md in your authorized execution workspace ${JSON.stringify(worker.workspacePath)}. Use swarmboard_worker MCP; register this identity if absent, otherwise heartbeat it.`,
+  createSession: context => new CodexSession({
+    databasePath: context.databasePath, serverEntry: context.serverEntry,
+    workerId: context.worker.id, poolMember: !!context.worker.poolId,
+    onApproval: context.onApproval,
+  }),
+};

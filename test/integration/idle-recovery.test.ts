@@ -78,12 +78,17 @@ describe('internal peer idle recovery', () => {
     f.runtime.controlPool({ expectedVersion: pool.version, enabled: false }); f.tick(10000); await f.settle();
     expect(f.turns).toHaveLength(3); expect(f.runtime.status().activity.state).toBe('stopped');
     f.runtime.controlPool({ expectedVersion: pool.version + 1, enabled: true }); await f.settle();
-    const peer = f.runtime.workers.list()[0]!;
-    f.runtime.workers.pauseForApproval(peer.id); f.tick(10000); await f.settle(); expect(f.turns).toHaveLength(3);
+    // F2: a protected member no longer suppresses recovery for a healthy
+    // subset (covered by test/mcp/liveness-recovery.test.ts); this fence now
+    // applies when every member is protected.
+    const peers = f.runtime.workers.list();
+    for (const peer of peers) f.runtime.workers.pauseForApproval(peer.id);
+    f.tick(10000); await f.settle(); expect(f.turns).toHaveLength(3);
     expect(f.runtime.status().activity.state).toBe('attention');
-    f.runtime.update({ id: peer.id, expectedVersion: 2, enabled: true });
+    for (const peer of peers) f.runtime.update({ id: peer.id, expectedVersion: f.runtime.workers.get(peer.id).version, enabled: true });
     for (const status of ['error', 'uncertain'] as const) {
-      f.runtime.workers.save({ ...f.runtime.workers.get(peer.id), status }); f.tick(10000); await f.runtime.scan(); expect(f.turns).toHaveLength(3);
+      for (const peer of peers) f.runtime.workers.save({ ...f.runtime.workers.get(peer.id), status });
+      f.tick(10000); await f.runtime.scan(); expect(f.turns).toHaveLength(3);
     }
   });
   it('does not reset the retry budget on peer chatter or duplicate an outbox signal after a crash', async () => {

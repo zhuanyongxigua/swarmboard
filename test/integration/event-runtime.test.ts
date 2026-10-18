@@ -75,13 +75,21 @@ describe('event-driven persistent workers', () => {
     expect(observedPhase).toBe('submitting');
     expect(f.runtime.workers.get(worker.id).cursor).toBe(0);
   });
-  it('does not clear uncertainty for an opening checkpoint without a known session identity', async () => {
-    const { adapter, prompts } = session(), f = fixture(adapter), worker = f.runtime.register({ name: 'Builder', workspacePath: f.dir });
+  it('exits a threadless opening checkpoint deterministically to an enableable error', async () => {
+    // F1: opening is persisted before adapter.open, so opening without a
+    // turnId is provably pre-submission whether or not a threadId exists; the
+    // checkpoint reaches a no-RPC error exit instead of permanent uncertainty.
+    const { adapter, prompts } = session(); adapter.inspect = vi.fn(async () => 'unknown' as const);
+    const f = fixture(adapter), worker = f.runtime.register({ name: 'Builder', workspacePath: f.dir });
     f.runtime.workers.save({ ...worker, status: 'running', deliveryPhase: 'opening', deliveryId: 'unacknowledged-session', deliveryCursor: 1 });
     await f.runtime.scan();
-    await vi.waitFor(() => expect(f.runtime.workers.get(worker.id).status).toBe('uncertain'));
+    await vi.waitFor(() => expect(f.runtime.workers.get(worker.id).status).toBe('error'));
+    expect(f.runtime.workers.get(worker.id).error).toContain('no model turn was submitted');
     expect(prompts).toHaveLength(0);
-    expect(() => f.runtime.update({ id: worker.id, expectedVersion: worker.version, enabled: true })).toThrow(/Inspect/);
+    expect(adapter.inspect).not.toHaveBeenCalled();
+    const cleared = f.runtime.workers.get(worker.id);
+    expect(cleared.cursor).toBe(0); // queued events are preserved, never silently replayed
+    expect(f.runtime.update({ id: worker.id, expectedVersion: cleared.version, enabled: true })).toMatchObject({ enabled: true, status: 'idle' });
   });
   it('wakes across independent database connections without waiting for the recovery timer and reuses its session', async () => {
     const { adapter, prompts } = session(); const f = fixture(adapter);
