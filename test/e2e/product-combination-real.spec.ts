@@ -100,7 +100,15 @@ test('progress, preferences and capacity controls coexist without losing each ot
     expect(sessionAttempts).toBe(0);
     await page.screenshot({ path: testInfo.outputPath('combination-mobile.png'), fullPage: true });
   } finally {
-    await page.goto('about:blank'); await server.close(); await runtime.close(); store.close();
+    await test.step('Close test-owned clients and HTTP connections', async () => {
+      await page.close(); await request.dispose();
+      const closing = server.close();
+      // Accepted preconnect sockets can outlive navigation; only this fixture's
+      // connections are closed after its browser and API clients have finished.
+      server.server.closeAllConnections();
+      await closing;
+    });
+    await runtime.close(); store.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
