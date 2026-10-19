@@ -68,8 +68,8 @@ test('keeps a busy member in the actual count while retirement is pending, inclu
 });
 
 for (const copy of [
-  { lang: 'zh-CN', label: '减少成员', hint: '至少保留 1 名成员', paused: '协作已停止，请先恢复协作。' },
-  { lang: 'en', label: 'Reduce member', hint: 'Keep at least 1 member', paused: 'Collaboration is stopped. Resume it first.' },
+  { lang: 'zh-CN', label: '减少成员', hint: '至少保留 1 名成员', paused: '协作已停止，暂不可调整成员。' },
+  { lang: 'en', label: 'Reduce member', hint: 'Keep at least 1 member', paused: 'Collaboration is stopped. Member changes are unavailable.' },
 ]) test(`explains the lower limit and stopped state on hover and keyboard focus (${copy.lang})`, async ({ page }) => {
   const state = fixture(1); await runtime(page, state); await page.goto(`/?lang=${copy.lang}`);
   const button = page.getByRole('button', { name: copy.label, exact: true });
@@ -83,8 +83,10 @@ for (const copy of [
   await expect(page.getByRole('tooltip')).toHaveText(copy.hint);
   state.pool.size = 2; state.activity.members = 2; state.pool.enabled = false;
   await page.getByRole('button', { name: copy.lang === 'en' ? 'Refresh board' : '刷新面板' }).click();
-  await expect(page.getByRole('button', { name: copy.lang === 'en' ? 'Resume collaboration' : '恢复协作' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^(停止协作|恢复协作|Stop collaboration|Resume collaboration)$/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: copy.lang === 'en' ? 'Add member' : '增加成员', exact: true })).toBeVisible();
   await expect(button).toBeDisabled();
+  await expect(button).toHaveAccessibleDescription(copy.paused);
   await page.getByRole('button', { name: copy.lang === 'en' ? 'Refresh board' : '刷新面板' }).focus();
   await page.keyboard.press('Tab');
   await expect(control).toBeFocused();

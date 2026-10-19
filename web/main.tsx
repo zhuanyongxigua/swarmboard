@@ -159,7 +159,7 @@ function Workspace() {
   const reduceDisabledReason = poolBusy ? t('正在更新成员，请稍候。')
     : eventRuntime?.pool && eventRuntime.pool.size <= minimumMembers
       ? t('至少保留 {limit} 名成员').replace('{limit}', String(minimumMembers))
-      : !eventRuntime?.pool?.enabled ? t('协作已停止，请先恢复协作。') : '';
+      : !eventRuntime?.pool?.enabled ? t('协作已停止，暂不可调整成员。') : '';
   async function controlPool(enabled?: boolean) {
     const pool = eventRuntime?.pool; if (!pool || poolOperation.current) return;
     poolOperation.current = true; setPoolBusy(true); setPoolFeedback(''); setPoolError('');
@@ -415,7 +415,7 @@ function Workspace() {
           <button type="button" className="secondary" disabled={Boolean(reduceDisabledReason)} aria-describedby={reduceDisabledReason ? 'member-minimum-tooltip' : undefined} onClick={() => void reducePeer()}>{t('减少成员')}</button>
           {reduceDisabledReason ? <span id="member-minimum-tooltip" className="member-limit-tooltip" role="tooltip">{reduceDisabledReason}</span> : null}
         </span> : null}
-        {!eventRuntime.pool.enabled ? <button type="button" className="secondary" disabled={poolBusy} onClick={() => void controlPool(true)}>{t('恢复协作')}</button> : null}</div>
+      </div>
         : <CollaborationOverview snapshot={overview} />}
       {eventRuntime.activity?.draining ? <p className="subtle">{eventRuntime.activity.draining} {t('个正在退出')} · {t('正在等待成员安全收尾或核清，实际人数尚未减少。')}</p> : poolFeedback ? <p className="subtle">{poolFeedback}</p> : null}
       {poolError ? <p role="alert">{poolError}</p> : null}
