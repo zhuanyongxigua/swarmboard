@@ -4,7 +4,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { existsSync } from 'node:fs';
 import type { Worker } from './worker-store.js';
-import { UncertainDelivery, type HarnessBackend, type SessionAdapter } from './harness/contract.js';
+import { UncertainDelivery, type HarnessBackend, type SessionAdapter, type SessionInstructions } from './harness/contract.js';
 export { UncertainDelivery, type SessionAdapter } from './harness/contract.js';
 export class CodexSession implements SessionAdapter {
   private child?: ChildProcessWithoutNullStreams;
@@ -13,6 +13,9 @@ export class CodexSession implements SessionAdapter {
   private turns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
   private early = new Map<string, any>();
   private initialized?: Promise<void>;
+  private instructions?: SessionInstructions;
+  private running = false;
+  private uncertain = false;
   constructor(private options: { databasePath: string; serverEntry: string; workerId?: string; poolMember?: boolean; binary?: string; requestTimeoutMs?: number; openTimeoutMs?: number; onApproval?: () => void }) {}
   private start() {
     return this.initialized ??= (async () => {
@@ -90,7 +93,11 @@ export class CodexSession implements SessionAdapter {
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); } this.pending.clear();
     for (const p of this.turns.values()) p.reject(new UncertainDelivery(error.message)); this.turns.clear();
   }
-  async open(worker: Worker) {
+  async open(worker: Worker, instructions?: SessionInstructions, onOpened?: (threadId: string) => void) {
+    if (this.running) throw new Error('Cannot change session instructions while a turn may be active');
+    if (this.uncertain) throw new Error('Inspect the uncertain delivery before reopening this session');
+    if (instructions && (!instructions.revision.trim() || !instructions.text.trim())) throw new Error('Session instructions require a revision and explicit text, including for cleared preferences');
+    if (this.instructions && !instructions) throw new Error('Current session instructions are required; clear preferences explicitly');
     await this.start();
     const response = await this.request(worker.threadId ? 'thread/resume' : 'thread/start', {
       ...(worker.threadId ? { threadId: worker.threadId, excludeTurns: true } : {}), cwd: worker.workspacePath,
@@ -100,18 +107,36 @@ export class CodexSession implements SessionAdapter {
     // shorter acknowledgement timeout and its uncertainty protection.
     }, this.options.openTimeoutMs ?? 90000);
     if (!response.thread?.id || response.thread.cwd !== worker.workspacePath || worker.threadId && response.thread.id !== worker.threadId) throw new Error('Codex did not bind the expected workspace');
+    onOpened?.(response.thread.id);
+    if (instructions) {
+      // Resume parameters do not reliably replace loaded-thread instructions.
+      // Append the current host snapshot through the public developer-role
+      // history interface before each turn, preserving base system and mode.
+      await this.request('thread/inject_items', { threadId: response.thread.id,
+        items: [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: instructions.text }] }],
+      });
+    }
+    this.instructions = instructions ? { ...instructions } : undefined;
     return response.thread.id as string;
   }
   async run(threadId: string, prompt: string, onStarted: (turnId: string) => void) {
-    const response = await this.request('turn/start', { threadId, input: [{ type: 'text', text: prompt }] });
-    const id = response.turn?.id;
-    if (!id) throw new UncertainDelivery('Missing turn identity; inspect the session');
-    onStarted(id);
-    await new Promise<void>((resolve, reject) => {
-      const early = this.early.get(id);
-      if (early) { this.early.delete(id); this.complete({ resolve, reject }, early); }
-      else this.turns.set(id, { resolve, reject });
-    });
+    if (this.running) throw new Error('A turn may already be active in this session');
+    if (this.uncertain) throw new Error('Inspect the uncertain delivery before starting another turn');
+    this.running = true;
+    try {
+      const response = await this.request('turn/start', { threadId, input: [{ type: 'text', text: prompt }] });
+      const id = response.turn?.id;
+      if (!id) throw new UncertainDelivery('Missing turn identity; inspect the session');
+      onStarted(id);
+      await new Promise<void>((resolve, reject) => {
+        const early = this.early.get(id);
+        if (early) { this.early.delete(id); this.complete({ resolve, reject }, early); }
+        else this.turns.set(id, { resolve, reject });
+      });
+    } catch (error) {
+      if (error instanceof UncertainDelivery) this.uncertain = true;
+      throw error;
+    } finally { this.running = false; }
   }
   async inspect(threadId: string, turnId: string | null, deliveryId: string) {
     await this.start();
@@ -139,7 +164,7 @@ export class CodexSession implements SessionAdapter {
 export const codexBackend: HarnessBackend = {
   id: 'codex',
   displayName: 'Official Codex App Server (ChatGPT Desktop CLI login)',
-  capabilities: { inspection: true, approvalSignals: true },
+  capabilities: { inspection: true, approvalSignals: true, sessionInstructions: true },
   sessionIntro: worker => `You are ${worker.id}, a persistent Swarmboard worker in your existing official Codex session. Keep this stable agentId. Read the applicable AGENTS.md in your authorized execution workspace ${JSON.stringify(worker.workspacePath)}. Use swarmboard_worker MCP; register this identity if absent, otherwise heartbeat it.`,
   createSession: context => new CodexSession({
     databasePath: context.databasePath, serverEntry: context.serverEntry,

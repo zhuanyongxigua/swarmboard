@@ -2,6 +2,7 @@
 // Model-free App Server peer exercises protocol races and approval failures
 // without using a real login, model, board database or user workspace.
 import { createInterface } from 'node:readline';
+import { appendFileSync } from 'node:fs';
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
 let turn = 0;
 // Turn ids started in this process, so thread/read can report real completed
@@ -14,7 +15,9 @@ createInterface({ input: process.stdin }).on('line', line => {
     return;
   }
   const { id, method, params } = message;
+  if (process.env.SWARMBOARD_TEST_PROTOCOL_LOG) appendFileSync(process.env.SWARMBOARD_TEST_PROTOCOL_LOG, JSON.stringify({ pid: process.pid, method, params }) + '\n');
   if (method === 'initialize') send({ id, result: {} });
+  if (method === 'thread/inject_items') send(params.items[0].content[0].text === 'reject-instruction' ? { id, error: { code: 490 } } : { id, result: {} });
   if (method === 'thread/start' || method === 'thread/resume') {
     if (params.sandbox !== 'workspace-write' || params.approvalPolicy !== 'on-request') { send({ id, error: { code: 400 } }); return; }
     if (params.threadId === 'required-worker-thread' && !process.argv.includes('mcp_servers.swarmboard_worker.required=true')) { send({ id, error: { code: 412 } }); return; }

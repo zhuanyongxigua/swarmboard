@@ -50,7 +50,7 @@ const idle = (runtime: EventRuntime, id: string) => vi.waitFor(() => expect(runt
 
 describe('harness backend identity at the runtime boundary', () => {
   it('reports the selected backend and capabilities in runtime status', () => {
-    expect(fixture().runtime.status().backend).toEqual({ id: 'codex', displayName: codexBackend.displayName, deterministic: false, capabilities: { inspection: true, approvalSignals: true } });
+    expect(fixture().runtime.status().backend).toEqual({ id: 'codex', displayName: codexBackend.displayName, deterministic: false, capabilities: { inspection: true, approvalSignals: true, sessionInstructions: true } });
     expect(fixture({ backend: echoBackend }).runtime.status().backend).toMatchObject({ id: 'echo', deterministic: true, capabilities: { inspection: true, approvalSignals: false } });
   });
   it('delivers through the echo backend, persists its identity, and reuses the session after a restart', async () => {

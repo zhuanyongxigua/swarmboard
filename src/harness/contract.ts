@@ -2,10 +2,20 @@
 // never imports a vendor adapter; backends register through the assembly seam.
 import type { Worker } from '../worker-store.js';
 
+/** A current, host-authored session instruction snapshot. The revision is
+ *  scoped to its board, and text must explicitly supersede earlier versions,
+ *  including when the human clears preferences. Never append this as user data. */
+export interface SessionInstructions {
+  revision: string;
+  text: string;
+}
+
 /** One persistent model session per worker. Implementations must never grant
  *  tool approvals themselves; surface them through onApproval instead. */
 export interface SessionAdapter {
-  open(worker: Worker): Promise<string>;
+  /** Report a verified thread binding before any further asynchronous
+   *  instruction preparation, so its identity survives preparation failures. */
+  open(worker: Worker, instructions?: SessionInstructions, onOpened?: (threadId: string) => void): Promise<string>;
   run(threadId: string, prompt: string, onStarted: (turnId: string) => void): Promise<void>;
   inspect?(threadId: string, turnId: string | null, deliveryId: string): Promise<'completed' | 'failed' | 'active' | 'unknown'>;
   close(): Promise<void>;
@@ -25,6 +35,10 @@ export interface HarnessCapabilities {
    *  pause the worker for a human decision. If false, approvals are handled
    *  entirely inside the harness or are unsupported for this backend. */
   approvalSignals: boolean;
+  /** Explicit current host-authored session instructions are applied during
+   *  preparation, before model submission. Missing support must not silently
+   *  become user input. */
+  sessionInstructions?: boolean;
 }
 
 /** Everything a backend may need to drive one worker's session. databasePath
