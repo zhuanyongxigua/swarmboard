@@ -109,15 +109,19 @@ task_read(id, offset, limit) 返回目标元数据和 description/acceptanceCrit
 
 ## 执行与权限
 
-### 持久个人偏好的回合读取
+### 持久个人偏好的会话级指令
 
-个人偏好的当前值独立于事件历史窗口保存。原生成员每次打开或恢复会话完成、再次检查停止状态之后，在提交新回合前读取 `{boardId,text,version,source,updatedAt}`，作为引用数据附在该回合末尾。清除后的新版本空文本也明确传递；不把私人内容写入通用提示词、skill 或执行授权。
+个人偏好的当前值独立于事件历史窗口保存。原生成员在打开或恢复会话前读取 `{boardId,text,version,source,updatedAt}`，通过通用 `SessionInstructions {revision,text}` 契约交给适配器。Codex 使用官方 App Server 的 `thread/inject_items` 追加 `role: developer` 消息，属于真实 developer 指令，不是 user 事件引用；不设置 `baseInstructions`、恢复参数 `developerInstructions` 或 `collaborationMode`，保留基础 system 和原模式。偏好原文不再追加在回合 user 消息末尾；源码只包含通用注入逻辑，私人内容仍在当前本地看板及其成员会话中，不进入默认配置、其他看板、skill 或产品样例。
+
+每个快照明确替代历史和摘要中的旧偏好，清除后也传入带新版本的空快照，不能省略字段沿用旧值。指令要求成员按人类的协作与交付预期执行，无法满足时报告具体限制；它不授予项目、凭据、生产或工具审批权限。其他 harness 必须自行证明正式指令接口及更新语义；不能把通用契约存在说成 DSH/Zcode 已采用。
 
 宿主保存偏好产生无 taskId/resourceId 的 `host-preferences` / `BOARD_PREFERENCES_UPDATED` 控制事件。运行时只识别该身份及完整结构的控制信号；普通资源观察或成员伪造的同名 signal 不成为全板通知。即使显式选择 reference-quiet，合法控制事件仍进入已有成员队列，不借用虚构目标或资源。
 
-忙碌回合继续运行，更新在完成后的合法回合读取最新版本；打开会话期间发生的更新在该次提交前重读。未知投递仍先核查，不因偏好更新重开、推进未确认游标或解除审批/暂停。没有外部连接、没有成功读取或回包时，不声称 DSH/Zcode 模型已收到或采用；外部当前值和权限由既有 MCP 边界提供，事件游标不是偏好已读凭据。
+忙碌回合继续运行，更新在完成后的合法回合采用最新版本。每次异步准备返回后，先核查 owner、停止、成员启用和目标终态，保存原 threadId，再重读完整快照；变更则沿同一线程重新准备，最多三次仍不稳定就以提交前错误退出，保留事件队列，待明确启用后重试。最终稳定读取到提交检查点之间没有异步间隔；之后发生的修改排入后续回合，不撤回已经提交的回合。未知投递仍先核查，不因偏好更新重开回合、推进未确认游标或解除审批/暂停。没有外部连接、没有成功读取或回包时，不声称 DSH/Zcode 模型已收到或采用；外部当前值和权限由既有 MCP 边界提供，事件游标不是偏好已读凭据。
 
-`test/mcp/preferences-runtime.test.ts` 用隔离真实 SQLite 与受控 SessionAdapter 验证历史窗口外读取、重开后清除、open 屏障、忙碌后最新空版本、伪造信号与 uncertain 围栏。它不调用真实模型，也不证明正式安装或所有外部会话已通知。
+`test/mcp/preferences-runtime.test.ts` 用隔离真实 SQLite 与受控 SessionAdapter 验证历史窗口外读取、重开后清除、两次 open 屏障、连续变化的有限拒绝、停止／终态／owner 变化、新看板隔离、忙碌后最新空版本、伪造信号与 uncertain 围栏。它不调用真实模型，也不证明正式安装或所有外部会话已通知。适配器请求层测试与官方 CLI 有界合成会话验收分别提供字段和真实行为证据；不能互相替代。
+
+2026-10-19 的官方 CLI 0.162.1／gpt-6.1-sol 合成验收显示：`thread/resume` 接受 `developerInstructions` 并不保证已加载线程或新进程恢复时采用新值，故未使用该方案。正式 `thread/inject_items` 路径在同一线程验证了新偏好、更新、进程恢复后更新、明确清空和一次手动压缩后重新注入清空五个短回合，均符合与 user 冲突时的预期；测试线程随后归档、两个 App Server 退出。此证据限定于该版本、模型及刷新路径，不等于任意历史都自动失效，也不证明产品安装或外部成员数量。接口沿[官方公开协议](https://learn.chatgpt.com/docs/app-server#inject-items)，只追加当前消息，不擦改旧历史。
 
 ### 人类宿主的单任务执行例外
 

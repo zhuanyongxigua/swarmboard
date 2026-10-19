@@ -10,13 +10,14 @@ Swarmboard 的协作内核（共享目标/上下文、事件投递、稳定身�
 
 | 成员 | 语义 |
 | --- | --- |
-| `SessionAdapter.open(worker)` | 打开或恢复 worker 的持久会话，返回稳定的 threadId |
+| `SessionAdapter.open(worker, instructions?, onOpened?)` | 打开或恢复 worker 的持久会话，准备当前会话级指令，返回稳定的 threadId；确认绑定后先同步回调 onOpened，让后续准备失败仍保留原身份 |
+| `SessionInstructions` | `{revision,text}` 当前完整指令快照；revision 包含看板与版本范围，空偏好也有明确清空文本。适配器必须沿正式指令接口应用，不得静默降为 user 消息 |
 | `SessionAdapter.run(threadId, prompt, onStarted)` | 提交一个模型回合；`onStarted(turnId)` 在收到宿主确认后必须先于完成回调调用 |
 | `SessionAdapter.inspect?(threadId, turnId, deliveryId)` | 只读核查历史回合状态，返回 `completed/failed/active/unknown` |
 | `SessionAdapter.close()` | 关闭本连接；在途回合必须以 `UncertainDelivery` 拒绝，不得伪装完成 |
 | `UncertainDelivery` | 提交结果未知（超时、断连、停机）。调用方必须先核查再决定，禁止盲目重放 |
 | `SessionContext` | 提供本安装的 `databasePath`/`serverEntry`、适配器自有持久状态位置 `statePath`（运行时 sidecar SQLite）、当前 `worker` 与 `onApproval` 人工审批暂停钩子 |
-| `HarnessCapabilities` | `inspection`（可核查历史回合）与 `approvalSignals`（宿主会向本服务上报审批请求）。缺能力必须显式降级或报错，不允许内核静默模拟 |
+| `HarnessCapabilities` | `inspection`（可核查历史回合）、`approvalSignals`（宿主会向本服务上报审批请求）及可选 `sessionInstructions`（可靠应用当前会话指令；未声明视为不支持）。缺能力必须显式降级或报错，不允许内核静默模拟 |
 | `HarnessBackend` | `id`（持久身份）、`displayName`、`capabilities`、`deterministic?`（无真实模型的参考后端标注）、`sessionIntro(worker)`（提示词中唯一的宿主专属段落）、`createSession(context)` |
 
 契约的两条硬边界：
@@ -25,6 +26,8 @@ Swarmboard 的协作内核（共享目标/上下文、事件投递、稳定身�
 2. **未知投递不可盲目重放。** 任何未确认的 `run` 以 `UncertainDelivery` 失败后，内核把它置为 `uncertain`，只允许 `inspect` 核查或人工处置，绝不自动重发。
 
 协作提示词（`src/worker-prompt.ts`）中除 `sessionIntro` 外的全部内容——协作循环、INTERNAL_ONLY 执行策略、TRUSTED_HOST_EXECUTION_GRANTS、事件去重、资源协商——都是 harness 中立的；换后端不改变协作语义。
+
+当前看板偏好通过独立会话指令快照传递，生命周期见[偏好会话级指令](event-workers.md#持久个人偏好的会话级指令)。Codex 映射为官方 `thread/inject_items` 的 `role: developer` 消息，保留基础 system、AGENTS、沙箱及人工审批；此映射不代表所有后端支持相同角色或更新方式。非确定性模型后端未声明 `sessionInstructions: true` 时，运行时在提交前报错并保留队列。echo 没有真实模型，作为确定性替身不受该模型能力检查，但也不提供模型采用偏好的证据。新模型后端无法可靠应用或清空快照时必须明确拒绝，不能仅接收参数就报告已生效。
 
 ## 装配与配置
 

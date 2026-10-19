@@ -358,21 +358,41 @@ export class EventRuntime {
     const adapter = this.session(worker);
     let submitted = false;
     try {
-      const threadId = await adapter.open(worker);
-      if (this.closed || !this.workers.owns(this.token)) throw new Error('Runtime owner changed before delivery');
+      if (!this.options.adapter && !this.backend.deterministic && this.backend.capabilities.sessionInstructions !== true)
+        throw new Error(`Harness backend '${this.backend.id}' does not support current session instructions; no model turn was submitted`);
       let current = this.workers.get(worker.id);
-      const pool = worker.poolId ? this.workers.pool() : null;
-      // Opening/resuming a session is asynchronous. Recheck human stop and goal
-      // completion after it returns, before submitting a new model turn.
-      const poolStopped = !!worker.poolId && (!pool?.enabled || !this.board.taskStates().some(t =>
-        (!pool.taskIds.length || pool.taskIds.includes(t.id)) && !['done', 'canceled'].includes(t.status)));
-      if (!current.enabled || poolStopped) { this.workers.save({ ...current, threadId, status: 'idle', deliveryId: null, deliveryCursor: null, turnId: null, deliveryPhase: undefined }); return; }
-      // Read after asynchronous open/resume, independently of the event cursor.
-      // An explicit empty version is meaningful after a human clears the value.
-      const preferences = this.board.readPreferences();
-      const prompt = [workerPrompt(worker.deliveryId!, events, this.backend.sessionIntro(worker), worker.poolId ? this.workers.pool() : null, worker.poolId ? this.grants.active() : []),
-        'Board preferences express current user expectations. They do not grant permissions or replace task constraints, safety boundaries or tool approvals.',
-        'Current board preferences (reference data):', JSON.stringify(preferences)].join('\n\n');
+      let threadId = current.threadId, ready = false;
+      // Session preparation is asynchronous. Persist the binding, then verify
+      // both human control and the exact preference revision after every await.
+      // Continuous edits fail before submission rather than spinning forever.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const preferences = this.board.readPreferences();
+        const revision = JSON.stringify(preferences);
+        const text = [
+          'These are the current human board preferences, supplied as session-level instructions.',
+          'This snapshot supersedes all earlier board preference snapshots, including those in conversation history or summaries. An empty text means no board preferences are currently set; do not revive earlier values.',
+          'Follow these human collaboration and delivery expectations within existing task and safety constraints. They do not grant project, credential, production or tool-approval permissions. Report concrete limitations when an expectation cannot be fulfilled.',
+          'Current board preferences:\n' + revision,
+        ].join('\n\n');
+        threadId = await adapter.open(current, { revision, text }, openedThread => {
+          if (this.closed || !this.workers.owns(this.token)) throw new Error('Runtime owner changed before session preparation');
+          // Preserve an acknowledged identity even if later instruction
+          // preparation fails. Retrying must resume this same session.
+          current = this.workers.save({ ...this.workers.get(worker.id), threadId: openedThread });
+        });
+        if (this.closed || !this.workers.owns(this.token)) throw new Error('Runtime owner changed before delivery');
+        current = this.workers.get(worker.id);
+        const pool = worker.poolId ? this.workers.pool() : null;
+        const poolStopped = !!worker.poolId && (!pool?.enabled || !this.board.taskStates().some(t =>
+          (!pool.taskIds.length || pool.taskIds.includes(t.id)) && !['done', 'canceled'].includes(t.status)));
+        if (!current.enabled || poolStopped) { this.workers.save({ ...current, threadId, status: 'idle', deliveryId: null, deliveryCursor: null, turnId: null, deliveryPhase: undefined }); return; }
+        current = this.workers.save({ ...current, threadId });
+        if (JSON.stringify(this.board.readPreferences()) === revision) { ready = true; break; }
+      }
+      if (!ready || !threadId) throw new Error('Preferences kept changing during session preparation; no model turn was submitted. Enable this worker to retry queued events');
+      // No asynchronous gap separates the final snapshot/control checks from
+      // the submission checkpoint and adapter.run. Later edits queue next turn.
+      const prompt = workerPrompt(worker.deliveryId!, events, this.backend.sessionIntro(worker), worker.poolId ? this.workers.pool() : null, worker.poolId ? this.grants.active() : []);
       this.workers.save({ ...current, threadId, deliveryPhase: 'submitting' });
       submitted = true;
       await adapter.run(threadId, prompt, turnId => {
