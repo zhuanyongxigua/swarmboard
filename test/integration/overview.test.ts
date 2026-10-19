@@ -67,14 +67,56 @@ it('invalidates facts, preferences, runtime restart and expiry on reads and reje
   expect(readOverview(s, state, 1001).status).toBe('stale');
 });
 
+it('retains AI choices for a compact reader while refreshing changed facts and keeping unavailable values unknown', () => {
+  const s = open(), state = source(), cursor = s.board().cursor;
+  const first = writeOverview(s, { ...draft(s, state), ttlSeconds: 1,
+    parts: [{ kind: 'text', text: 'Some native work is in progress' }, { kind: 'fact', factId: 'native.running' }] }, 'bound', state, 1000);
+  const changed = source();
+  for (const worker of changed.workers!.filter(worker => worker.threadId === 'same')) {
+    worker.status = 'idle'; worker.turnId = null; worker.deliveryPhase = undefined;
+  }
+  const currentRead = readOverview(s, changed, 1001);
+  expect(currentRead).toMatchObject({ status: 'stale', reason: 'FACTS_CHANGED', record: first.record });
+  expect(currentRead.facts.items.find(fact => fact.id === 'native.running')?.value).toBe(0);
+  expect(first.facts.items.find(fact => fact.id === 'native.running')?.value).toBe(1);
+  expect(currentRead.facts.observedAt).toBe(new Date(1001).toISOString());
+  expect(currentRead.facts.revision).not.toBe(first.facts.revision);
+  expect(currentRead.record?.factSnapshot).toEqual([first.facts.items.find(fact => fact.id === 'native.running')]);
+  expect(currentRead.record?.factSnapshot?.[0]?.value).toBe(1);
+  expect(readOverview(s, state, 2000)).toMatchObject({ status: 'stale', reason: 'EXPIRED', record: first.record });
+  const unavailable = readOverview(s, undefined, 2001);
+  expect(unavailable).toMatchObject({ status: 'unavailable', facts: { available: false }, record: first.record });
+  expect(unavailable.facts.items.find(fact => fact.id === 'native.running')?.value).toBeNull();
+  expect(s.readOverviewRecord()).toEqual(first.record);
+  expect(s.board().cursor).toBe(cursor);
+});
+
 it('rejects fabricated fact references, numeric prose and unbounded or invalid expiry input', () => {
   const s = open(), state = source();
   for (const extra of [ { parts: [{ kind: 'fact', factId: 'fake.model' }] }, { parts: [{ kind: 'text', text: '14 active GLM-5.3' }] },
-    { ttlSeconds: 901 }, { ttlSeconds: 0 }, { authorId: 'spoof' } ]) {
+    { ttlSeconds: 901 }, { ttlSeconds: 0 }, { authorId: 'spoof' }, { factSnapshot: [{ id: 'native.running', value: 100 }] } ]) {
     expect(() => writeOverview(s, { ...draft(s, state), ...extra }, 'bound', state)).toThrow();
   }
   const literal = writeOverview(s, { ...draft(s, state), parts: [{ kind: 'text', text: '<script>alert()</script>' }] }, 'bound', state);
   expect(literal.record?.parts).toEqual([{ kind: 'text', text: '<script>alert()</script>' }]);
+});
+
+it('captures only selected verified values once, including unknown, and leaves legacy records without invented history', () => {
+  const s = open(), state = source();
+  const first = writeOverview(s, { ...draft(s, state), parts: [
+    { kind: 'fact', factId: 'native.running' }, { kind: 'fact', factId: 'native.running' }, { kind: 'fact', factId: 'external.model' },
+  ] }, 'bound', state, 1000);
+  expect(first.record?.factSnapshot).toHaveLength(2);
+  expect(first.record?.factSnapshot?.find(fact => fact.id === 'native.running')?.value).toBe(1);
+  expect(first.record?.factSnapshot?.find(fact => fact.id === 'external.model')?.value).toBeNull();
+  expect(first.record?.factSnapshot?.some(fact => fact.id === 'external.admitted')).toBe(false);
+  const legacy = { ...first.record!, factSnapshot: undefined };
+  s.saveOverviewRecord(legacy, 1);
+  const read = readOverview(s, state, 301001);
+  expect(read.status).toBe('stale');
+  expect(read.record).not.toHaveProperty('factSnapshot');
+  expect(read.record?.parts).toEqual(first.record?.parts);
+  expect(s.db.prepare('PRAGMA user_version').get()!.user_version).toBe(9);
 });
 
 it('appends schema nine to a real schema eight database without changing prior rows', () => {

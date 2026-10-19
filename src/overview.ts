@@ -19,6 +19,9 @@ export type OverviewPart = z.infer<typeof overviewPartSchema>;
 export interface OverviewRecord {
   boardId: string; version: number; authorId: string; updatedAt: string; expiresAt: string;
   preferencesVersion: number; factsRevision: string; parts: OverviewPart[];
+  /** Server-verified referenced values at write time. Older records omit this
+   *  field; readers must not reconstruct their historical values from live facts. */
+  factSnapshot?: OverviewFact[];
 }
 export interface OverviewSource {
   owner?: unknown;
@@ -89,7 +92,9 @@ export function writeOverview(store: Store, input: unknown, authorId: string, so
   if (!facts.available) throw new AppError('RUNTIME_UNAVAILABLE', 'Current runtime facts are unavailable', 409);
   if (data.factsRevision !== facts.revision) throw new AppError('OVERVIEW_FACTS_CHANGED', 'Runtime facts changed; read overview_read again', 409);
   for (const part of data.parts) if (part.kind === 'fact' && !facts.items.some(f => f.id === part.factId)) throw new AppError('INVALID_FACT', 'Choose a fact from overview_read', 400);
+  const referenced = new Set(data.parts.flatMap(part => part.kind === 'fact' ? [part.factId] : []));
   store.saveOverviewRecord({ boardId: store.readPreferences().boardId, authorId, updatedAt: new Date(now).toISOString(),
-    expiresAt: new Date(now + data.ttlSeconds * 1000).toISOString(), preferencesVersion: data.preferencesVersion, factsRevision: facts.revision, parts: data.parts }, data.expectedVersion);
+    expiresAt: new Date(now + data.ttlSeconds * 1000).toISOString(), preferencesVersion: data.preferencesVersion, factsRevision: facts.revision, parts: data.parts,
+    factSnapshot: facts.items.filter(fact => referenced.has(fact.id)) }, data.expectedVersion);
   return readOverview(store, source, now);
 }
