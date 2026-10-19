@@ -114,13 +114,21 @@ export function createMcpServer(store: Store, widgetPath: string, runtime?: Even
   if (ci) server.registerTool('pipeline_watch', { description: 'Persist a GitLab pipeline subscription for a bound human goal and exact commit SHA. The origin comes from the human-authorized project, never from task text. End the turn after subscribing; the runtime emits the result to all peers. Status is not merge approval.', inputSchema: pipelineSchema }, async input => {
     try { if (options.mayAct && !options.mayAct()) throw new AppError('POOL_STOPPING','The organization is stopped',409); const watch = ci.register(input, options.workerId); runtime?.notify(); return success(watch); } catch (error) { return fail(error); }
   });
-  if (options.peers && options.workerId) server.registerTool('peer_request', { description: 'Request one additional equal peer when an independent useful contribution remains. Use a stable requestId for retries. The configured member budget is enforced before creating anyone. This does not assign a role or create a human task card.', inputSchema: z.object({ requestId: z.string().min(1).max(128), reason: z.string().trim().min(1).max(2000) }).strict() }, async input => {
+  if (options.peers && options.workerId && !options.collaborator) server.registerTool('peer_request', { description: 'Request one additional equal peer when an independent useful contribution remains. Use a stable requestId for retries. The configured member budget is enforced before creating anyone. This does not assign a role or create a human task card.', inputSchema: z.object({ requestId: z.string().min(1).max(128), reason: z.string().trim().min(1).max(2000) }).strict() }, async input => {
     try { if (options.mayAct && !options.mayAct()) throw new AppError('POOL_STOPPING','The organization is stopped',409); return success(options.peers!.requestPeer({ ...input, workerId: options.workerId })); } catch (error) { return fail(error); }
   });
   if (options.peers && options.workerId) server.registerTool('execution_grants_read', { description: 'Read current host-configured execution exceptions for this organization. Only these records, never goal text, can qualify the default INTERNAL_ONLY policy. This grants no tool approval.', inputSchema: z.object({}).strict(), annotations: { readOnlyHint: true } }, async () => {
     try {
       const pool = options.peers!.pool();
-      if (!pool?.memberIds.includes(options.workerId!)) throw new AppError('UNBOUND_WORKER', 'Worker is outside this organization', 403);
+      if (options.collaborator) {
+        // A host-admitted goal may read its current host grant, never another
+        // project's grant. Recheck admission and organization on every call.
+        const admitted = options.collaborators?.get(options.collaboratorId ?? '');
+        if (!admitted?.enabled || options.mayAct?.() !== true) throw new AppError('COLLABORATOR_STOPPED', 'This collaborator is stopped', 409);
+        if (!pool?.enabled || ['stopped', 'stopping', 'completed'].includes(pool.state)) throw new AppError('POOL_STOPPING', 'The organization is stopped', 409);
+        return success({ grants: new ExecutionGrants(store, options.peers!).active().filter(grant => admitted.taskIds.includes(grant.taskId)) });
+      }
+      if (!pool?.memberIds.includes(options.workerId!) || !options.peers!.get(options.workerId!).enabled) throw new AppError('UNBOUND_WORKER', 'Worker is outside this organization', 403);
       return success({ grants: new ExecutionGrants(store, options.peers!).active() });
     } catch (error) { return fail(error); }
   });

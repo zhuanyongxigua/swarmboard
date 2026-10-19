@@ -19,7 +19,7 @@
 - `SWARMBOARD_COLLABORATOR_ID`：接入时返回的协作者 id；未知 id 会让子进程以诊断退出。
 - 该子进程**不运行事件 runtime**（等价 `SWARMBOARD_DISABLE_RUNTIME`）。
 
-工具面与池成员的协作面一致：`board_read`/`board_open`/`task_list`/`task_read`（范围内有界分页）、`context_read`/`context_search`/`context_publish`（FACT/FAIL/CLAIM/PATCH_SUMMARY/MESSAGE）、`task_claim`/`task_release`/`task_update`（参与者身份）、`resource_use`/`resource_usage_update`/`resource_release`、`agent_heartbeat`。管理工具（任务/资源定义、组织控制、worker 注册、授权配置、`collaborator_configure` 自身、peer_request、pipeline_watch、execution_grants_read）不注册。写入强制绑定身份：伪造或省略 `agentId` 返回 `BOUND_IDENTITY`。
+工具面与池成员的协作面一致：`board_read`/`board_open`/`task_list`/`task_read`（范围内有界分页）、`context_read`/`context_search`/`context_publish`（FACT/FAIL/CLAIM/PATCH_SUMMARY/MESSAGE）、`task_claim`/`task_release`/`task_update`（参与者身份）、`resource_use`/`resource_usage_update`/`resource_release`、`agent_heartbeat`。管理工具（任务/资源定义、组织控制、worker 注册、授权配置、`collaborator_configure` 自身、peer_request、pipeline_watch）不注册。`execution_grants_read` 只读取当前启用组织中、当前准入目标的有效宿主执行授权；每次调用重查范围、撤销和组织停止，不允许配置授权，也不把读取结果当作工具审批。外部 stdio 子进程仅连接同一 sidecar 的授权存储，不创建事件 runtime 或 watcher。写入强制绑定身份：伪造或省略 `agentId` 返回 `BOUND_IDENTITY`。
 
 ## 更新与唤醒的诚实边界
 

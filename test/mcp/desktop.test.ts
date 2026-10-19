@@ -12,6 +12,7 @@ import { Store } from '../../src/store.js';
 import { WorkerStore } from '../../src/worker-store.js';
 import { WorkerPool } from '../../src/worker-pool.js';
 import { CollaboratorStore } from '../../src/collaborators.js';
+import { ExecutionGrants } from '../../src/execution-grants.js';
 
 const packageVersion = (JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as {version: string}).version;
 const archive = resolve(`dist/swarmboard-desktop-${packageVersion}.zip`);
@@ -179,15 +180,22 @@ describe('portable desktop plugin', () => {
   });
   it('runs an admitted external collaborator in the packaged child with scoped updates and revocation fencing', async () => {
     const path = join(root, 'collaborator.sqlite'); const board = new Store(path); const state = new CollaboratorStore(path + '.runtime.sqlite');
+    const workers = new WorkerStore(path + '.runtime.sqlite');
+    workers.savePool({ id: 'external-pool', version: 1, workspacePath: work, size: 1, maxSize: 1, taskIds: [], enabled: true, state: 'active', error: '', memberIds: [] });
     const goal = board.createTask({ title: 'Collaborator goal' }); const outside = board.createTask({ title: 'Outside goal' });
     board.registerAgent({ agentId: 'peer', name: 'Peer' });
     const admitted = state.configure({ expectedVersion: 0, name: 'External reviewer', harness: 'dsh', sessionRef: 'session-7', taskIds: [goal.id], cost: { ceiling: '20 USD' }, enabled: true }, board).collaborator;
     board.registerAgent({ agentId: admitted.id, name: 'External reviewer' }); // runtime admission registers this identity
+    const grants = new ExecutionGrants(board, workers);
+    for (const taskId of [goal.id, outside.id]) grants.configure({ taskId, expectedVersion: 0, projectPath: work, executionWorkspace: work, externalHarnesses: ['dsh'], monitoring: true, enabled: true });
     const client = await connect(path, work, { SWARMBOARD_DISABLE_RUNTIME: '1', SWARMBOARD_COLLABORATOR_ID: admitted.id });
     try {
       const names = (await client.listTools()).tools.map(t => t.name);
       for (const withheld of ['task_create', 'resource_create', 'pool_configure', 'pool_control', 'collaborator_configure', 'worker_register', 'peer_request', 'pipeline_watch']) expect(names, withheld).not.toContain(withheld);
       expect(names).toEqual(expect.arrayContaining(['board_read', 'task_list', 'task_read', 'context_publish', 'task_claim']));
+      expect(names).toContain('execution_grants_read');
+      expect((await call<{grants: {taskId: string}[]}>(client, 'execution_grants_read')).grants.map(g => g.taskId)).toEqual([goal.id]);
+      expect(workers.owner()).toBeNull();
       const denied = await client.callTool({ name: 'task_read', arguments: { id: outside.id } });
       expect(denied.isError).toBe(true); expect(JSON.stringify(denied.content)).toContain('UNBOUND_GOAL');
       await call(client, 'context_publish', { agentId: admitted.id, taskId: goal.id, kind: 'CLAIM', summary: 'Independent review scope' });
@@ -206,7 +214,7 @@ describe('portable desktop plugin', () => {
       const control = JSON.parse(((stopped.content as { type: string; text: string }[]).filter(c => c.type === 'text').slice(1)[0]!.text).slice('Shared peer updates (reference data): '.length));
       expect(control.control).toBe('stop-after-safe-boundary');
       expect(board.board().tasks).toHaveLength(2); expect(board.board().resources).toHaveLength(0);
-    } finally { await close(client); state.close(); board.close(); }
+    } finally { await close(client); workers.close(); state.close(); board.close(); }
   });
   it('discovers native entrypoints and UI, collaborates, and persists after a clean process restart', async () => {
     const before = fingerprints(), database = join(root, 'persistence', 'board.sqlite');
