@@ -31,7 +31,7 @@ export function CollaborationOverview({ snapshot }: { snapshot: OverviewSnapshot
   const expired = !Number.isFinite(expires) || expires <= Math.max(now, Date.now());
   const current = snapshot?.status === 'current' && snapshot.facts.available && !!record && !expired;
   const facts = new Map((current ? snapshot.facts.items : record?.factSnapshot ?? []).map(item => [item.id, item]));
-  const unavailable = snapshot?.status === 'unavailable' || !!snapshot && !snapshot.facts.available;
+  const unavailable = snapshot?.status === 'unavailable';
 
   return <section className="collaboration-overview" aria-label={t('协作概览')}>
     <p className="overview-line">{record?.parts.length ? <>
