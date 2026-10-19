@@ -94,7 +94,7 @@ task_read(id, offset, limit) 返回目标元数据和 description/acceptanceCrit
 
 - 全部订阅目标 done/canceled：安全收尾后 completed，关闭空闲 App Server 进程；会话历史、代码和证据保留。出现新的人类目标后复用原成员与 threadId。
 - 只剩 blocked/in_review：waiting，等待新事实、消息或人类状态变化；不把受阻伪装为完成，也不靠模型轮询。
-- 顶部停止按钮／pool_control：携带最新 expectedVersion 与 enabled=false，阻止新回合，已提交回合收尾。每次 MCP 工具返回提示停止；停止后的业务写入被拒绝，仍允许发布收尾记录、心跳和释放资源声明。不能取消已经发生的外部副作用。
+- 授权后台 `pool_control`：携带最新 expectedVersion 与 enabled=false，阻止新回合，已提交回合收尾；面板不再提供常驻停止按钮。每次 MCP 工具返回提示停止；停止后的业务写入被拒绝，仍允许发布收尾记录、心跳和释放资源声明。不能取消已经发生的外部副作用。
 - 恢复携带最新版本与 enabled=true。暂停、审批或不确定执行状态不会因过期检查点被覆盖。会话打开期间发生停止，也会在提交模型回合前再次核对。
 
 任务与共享上下文仍在 board.sqlite；成员、组织及检查点位于 board.sqlite.runtime.sqlite。备份须包含两者及一致 SQLite 快照，以及独立代码目录。schema v5 将旧 assignee 迁为参与者并清空排他归属，保留任务版本及追加历史。旧二进制拒绝新 schema，不能直接降级打开新库，回退须恢复升级前一致快照。一块看板仅一个存活 owner 投递，不因心跳晚到就抢走执行权。

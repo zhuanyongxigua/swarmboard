@@ -6,6 +6,7 @@ import { App } from '@modelcontextprotocol/ext-apps';
 import './style.css';
 import { TaskProgress, type TaskProgressSnapshot } from './TaskProgress.js';
 import { PreferencesEditor, type Preferences, type PreferenceWrite } from './preferences-editor.js';
+import { CollaborationOverview, type OverviewSnapshot } from './CollaborationOverview.js';
 import { appendNativeDraft, nativeConversationUnavailableReason, startNativeAutomationSetup, taskDiscussionPrompt } from './native-conversation.js';
 
 type Task = {
@@ -80,6 +81,7 @@ async function operation<T>(name: string, args: Record<string, unknown> = {}): P
   if (name === 'pool_configure') { url = '/api/pool/configure'; method = 'POST'; body = args; }
   if (name === 'pool_control') { url = '/api/pool/control'; method = 'POST'; body = args; }
   if (name === 'preferences_read') url = '/api/preferences';
+  if (name === 'overview_read') url = '/api/overview';
   if (name === 'preferences_write') { url = '/api/preferences'; method = 'PATCH'; body = args; }
   if (name === 'pool_reduce') { url = '/api/pool/reduce'; method = 'POST'; body = args; }
   if (name === 'task_create') { url = '/api/tasks'; method = 'POST'; body = args; }
@@ -121,6 +123,31 @@ function Workspace() {
   const [automation, setAutomation] = useState<AutomationConfig | null>(null);
   const [automationError, setAutomationError] = useState('');
   const [eventRuntime, setEventRuntime] = useState<RuntimeStatus | null>(null);
+  const [overview, setOverview] = useState<OverviewSnapshot | null>(null);
+  const overviewRead = useRef(0);
+  const readRuntimeAndOverview = useCallback(async () => {
+    const read = ++overviewRead.current;
+    const current = await operation<RuntimeStatus>('runtime_read');
+    if (mounted.current && read === overviewRead.current && current?.mode === 'events') setEventRuntime(current);
+    try {
+      const value = await operation<OverviewSnapshot>('overview_read');
+      if (mounted.current && read === overviewRead.current) setOverview(value);
+    } catch {
+      if (mounted.current && read === overviewRead.current) setOverview({ status: 'unavailable', reason: 'read-failed', record: null,
+        facts: { revision: '', observedAt: new Date().toISOString(), available: false, items: [] } });
+    }
+    return current;
+  }, []);
+  async function savePreferences(input: PreferenceWrite) {
+    const value = await writePreferences(input);
+    // A confirmed preference change invalidates prior presentation immediately;
+    // an older in-flight overview read cannot restore it after this point.
+    overviewRead.current++;
+    setOverview(current => current?.record && current.record.preferencesVersion !== value.version
+      ? { ...current, status: 'stale', reason: 'preferences-changed' } : current);
+    void readRuntimeAndOverview().catch(() => {});
+    return value;
+  }
   const [poolBusy, setPoolBusy] = useState(false);
   const poolOperation = useRef(false);
   const [poolFeedback, setPoolFeedback] = useState('');
@@ -136,15 +163,15 @@ function Workspace() {
   async function controlPool(enabled?: boolean) {
     const pool = eventRuntime?.pool; if (!pool || poolOperation.current) return;
     poolOperation.current = true; setPoolBusy(true); setPoolFeedback(''); setPoolError('');
-    try { await operation('pool_control', { expectedVersion: pool.version, enabled: enabled ?? !pool.enabled }); setEventRuntime(await operation<RuntimeStatus>('runtime_read')); }
+    try { await operation('pool_control', { expectedVersion: pool.version, enabled: enabled ?? !pool.enabled }); await readRuntimeAndOverview(); }
     catch (error) { setError(message(error)); }
     finally { poolOperation.current = false; setPoolBusy(false); }
   }
   async function addPeer() {
     const pool = eventRuntime?.pool; if (!pool?.workspacePath || poolOperation.current) return;
     poolOperation.current = true; setPoolBusy(true); setPoolFeedback(''); setPoolError('');
-    try { await operation('pool_configure', { workspacePath: pool.workspacePath, taskIds: pool.taskIds ?? [], size: pool.size + 1, maxSize: pool.maxSize, expectedVersion: pool.version }); setEventRuntime(await operation<RuntimeStatus>('runtime_read')); }
-    catch (error) { setError(message(error)); setEventRuntime(await operation<RuntimeStatus>('runtime_read')); }
+    try { await operation('pool_configure', { workspacePath: pool.workspacePath, taskIds: pool.taskIds ?? [], size: pool.size + 1, maxSize: pool.maxSize, expectedVersion: pool.version }); await readRuntimeAndOverview(); }
+    catch (error) { setError(message(error)); await readRuntimeAndOverview(); }
     finally { poolOperation.current = false; setPoolBusy(false); }
   }
   async function reducePeer() {
@@ -153,8 +180,7 @@ function Workspace() {
     poolOperation.current = true; setPoolBusy(true); setPoolFeedback(''); setPoolError('');
     try {
       await operation('pool_reduce', { expectedVersion: pool.version, requestId: crypto.randomUUID() });
-      const current = await operation<RuntimeStatus>('runtime_read');
-      setEventRuntime(current);
+      const current = await readRuntimeAndOverview();
       const before = eventRuntime?.activity?.members;
       setPoolFeedback(current.activity?.draining ? ''
         : before !== undefined && current.activity?.members === before - 1
@@ -162,7 +188,7 @@ function Workspace() {
     } catch (error) {
       setPoolError(error instanceof OperationError ? message(error) : t('减少结果尚未确认，请刷新核对实际人数后再操作。'));
       // Reading after an error is safe; never replay an unconfirmed mutation.
-      try { setEventRuntime(await operation<RuntimeStatus>('runtime_read')); } catch { /* Preserve the last confirmed count. */ }
+      try { await readRuntimeAndOverview(); } catch { /* Preserve the last confirmed count. */ }
     } finally { poolOperation.current = false; setPoolBusy(false); }
   }
   const automationBusy = useRef(false);
@@ -227,7 +253,8 @@ function Workspace() {
     try {
       const data = await operation<Board>('board_read');
       void readAutomation();
-      void operation<RuntimeStatus>('runtime_read').then(data => { if (mounted.current && data?.mode === 'events') setEventRuntime(data); }).catch(() => {});
+      void readRuntimeAndOverview().catch(() => { if (mounted.current) setOverview({ status: 'unavailable', reason: 'runtime-unavailable', record: null,
+        facts: { revision: '', observedAt: new Date().toISOString(), available: false, items: [] } }); });
       if (mounted.current) {
         setBoard(data); setError(''); setUpdated(new Date().toISOString());
       }
@@ -238,7 +265,7 @@ function Workspace() {
     } finally {
       if (mounted.current) { setLoading(false); setRefreshing(false); }
     }
-  }, [readAutomation]);
+  }, [readAutomation, readRuntimeAndOverview]);
 
   useEffect(() => {
     mounted.current = true;
@@ -378,8 +405,8 @@ function Workspace() {
       <button className="refresh-button" type="button" aria-label={t("刷新面板")}
         disabled={refreshing} onClick={() => void manualRefresh()}>↻</button>
     </header>
-    {eventRuntime?.pool || eventRuntime?.workers.length ? <div className="automation-notice" role="status">
-      {eventRuntime.pool ? <div className="pool-controls"><span>{t('自协作池')} · {eventRuntime.activity?.members ?? eventRuntime.workers.filter(w => w.poolId === eventRuntime.pool?.id).length} {t('个成员')} · {eventRuntime.activity?.running ?? eventRuntime.workers.filter(w => w.poolId === eventRuntime.pool?.id && w.status === 'running').length} {t('个正在执行')} · {t(({ ready: '等待任务', active: '有未完成目标，当前空闲', idle: '有未完成目标，当前空闲', running: '协作中', waiting: '等待前置或验收', completed: '任务完成，已停止', stopping: '正在安全停止', stopped: '已停止', error: '需要处理', attention: '需要处理' } as Record<string,string>)[eventRuntime.activity?.state ?? eventRuntime.pool.state] ?? eventRuntime.pool.state)}{eventRuntime.activity?.executionMode === 'internal-only' ? ` · ${t('仅内部协作')}` : ''}</span>
+    {eventRuntime ? <div className="automation-notice" role="status">
+      {eventRuntime.pool ? <div className="pool-controls"><CollaborationOverview snapshot={overview} />
         {eventRuntime.pool.workspacePath ? <span className="add-peer-control" tabIndex={memberLimitReached ? 0 : undefined}>
           <button type="button" className="secondary" disabled={poolBusy || !eventRuntime.pool.enabled || memberLimitReached} aria-describedby={memberLimitReached ? 'member-limit-tooltip' : undefined} onClick={() => void addPeer()}>{t('增加成员')}</button>
           {memberLimitReached ? <span id="member-limit-tooltip" className="member-limit-tooltip" role="tooltip">{memberLimitHint}</span> : null}
@@ -388,8 +415,8 @@ function Workspace() {
           <button type="button" className="secondary" disabled={Boolean(reduceDisabledReason)} aria-describedby={reduceDisabledReason ? 'member-minimum-tooltip' : undefined} onClick={() => void reducePeer()}>{t('减少成员')}</button>
           {reduceDisabledReason ? <span id="member-minimum-tooltip" className="member-limit-tooltip" role="tooltip">{reduceDisabledReason}</span> : null}
         </span> : null}
-        <button type="button" className="secondary" disabled={poolBusy} onClick={() => void controlPool()}>{t(eventRuntime.pool.enabled ? '停止协作' : '恢复协作')}</button></div>
-        : <span>{t('事件协作')} · {eventRuntime.workers.filter(w => w.enabled).length} {t('个工作会话')}</span>}
+        {!eventRuntime.pool.enabled ? <button type="button" className="secondary" disabled={poolBusy} onClick={() => void controlPool(true)}>{t('恢复协作')}</button> : null}</div>
+        : <CollaborationOverview snapshot={overview} />}
       {eventRuntime.activity?.draining ? <p className="subtle">{eventRuntime.activity.draining} {t('个正在退出')} · {t('正在等待成员安全收尾或核清，实际人数尚未减少。')}</p> : poolFeedback ? <p className="subtle">{poolFeedback}</p> : null}
       {poolError ? <p role="alert">{poolError}</p> : null}
       {eventRuntime.ciWatches?.some(w => w.state === 'watching') ? <p className="subtle">{t('等待 CI 结果，完成后通知全体成员')}</p> : null}
@@ -428,7 +455,7 @@ function Workspace() {
               <ResourcePool board={board} usages={usages} name={name} stale={stale}
               expanded={expandedResource} toggle={id => setExpandedResource(current => current === id ? null : id)}
               edit={resource => setEditor({ type: 'resource', item: resource })} /></section>
-              <PreferencesEditor read={readPreferences} write={writePreferences} refreshKey={board.cursor} />
+              <PreferencesEditor read={readPreferences} write={savePreferences} refreshKey={board.cursor} />
             </div>
               : <SharedFeed board={board} name={name} openTask={openTask} openResource={openResource} />}
     </main>

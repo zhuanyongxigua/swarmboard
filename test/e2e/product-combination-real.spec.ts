@@ -68,7 +68,7 @@ test('progress, preferences and capacity controls coexist without losing each ot
     expect(preferences).toMatchObject({ text: 'Synthetic user expectation', source: 'main-chat-relay', version: 1 });
 
     await page.getByRole('button', { name: '减少成员', exact: true }).click();
-    await expect(page.locator('.automation-notice[role="status"]')).toContainText('1 个成员 · 0 个正在执行');
+    expect(await (await request.get(`${server.url}/api/runtime`)).json()).toMatchObject({ activity: { members: 1, running: 0 } });
     await expect(page.getByRole('button', { name: '减少成员', exact: true })).toBeDisabled();
     expect(runtime.workers.list().filter(worker => worker.retirement?.state === 'retired')).toHaveLength(1);
     expect((await readTask()).progress).toEqual(originalProgress);
@@ -77,7 +77,7 @@ test('progress, preferences and capacity controls coexist without losing each ot
     await expect.poll(() => runtime.workers.pool()!.size).toBe(2);
     new WorkerPool(runtime.workers, store, dbPath).ensureMembers(runtime.workers.pool()!);
     await page.getByRole('button', { name: '刷新面板', exact: true }).click();
-    await expect(page.locator('.automation-notice[role="status"]')).toContainText('2 个成员 · 0 个正在执行');
+    expect(await (await request.get(`${server.url}/api/runtime`)).json()).toMatchObject({ activity: { members: 2, running: 0 } });
     expect(runtime.workers.pool()!.memberIds).toEqual(expect.arrayContaining(memberIds));
     await page.screenshot({ path: testInfo.outputPath('combination-desktop.png'), fullPage: true });
 

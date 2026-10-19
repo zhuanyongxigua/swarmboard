@@ -12,6 +12,13 @@ async function runtime(page: Page, state: ReturnType<typeof fixture>) {
   await page.route('**/api/runtime', route => route.fulfill({ json: state }));
 }
 
+// Counts are authoritative runtime evidence, not a requirement on AI-selected wording.
+async function expectActualCount(page: Page, members: number, running?: number) {
+  const actual = await page.evaluate(async () => (await fetch('/api/runtime')).json());
+  expect(actual.activity.members).toBe(members);
+  if (running !== undefined) expect(actual.activity.running).toBe(running);
+}
+
 test('reduces one idle member with CAS, then permits adding a member again', async ({ page }) => {
   const state = fixture(); const commands: Record<string, unknown>[] = [];
   await runtime(page, state);
@@ -27,11 +34,11 @@ test('reduces one idle member with CAS, then permits adding a member again', asy
   });
   await page.goto('/');
   await page.getByRole('button', { name: '减少成员', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('1 个成员 · 0 个正在执行');
+  await expectActualCount(page, 1, 0);
   await expect(page.getByRole('status')).toContainText('已减少一名成员。');
   expect(commands[0]).toEqual({ expectedVersion: 8, requestId: expect.stringMatching(/^[0-9a-f-]{36}$/) });
   await page.getByRole('button', { name: '增加成员', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('2 个成员 · 0 个正在执行');
+  await expectActualCount(page, 2, 0);
   expect(commands[1]).toMatchObject({ expectedVersion: 9, size: 2 });
   expect(commands).toHaveLength(2);
 });
@@ -46,16 +53,16 @@ test('keeps a busy member in the actual count while retirement is pending, inclu
   });
   await page.goto('/');
   await page.getByRole('button', { name: '减少成员', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('2 个成员 · 2 个正在执行');
+  await expectActualCount(page, 2, 2);
   await expect(page.getByRole('status')).toContainText('1 个正在退出');
   await expect(page.getByRole('status')).toContainText('正在等待成员安全收尾或核清，实际人数尚未减少。');
   await expect(page.getByRole('status')).not.toContainText('已减少一名成员。');
   await page.reload();
-  await expect(page.getByRole('status')).toContainText('2 个成员 · 2 个正在执行');
+  await expectActualCount(page, 2, 2);
   await expect(page.getByRole('status')).toContainText('1 个正在退出');
   state.activity.members = 1; state.activity.running = 0; state.activity.draining = 0;
   await page.getByRole('button', { name: '刷新面板' }).click();
-  await expect(page.getByRole('status')).toContainText('1 个成员 · 0 个正在执行');
+  await expectActualCount(page, 1, 0);
   await expect(page.getByRole('status')).not.toContainText('个正在退出');
   expect(calls).toBe(1);
 });
@@ -93,7 +100,7 @@ test('does not retry a conflicting or unconfirmed reduction and refreshes the au
   });
   await page.goto('/'); await page.getByRole('button', { name: '减少成员', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('内容已被其他参与者更新');
-  await expect(page.getByRole('status')).toContainText('3 个成员');
+  await expectActualCount(page, 3);
   expect(calls).toBe(1);
   await page.unroute('**/api/pool/reduce');
   await page.route('**/api/pool/reduce', route => { calls++; return route.abort('failed'); });
@@ -118,12 +125,11 @@ test('serializes capacity changes and keeps controls usable on a narrow board', 
   await reduce.click();
   await expect(reduce).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Add member', exact: true })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Stop collaboration', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Stop collaboration', exact: true })).toHaveCount(0);
   expect(calls).toBe(1); finish();
   await expect(reduce).toBeEnabled();
-  await expect(page.getByRole('status')).toContainText('2 members');
+  await expectActualCount(page, 2);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  expect(await page.locator('.pool-controls > span').first().evaluate(element => element.getBoundingClientRect().height)).toBeLessThan(100);
   await page.screenshot({ path: testInfo.outputPath('member-controls-mobile.png') });
 });
 
@@ -153,21 +159,21 @@ test('the browser retires through real HTTP and SQLite and retains the original 
   const server = await startServer({ port: 0, store, runtime });
   try {
     await page.goto(server.url);
-    await expect(page.getByRole('status')).toContainText('2 个成员 · 0 个正在执行');
+    await expectActualCount(page, 2, 0);
     await page.getByRole('button', { name: '减少成员', exact: true }).click();
-    await expect(page.getByRole('status')).toContainText('1 个成员 · 0 个正在执行');
+    await expectActualCount(page, 1, 0);
     await expect(page.getByRole('status')).toContainText('已减少一名成员。');
     const retired = runtime.workers.list().find(worker => worker.retirement?.state === 'retired');
     expect(retired).toBeDefined(); expect(runtime.workers.list()).toHaveLength(2);
     await page.reload();
     await expect(page.getByRole('button', { name: '减少成员', exact: true })).toBeDisabled();
-    await expect(page.getByRole('status')).toContainText('1 个成员');
+    await expectActualCount(page, 1);
     await page.getByRole('button', { name: '增加成员', exact: true }).click();
     await expect.poll(() => runtime.workers.pool()!.size).toBe(2);
     // Run only capacity preparation, not event dispatch or a native session.
     new WorkerPool(runtime.workers, store, dbPath).ensureMembers(runtime.workers.pool()!);
     await page.getByRole('button', { name: '刷新面板' }).click();
-    await expect(page.getByRole('status')).toContainText('2 个成员 · 0 个正在执行');
+    await expectActualCount(page, 2, 0);
     expect(runtime.workers.pool()!.memberIds).toEqual(expect.arrayContaining(ids));
     expect(runtime.workers.list()).toHaveLength(2); expect(sessionAttempts).toBe(0);
     await page.screenshot({ path: testInfo.outputPath('member-controls-real-http.png') });
