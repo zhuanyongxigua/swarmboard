@@ -178,6 +178,16 @@ test('the browser retires through real HTTP and SQLite and retains the original 
     expect(runtime.workers.list()).toHaveLength(2); expect(sessionAttempts).toBe(0);
     await page.screenshot({ path: testInfo.outputPath('member-controls-real-http.png') });
   } finally {
-    await page.goto('about:blank'); await server.close(); await runtime.close(); store.close(); rmSync(dir, { recursive: true, force: true });
+    await test.step('Close capacity fixture browser and HTTP connections', async () => {
+      await page.close();
+      const closing = server.close();
+      // Preconnect sockets can outlive navigation. Stop accepting first, then
+      // close only this disposable fixture's connections after its browser.
+      server.server.closeAllConnections();
+      await closing;
+    });
+    await test.step('Close capacity fixture runtime and SQLite', async () => {
+      await runtime.close(); store.close(); rmSync(dir, { recursive: true, force: true });
+    });
   }
 });
