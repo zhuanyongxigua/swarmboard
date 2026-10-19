@@ -135,7 +135,7 @@ export class EventRuntime {
   // delivers turns to them; it registers their stable board identity and keeps
   // their scoped record for the collaborator MCP role.
   configureCollaborator(input: unknown) {
-    const { collaborator } = this.collaborators.configure(input, this.board);
+    const { collaborator } = this.collaborators.configure(input, this.board, this.workers);
     // The sidecar commit and the board registration are separate stores. If an
     // earlier attempt committed the record but failed before registering, any
     // later successful configure — including a same-id retry after a restart —

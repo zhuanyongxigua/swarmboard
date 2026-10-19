@@ -92,7 +92,7 @@ describe('admitted collaborator MCP surface', () => {
     const admitted = await admit({ expectedVersion: 0, name: 'Peer reviewer', harness: 'zcode', taskIds: [goal.id], enabled: true });
     const client = await collaboratorClient(admitted.id);
     const names = (await client.listTools()).tools.map(t => t.name);
-    for (const withheld of ['task_create', 'resource_create', 'resource_update', 'automation_prepare', 'automation_claim', 'worker_register', 'pool_configure', 'pool_control', 'task_execution_configure', 'collaborator_configure', 'peer_request', 'pipeline_watch']) expect(names, withheld).not.toContain(withheld);
+    for (const withheld of ['task_create', 'resource_create', 'resource_update', 'automation_prepare', 'automation_claim', 'worker_register', 'pool_configure', 'pool_control', 'task_execution_configure', 'collaborator_configure', 'pipeline_watch']) expect(names, withheld).not.toContain(withheld);
     for (const available of ['execution_grants_read', 'board_read', 'task_list', 'task_read', 'context_read', 'context_search', 'context_publish', 'task_claim', 'task_release', 'task_update', 'resource_use', 'agent_heartbeat']) expect(names, available).toContain(available);
   });
   it('reads live host grants only for admitted active goals and fences scope changes, revocation and pool stop', async () => {

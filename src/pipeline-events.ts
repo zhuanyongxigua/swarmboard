@@ -43,16 +43,18 @@ export class PipelineEvents {
   private replace(before: PipelineWatch, after: PipelineWatch) {
     return this.workers.db.prepare('UPDATE pipeline_watches SET data=? WHERE id=? AND data=?').run(JSON.stringify(after), before.id, JSON.stringify(before)).changes === 1;
   }
-  register(input: unknown, workerId?: string) {
+  register(input: unknown, workerId?: string, authorize?: () => void) {
     const data = parse(pipelineSchema, input), pool = this.workers.pool();
     if (!pool?.enabled) throw new AppError('POOL_STOPPED', 'The organization is stopped', 409);
-    if (workerId && (!pool.memberIds.includes(workerId) || !this.workers.get(workerId).enabled)) throw new AppError('NOT_MEMBER', 'Only an enabled organization member may subscribe', 403);
+    if (authorize) authorize();
+    if (!authorize && workerId && (!pool.memberIds.includes(workerId) || !this.workers.get(workerId).enabled)) throw new AppError('NOT_MEMBER', 'Only an enabled organization member may subscribe', 403);
     const task = this.board.taskStates().find(t => t.id === data.taskId);
     if (!task || pool.taskIds.length && !pool.taskIds.includes(task.id) || ['done','canceled'].includes(task.status)) throw new AppError('INVALID_GOAL', 'Subscribe only to an unfinished bound human goal');
     const remote = projectRemote(pool.workspacePath);
     return this.workers.transaction(() => {
       const current = this.workers.pool();
       if (!current?.enabled || current.id !== pool.id || current.workspacePath !== pool.workspacePath) throw new AppError('POOL_STOPPED', 'The organization changed or stopped', 409);
+      authorize?.();
       const watches = this.list().filter(w => w.poolId === pool.id && w.taskId === task.id);
       if (watches.some(w => w.pipelineId > data.pipelineId)) throw new AppError('STALE_PIPELINE', 'A newer pipeline is already subscribed', 409);
       if (watches.some(w => w.pipelineId === data.pipelineId && w.sha !== data.sha)) throw new AppError('PIPELINE_SHA_CONFLICT', 'This pipeline is already bound to a different SHA', 409);

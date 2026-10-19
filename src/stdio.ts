@@ -31,14 +31,13 @@ export async function startStdioServer(options: StdioOptions = {}) {
   // wake external harnesses, and file/database access alone proves no wakeup.
   const collaboratorState = collaboratorId ? new CollaboratorStore(sidecar) : undefined;
   if (collaboratorId) collaboratorState!.get(collaboratorId); // unknown id = startup error
-  const role = collaboratorState && collaboratorId ? collaboratorRole(store, collaboratorState, collaboratorId) : undefined;
+  const collaboratorPeers = collaboratorState ? new WorkerStore(sidecar) : undefined;
+  const role = collaboratorState && collaboratorId ? collaboratorRole(store, collaboratorState, collaboratorId, collaboratorPeers) : undefined;
   const runtime = collaboratorId || process.env.SWARMBOARD_DISABLE_RUNTIME === '1' ? undefined : new EventRuntime(store, { databasePath, serverEntry: fileURLToPath(import.meta.url), backend, autoPool: !managementOnly, managementOnly });
   if (!managementOnly) runtime?.start();
   const poolMember = process.env.SWARMBOARD_POOL_MEMBER === '1';
   const workerId = process.env.SWARMBOARD_WORKER_ID;
   const peerState = poolMember && workerId ? new WorkerStore(sidecar) : undefined;
-  // Share only host-owned grant storage; an external child never owns runtime delivery.
-  const collaboratorPeers = collaboratorState ? new WorkerStore(sidecar) : undefined;
   let updateCursor = peerState && workerId ? (peerState.get(workerId).deliveryCursor ?? peerState.get(workerId).cursor) : 0;
   const mayAct = () => {
     const pool = peerState?.pool();
@@ -48,7 +47,7 @@ export async function startStdioServer(options: StdioOptions = {}) {
   };
   const sharedUpdates = () => {
     const pool = peerState?.pool(); if (!pool) return undefined;
-    const events = store.readEntries({ after: updateCursor, limit: 100 }); updateCursor = events.cursor;
+    const events = store.readEntries({ after: updateCursor, limit: 100 }, { taskIds: pool.taskIds.length ? pool.taskIds : undefined, recipientId: workerId }); updateCursor = events.cursor;
     const items = events.items.filter(e => e.agentId !== workerId && (!e.taskId || !pool.taskIds.length || pool.taskIds.includes(e.taskId)) && (!e.recipientId || e.recipientId === workerId));
     const compact = items.map(e => ({ ...e, detail: e.detail.slice(0, 1000), detailTruncated: e.detail.length > 1000 }));
     return { control: mayAct() ? 'continue-if-useful' : 'stop-after-safe-boundary', executionGrants: new ExecutionGrants(store, peerState!).active(), organization: { memberIds: pool.memberIds, size: pool.size, maxSize: pool.maxSize }, items: compact, hasMore: events.hasMore };
@@ -56,7 +55,7 @@ export async function startStdioServer(options: StdioOptions = {}) {
   const server = createMcpServer(store, widgetPath, runtime, {
     poolMember,
     ...(peerState ? { sharedUpdates, mayAct, peers: peerState, workerId, ci: new PipelineEvents(store, peerState) } : {}),
-    ...(collaboratorState && collaboratorId && role ? { collaborator: true, collaboratorId, collaborators: collaboratorState, peers: collaboratorPeers, sharedUpdates: role.sharedUpdates, mayAct: role.mayAct, workerId: collaboratorId } : {}),
+    ...(collaboratorState && collaboratorId && role ? { collaborator: true, collaboratorId, collaborators: collaboratorState, peers: collaboratorPeers, ci: new PipelineEvents(store, collaboratorPeers!), sharedUpdates: role.sharedUpdates, mayAct: role.mayAct, workerId: collaboratorId } : {}),
   });
   const transport = new StdioServerTransport();
   let closing: Promise<void> | undefined;

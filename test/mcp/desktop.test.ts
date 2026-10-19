@@ -191,13 +191,15 @@ describe('portable desktop plugin', () => {
     const client = await connect(path, work, { SWARMBOARD_DISABLE_RUNTIME: '1', SWARMBOARD_COLLABORATOR_ID: admitted.id });
     try {
       const names = (await client.listTools()).tools.map(t => t.name);
-      for (const withheld of ['task_create', 'resource_create', 'pool_configure', 'pool_control', 'collaborator_configure', 'worker_register', 'peer_request', 'pipeline_watch']) expect(names, withheld).not.toContain(withheld);
+      for (const withheld of ['task_create', 'resource_create', 'pool_configure', 'pool_control', 'collaborator_configure', 'worker_register']) expect(names, withheld).not.toContain(withheld);
       expect(names).toEqual(expect.arrayContaining(['board_read', 'task_list', 'task_read', 'context_publish', 'task_claim']));
-      expect(names).toContain('execution_grants_read');
+      expect(names).toEqual(expect.arrayContaining(['execution_grants_read', 'peer_request', 'pipeline_watch']));
       expect((await call<{grants: {taskId: string}[]}>(client, 'execution_grants_read')).grants.map(g => g.taskId)).toEqual([goal.id]);
       expect(workers.owner()).toBeNull();
       const denied = await client.callTool({ name: 'task_read', arguments: { id: outside.id } });
       expect(denied.isError).toBe(true); expect(JSON.stringify(denied.content)).toContain('UNBOUND_GOAL');
+      state.configure({ id: admitted.id, expectedVersion: 1, name: admitted.name, harness: admitted.harness, sessionRef: admitted.sessionRef, cost: admitted.cost ?? undefined, taskIds: [], scope: 'organization', poolId: workers.pool()!.id, enabled: true }, board, workers);
+      expect(await call(client, 'task_read', { id: outside.id })).toMatchObject({ id: outside.id });
       await call(client, 'context_publish', { agentId: admitted.id, taskId: goal.id, kind: 'CLAIM', summary: 'Independent review scope' });
       expect(board.readTask(goal.id).participants).toEqual([admitted.id]);
       board.publishEntry({ agentId: 'peer', taskId: goal.id, kind: 'FACT', summary: 'Packaged peer finding' });
@@ -207,7 +209,7 @@ describe('portable desktop plugin', () => {
       expect((attached.items as { summary: string }[]).map(i => i.summary)).toContain('Packaged peer finding');
       const again = await client.callTool({ name: 'context_read', arguments: { limit: 1 } });
       expect(JSON.stringify((again.content as unknown[]).slice(1))).not.toContain('Packaged peer finding'); // cursor advanced
-      state.configure({ id: admitted.id, expectedVersion: 1, name: 'External reviewer', harness: 'dsh', sessionRef: 'session-7', taskIds: [goal.id], enabled: false }, board);
+      state.configure({ id: admitted.id, expectedVersion: 2, name: 'External reviewer', harness: 'dsh', sessionRef: 'session-7', taskIds: [], scope: 'organization', poolId: workers.pool()!.id, enabled: false }, board, workers);
       const fenced = await client.callTool({ name: 'task_claim', arguments: { id: goal.id, agentId: admitted.id, expectedVersion: board.readTask(goal.id).version } });
       expect(fenced.isError).toBe(true); expect(JSON.stringify(fenced.content)).toContain('COLLABORATOR_STOPPED');
       const stopped = await client.callTool({ name: 'context_read', arguments: { limit: 1 } });
