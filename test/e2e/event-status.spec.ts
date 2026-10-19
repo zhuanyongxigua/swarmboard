@@ -8,8 +8,8 @@ test('shows registered event sessions and their blocker while retaining three bo
   await expect(page.getByRole('tab')).toHaveText(['任务管理', '协作环境', '共享面板']);
 });
 
-test('human pool stop and resume preserve the task board and show the confirmed lifecycle', async ({ page }) => {
-  let pool = { size: 3, enabled: true, version: 1, state: 'active', error: '' };
+for (const language of ['zh-CN', 'en']) test(`backend stop and resume preserve the board without visible lifecycle controls (${language})`, async ({ page }) => {
+  let pool = { workspacePath: '/synthetic/project', taskIds: [], size: 3, enabled: true, version: 1, state: 'active', error: '' };
   const commands: unknown[] = [];
   await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'events', workers: [], error: '', pool } }));
   await page.route('**/api/pool/control', route => {
@@ -17,20 +17,27 @@ test('human pool stop and resume preserve the task board and show the confirmed 
     pool = { ...pool, enabled: request.enabled, version: pool.version + 1, state: request.enabled ? 'ready' : 'stopping' };
     return route.fulfill({ json: pool });
   });
-  await page.goto('/'); await expect(page.getByRole('region', { name: '协作概览', exact: true })).toBeVisible();
+  await page.goto(`/?lang=${language}`); await expect(page.getByRole('region', { name: language === 'en' ? 'Collaboration overview' : '协作概览', exact: true })).toBeVisible();
   const before = await page.locator('.task-card').count();
-  await expect(page.getByRole('button', { name: '停止协作', exact: true })).toHaveCount(0);
+  const lifecycleControls = page.getByRole('button', { name: /^(停止协作|恢复协作|Stop collaboration|Resume collaboration)$/ });
+  await expect(lifecycleControls).toHaveCount(0);
+  const add = page.getByRole('button', { name: language === 'en' ? 'Add member' : '增加成员', exact: true });
+  const reduce = page.getByRole('button', { name: language === 'en' ? 'Reduce member' : '减少成员', exact: true });
+  await expect(add).toBeEnabled(); await expect(reduce).toBeEnabled();
   // Maintenance remains an authenticated API operation rather than a permanent UI stop action.
   await page.evaluate(async () => { const r = await fetch('/api/pool/control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expectedVersion: 1, enabled: false }) }); if (!r.ok) throw Error('Synthetic stop failed'); });
-  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
-  await expect(page.getByRole('button', { name: '恢复协作', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: language === 'en' ? 'Refresh board' : '刷新面板', exact: true }).click();
+  await expect(lifecycleControls).toHaveCount(0);
+  await expect(add).toBeDisabled(); await expect(reduce).toBeDisabled();
   expect(pool.state).toBe('stopping');
-  await expect(page.getByRole('button', { name: '停止协作', exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: '恢复协作', exact: true }).click();
+  await page.evaluate(async () => { const r = await fetch('/api/pool/control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expectedVersion: 2, enabled: true }) }); if (!r.ok) throw Error('Synthetic resume failed'); });
+  await page.getByRole('button', { name: language === 'en' ? 'Refresh board' : '刷新面板', exact: true }).click();
+  await expect(lifecycleControls).toHaveCount(0);
+  await expect(add).toBeEnabled(); await expect(reduce).toBeEnabled();
   expect(pool.state).toBe('ready');
   expect(commands).toEqual([{ expectedVersion: 1, enabled: false }, { expectedVersion: 2, enabled: true }]);
   await expect(page.locator('.task-card')).toHaveCount(before);
-  await expect(page.getByRole('tab')).toHaveText(['任务管理', '协作环境', '共享面板']);
+  await expect(page.getByRole('tab')).toHaveText(language === 'en' ? ['Tasks', 'Collaboration environment', 'Shared board'] : ['任务管理', '协作环境', '共享面板']);
 });
 
 test('distinguishes idle members from executing peers and supports bounded recovery retry', async ({ page }) => {

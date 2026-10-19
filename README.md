@@ -74,7 +74,7 @@ Version 0.8.0 runs three equal persistent peers by default (initial size configu
 
 Bind the project once through `pool_configure` (see [setup and recovery](docs/event-workers.md), Chinese). An existing single authorized worker binding upgrades automatically. Peers get isolated Git checkouts and reuse session identities. No native scheduled conversations are created. The recovery scan reads durable events without model calls, except for the bounded stranded-goal nudges described above.
 
-All goals done/canceled closes idle model processes; blocked or awaiting review waits for events. Authorized backend stop/resume prevents new turns while allowing active turns to finish safely; the board has no permanent Stop collaboration button. New human goals reuse the same organization. Normal CLI login, workspace sandbox and human approvals remain in force; event delivery does not supply missing external-harness or production permissions.
+All goals done/canceled closes idle model processes; blocked or awaiting review waits for events. Authorized backend stop/resume prevents new turns while allowing active turns to finish safely; the board has no permanent Stop or Resume collaboration buttons. New human goals reuse the same organization. Normal CLI login, workspace sandbox and human approvals remain in force; event delivery does not supply missing external-harness or production permissions.
 
 ### Agent-maintained collaboration overview
 
