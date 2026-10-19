@@ -196,6 +196,7 @@ describe('portable desktop plugin', () => {
       expect(names).toEqual(expect.arrayContaining(['execution_grants_read', 'peer_request', 'pipeline_watch']));
       expect((await call<{grants: {taskId: string}[]}>(client, 'execution_grants_read')).grants.map(g => g.taskId)).toEqual([goal.id]);
       expect(workers.owner()).toBeNull();
+      expect(await call(client, 'overview_read')).toMatchObject({ status: 'missing' });
       const denied = await client.callTool({ name: 'task_read', arguments: { id: outside.id } });
       expect(denied.isError).toBe(true); expect(JSON.stringify(denied.content)).toContain('UNBOUND_GOAL');
       state.configure({ id: admitted.id, expectedVersion: 1, name: admitted.name, harness: admitted.harness, sessionRef: admitted.sessionRef, cost: admitted.cost ?? undefined, taskIds: [], scope: 'organization', poolId: workers.pool()!.id, enabled: true }, board, workers);

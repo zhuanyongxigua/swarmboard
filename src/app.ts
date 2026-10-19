@@ -6,6 +6,7 @@ import { AppError, Store } from './store.js';
 import { createMcpServer } from './mcp.js';
 import { defaultDatabasePath, defaultWidgetPath } from './paths.js';
 import type { EventRuntime } from './event-runtime.js';
+import { readOverview, writeOverview } from './overview.js';
 
 export interface AppOptions { store?: Store; dbPath?: string; widgetPath?: string; boardToken?: string; runtime?: EventRuntime }
 export interface ServerOptions extends AppOptions { port?: number; host?: string }
@@ -53,8 +54,11 @@ export function createApp(options: AppOptions = {}) {
   });
   app.get('/api/board',(_req,res)=>res.json(store.board()));
   app.get('/api/preferences',(_req,res)=>res.json(store.readPreferences()));
+  const overviewSource = () => options.runtime ? { ...options.runtime.status(), ownerEpoch: options.runtime.workers?.ownerEpoch() } : undefined;
+  app.get('/api/overview',(_req,res)=>res.json(readOverview(store, overviewSource())));
   const route = (method:'post'|'patch',path:string,operation:(req:Request)=>unknown)=>app[method](path,(req,res,next)=>{try{res.json(operation(req));}catch(error){next(error);}});
   route('patch','/api/preferences',req=>{const value=store.writePreferences(req.body);options.runtime?.notify();return value;});
+  route('post','/api/overview',req=>writeOverview(store,req.body,'human-host',overviewSource()));
   route('post','/api/tasks',req=>store.createTask(req.body));
   route('patch','/api/tasks/:id',req=>store.updateTask(String(req.params.id),req.body));
   route('patch','/api/tasks/:id/progress',req=>store.writeTaskProgress(String(req.params.id),req.body));

@@ -4,6 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import { automationSchemas, buildSetupPrompt, canonicalWorkspace, defaultAutomationConfig, type AutomationConfig } from './automation.js';
+import type { OverviewRecord } from './overview.js';
 
 export class AppError extends Error {
   constructor(public code: string, message: string, public status = 400) { super(message); }
@@ -79,10 +80,10 @@ export class Store {
       // Separate desktop MCP processes must inspect and apply migrations under the same write lock.
       this.transaction(() => {
         const version = Number((this.db.prepare('PRAGMA user_version').get() as {user_version: number}).user_version);
-        if (version > 8) throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500);
+        if (version > 9) throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500);
         // Standalone review candidates reused v6; only the declared release sequence may upgrade.
         if (version >= 6) {
-          const features = ['board_preferences', 'task_progress', 'resource_admission_fences'];
+          const features = ['board_preferences', 'task_progress', 'resource_admission_fences', 'board_overview'];
           for (const [index, table] of features.entries()) {
             const exists = !!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table);
             if (exists !== (version >= index + 6)) throw new AppError('SCHEMA_VARIANT_MISMATCH', 'Database belongs to an incompatible unpublished schema candidate; restore its matching backup before upgrading', 500);
@@ -130,6 +131,7 @@ export class Store {
             BEGIN SELECT RAISE(ABORT, 'Member resource admission is closed'); END;
           PRAGMA user_version=8;
         `);
+        if (version < 9) this.db.exec('CREATE TABLE board_overview(id INTEGER PRIMARY KEY CHECK(id=1),data TEXT NOT NULL); PRAGMA user_version=9;');
       });
     } catch (error) { this.db.close(); throw error; }
   }
@@ -230,6 +232,21 @@ export class Store {
   readPreferences(): Preferences {
     const row = this.db.prepare('SELECT text,source,version,updatedAt FROM board_preferences WHERE id=1').get() as unknown as Omit<Preferences, 'boardId'>;
     return { ...row, boardId: this.readAutomation().boardId };
+  }
+  readOverviewRecord(): OverviewRecord | null {
+    const row = this.db.prepare('SELECT data FROM board_overview WHERE id=1').get();
+    return row ? JSON.parse(String(row.data)) as OverviewRecord : null;
+  }
+  // Formal transports bind the author and validate facts. No board event is
+  // emitted for decoration: readers observe the durable CAS value directly.
+  saveOverviewRecord(record: Omit<OverviewRecord, 'version'>, expectedVersion: number): OverviewRecord {
+    return this.transaction(() => {
+      this.checkVersion(this.readOverviewRecord()?.version ?? 0, expectedVersion);
+      if (this.readPreferences().version !== record.preferencesVersion) throw new AppError('OVERVIEW_PREFERENCES_CHANGED', 'Preferences changed; read current preferences again', 409);
+      const next = { ...record, version: expectedVersion + 1 };
+      this.db.prepare('INSERT INTO board_overview VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(JSON.stringify(next));
+      return next;
+    });
   }
   // Trusted human-host boundary only: do not expose this mutator to bound agents.
   // Source records declared provenance; it is never an authorization credential.

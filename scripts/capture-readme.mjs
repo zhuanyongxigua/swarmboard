@@ -7,19 +7,56 @@ import { fileURLToPath } from 'node:url';
 import { chromium, expect } from '@playwright/test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { screenshotCopy } from './readme-copy.mjs';
 import { startServer } from '../dist/server/app.js';
+import { createMcpServer } from '../dist/server/mcp.js';
+import { EventRuntime } from '../dist/server/event-runtime.js';
+import { Store } from '../dist/server/store.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 async function capture(locale) {
   const copy = text => screenshotCopy(locale, text);
   const temporary = await mkdtemp(path.join(tmpdir(), 'swarmboard-readme-'));
   const output = path.join(root, 'docs/assets', locale);
-  let service, client, browser;
+  const widgetPath = path.join(root, 'dist/widget.html');
+  const dbPath = path.join(temporary, 'board.sqlite');
+  let service, client, overviewClient, overviewServer, browser, runtime, store;
   try {
-    service = await startServer({ port: 0, host: '127.0.0.1', dbPath: path.join(temporary, 'board.sqlite'), boardToken: '', widgetPath: path.join(root, 'dist/widget.html') });
+    // The overview needs a runtime fact source, so build a disposable one. It is
+    // never started: no watcher, scan, native adapter or model turn may run.
+    store = new Store(dbPath);
+    let sessionAttempts = 0;
+    runtime = new EventRuntime(store, {
+      databasePath: dbPath, serverEntry: 'unused', debounceMs: 600000,
+      adapter: () => { sessionAttempts += 1; throw new Error('README fixture must not dispatch a session'); },
+    });
+    const pool = runtime.configurePool({ workspacePath: temporary, size: 2 });
+    const memberIds = [];
+    for (const name of ['readme-sample-native-a', 'readme-sample-native-b']) {
+      const workspacePath = path.join(temporary, name);
+      await mkdir(workspacePath);
+      const worker = runtime.workers.register({ name, workspacePath });
+      runtime.workers.save({ ...worker, poolId: pool.id });
+      store.registerAgent({ agentId: worker.id, name });
+      memberIds.push(worker.id);
+    }
+    runtime.workers.savePool({ ...pool, memberIds });
+    service = await startServer({ port: 0, host: '127.0.0.1', store, runtime, boardToken: '', widgetPath });
     client = new Client({ name: 'readme-synthetic-preview', version: '1.0.0' });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${service.url}/mcp`)));
+    // Author the overview through the real bound MCP surface with the current
+    // facts revision, preferences version and CAS version, never direct SQLite.
+    const [overviewClientTransport, overviewServerTransport] = InMemoryTransport.createLinkedPair();
+    overviewServer = createMcpServer(store, widgetPath, runtime, { poolMember: true, workerId: memberIds[0], mayAct: () => true });
+    await overviewServer.connect(overviewServerTransport);
+    overviewClient = new Client({ name: 'readme-synthetic-member', version: '1.0.0' });
+    await overviewClient.connect(overviewClientTransport);
+    async function callOverview(name, args = {}) {
+      const result = await overviewClient.callTool({ name, arguments: args });
+      if (result.isError) throw new Error(`Screenshot overview fixture failed: ${name}`);
+      return result.structuredContent;
+    }
     async function call(name, args = {}) {
       const result = await client.callTool({ name, arguments: args });
       if (result.isError) throw new Error(`Screenshot fixture failed: ${name}`);
@@ -66,8 +103,34 @@ async function capture(locale) {
     await call('context_publish', { agentId: 'demo-files', kind: 'MESSAGE', recipientId: 'demo-login', resourceId: machine.id, summary: copy("我同时检查文件预览，使用另一组账号，不改登录配置。"), detail });
     await call('context_publish', { agentId: 'demo-login', kind: 'OBSERVED', resourceId: machine.id, summary: copy("两项检查使用不同账号和浏览器会话，可以共用 dev-a。"), detail });
     await call('context_publish', { agentId: 'demo-files', kind: 'MESSAGE', recipientId: 'demo-login', resourceId: machine.id, summary: copy("约定：如需重启服务，先通知当前使用者，确认检查结束后再操作。"), detail });
+    // The note identifies itself as documentation data: only registered native
+    // members are factual; activity and model identity stay unknown because this
+    // fixture starts no runtime owner and never dispatches a model.
+    const overviewFactsView = await callOverview('overview_read');
+    expect(overviewFactsView.status).toBe('missing');
+    expect(overviewFactsView.facts.available).toBe(true);
+    const factValues = new Map(overviewFactsView.facts.items.map(item => [item.id, item.value]));
+    expect(factValues.get('native.members')).toBe(memberIds.length);
+    expect(factValues.get('native.running')).toBeNull();
+    expect(factValues.get('external.model')).toBeNull();
+    const preferences = await call('preferences_read');
+    const overviewNote = copy("文档示例数据：仅显示已登记的原生成员；当前活动与模型身份未知。");
+    const writtenOverview = await callOverview('overview_write', {
+      expectedVersion: overviewFactsView.record?.version ?? 0,
+      factsRevision: overviewFactsView.facts.revision,
+      preferencesVersion: preferences.version, ttlSeconds: 900,
+      parts: [
+        { kind: 'text', text: overviewNote },
+        { kind: 'fact', factId: 'native.members' },
+        { kind: 'fact', factId: 'external.model' },
+      ],
+    });
+    expect(writtenOverview.status).toBe('current');
     await mkdir(output, { recursive: true });
-    browser = await chromium.launch();
+    // An explicitly named local channel avoids downloading a bundled browser on
+    // hosts that already have Chrome; the default remains Playwright's choice.
+    browser = await chromium.launch(process.env.SWARMBOARD_SCREENSHOT_BROWSER_CHANNEL
+      ? { channel: process.env.SWARMBOARD_SCREENSHOT_BROWSER_CHANNEL } : {});
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, colorScheme: 'light', locale, timezoneId: 'Asia/Shanghai', deviceScaleFactor: 1 });
     async function checkLanguage() {
       await expect(page.locator('html')).toHaveAttribute('lang', locale);
@@ -77,6 +140,10 @@ async function capture(locale) {
     }
     await page.goto(`${service.url}/?lang=${locale}`);
     await expect(page.getByRole('button', { name: copy("查看任务 回归登录与权限校验"), exact: true })).toBeVisible();
+    const overview = page.getByRole('region', { name: copy("协作概览"), exact: true });
+    await expect(overview).toContainText(overviewNote);
+    await expect(overview.locator('strong')).toHaveText([String(memberIds.length), copy("未知")]);
+    await expect(page.getByRole('button', { name: copy("停止协作"), exact: true })).toHaveCount(0);
     await expect(page.locator('.task-card')).toHaveCount(6);
     await expect(page.locator('.task-progress')).toHaveCount(3);
     for (const [state, percent] of [['active', 70], ['waiting', 35], ['unknown', null]]) {
@@ -110,11 +177,17 @@ async function capture(locale) {
     await expect(page.getByText(copy("约定：如需重启服务，先通知当前使用者，确认检查结束后再操作。"), { exact: true })).toBeVisible();
     await checkLanguage();
     await page.screenshot({ path: path.join(output, 'shared.png') });
+    // Starting no runtime owner must also mean zero native/model dispatch attempts.
+    expect(sessionAttempts).toBe(0);
     console.log(`README screenshots captured in ${locale} from real UI and isolated sample data.`);
   } finally {
     await browser?.close();
     await client?.close();
+    await overviewClient?.close();
+    await overviewServer?.close();
     await service?.close();
+    await runtime?.close();
+    store?.close();
     await rm(temporary, { recursive: true, force: true });
   }
 }

@@ -1,7 +1,7 @@
 // Persist session bindings and delivery checkpoints separately from board data so
 // existing plugin processes can keep using the board during a runtime upgrade.
 import { DatabaseSync } from 'node:sqlite';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute } from 'node:path';
 import { z } from 'zod';
@@ -135,6 +135,12 @@ export class WorkerStore {
   owns(token: string) { return this.db.prepare('SELECT token FROM runtime_owner WHERE id=1').get()?.token === token; }
   release(token: string) { this.db.prepare('DELETE FROM runtime_owner WHERE token=?').run(token); }
   owner() { return this.db.prepare('SELECT pid FROM runtime_owner WHERE id=1').get() ?? null; }
+  // A public digest invalidates derived overview claims across ownership
+  // changes, including PID reuse, without exposing the owner's fence token.
+  ownerEpoch() {
+    const row = this.db.prepare('SELECT token,pid FROM runtime_owner WHERE id=1').get();
+    return row ? createHash('sha256').update(JSON.stringify(row)).digest('hex') : null;
+  }
   pool(): Pool | null {
     const row = this.db.prepare('SELECT data FROM worker_pool WHERE id=1').get();
     if (!row) return null;

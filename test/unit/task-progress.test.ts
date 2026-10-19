@@ -74,11 +74,11 @@ describe('reported task progress', () => {
     const store = open(path), { goal } = fixture(store);
     store.createResource({ name: 'Synthetic retained resource', kind: 'legacy', capabilities: ['read'] });
     const before = store.board(); const boardId = store.readAutomation().boardId;
-    store.db.exec('DROP TRIGGER usage_admission_insert; DROP TRIGGER usage_admission_update; DROP TABLE resource_admission_fences; DROP TABLE task_progress; DROP TABLE board_preferences; PRAGMA user_version=5;'); close(store);
+    store.db.exec('DROP TRIGGER usage_admission_insert; DROP TRIGGER usage_admission_update; DROP TABLE resource_admission_fences; DROP TABLE task_progress; DROP TABLE board_overview; DROP TABLE board_preferences; PRAGMA user_version=5;'); close(store);
     const upgraded = open(path);
     expect(upgraded.board()).toEqual(before);
     expect(upgraded.readTask(goal.id).progress).toBeNull();
     expect(upgraded.readAutomation().boardId).toBe(boardId);
-    expect(upgraded.db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 8 });
+    expect(upgraded.db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 9 });
   });
 });

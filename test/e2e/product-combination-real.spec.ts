@@ -46,6 +46,25 @@ test('progress, preferences and capacity controls coexist without losing each ot
     };
 
     await page.goto(server.url);
+    const writeOverview = async () => {
+      const view = await (await request.get(`${server.url}/api/overview`)).json();
+      const prefs = await (await request.get(`${server.url}/api/preferences`)).json();
+      const response = await request.post(`${server.url}/api/overview`, { data: {
+        expectedVersion: view.record?.version ?? 0, factsRevision: view.facts.revision,
+        preferencesVersion: prefs.version, parts: [
+          { kind: 'text', text: 'Synthetic overview chosen for this fixture' },
+          { kind: 'fact', factId: 'native.members' }, { kind: 'fact', factId: 'external.model' },
+        ],
+      } });
+      expect(response.ok()).toBe(true);
+      expect(await response.json()).toMatchObject({ status: 'current', record: { authorId: 'human-host' } });
+      await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+    };
+    await writeOverview();
+    const overview = page.getByRole('region', { name: '协作概览', exact: true });
+    await expect(overview).toContainText('Synthetic overview chosen for this fixture');
+    await expect(overview.locator('strong')).toHaveText(['2', '未知']);
+    await expect(page.getByRole('button', { name: '停止协作', exact: true })).toHaveCount(0);
     const card = page.locator(`[data-card-id="${task.id}"]`);
     await expect(card.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '35');
     await expect(card).toContainText('等待中');
@@ -64,11 +83,13 @@ test('progress, preferences and capacity controls coexist without losing each ot
     await page.getByLabel('内容来源', { exact: true }).selectOption('main-chat-relay');
     await page.getByRole('button', { name: '保存偏好', exact: true }).click();
     await expect(page.getByLabel('当前保存的偏好')).toContainText('v1');
+    await expect(overview).not.toContainText('Synthetic overview chosen for this fixture');
+    await expect(overview).toContainText('概览已失效');
     const preferences = await (await request.get(`${server.url}/api/preferences`)).json();
     expect(preferences).toMatchObject({ text: 'Synthetic user expectation', source: 'main-chat-relay', version: 1 });
 
     await page.getByRole('button', { name: '减少成员', exact: true }).click();
-    await expect(page.locator('.automation-notice[role="status"]')).toContainText('1 个成员 · 0 个正在执行');
+    expect(await (await request.get(`${server.url}/api/runtime`)).json()).toMatchObject({ activity: { members: 1, running: 0 } });
     await expect(page.getByRole('button', { name: '减少成员', exact: true })).toBeDisabled();
     expect(runtime.workers.list().filter(worker => worker.retirement?.state === 'retired')).toHaveLength(1);
     expect((await readTask()).progress).toEqual(originalProgress);
@@ -77,12 +98,15 @@ test('progress, preferences and capacity controls coexist without losing each ot
     await expect.poll(() => runtime.workers.pool()!.size).toBe(2);
     new WorkerPool(runtime.workers, store, dbPath).ensureMembers(runtime.workers.pool()!);
     await page.getByRole('button', { name: '刷新面板', exact: true }).click();
-    await expect(page.locator('.automation-notice[role="status"]')).toContainText('2 个成员 · 0 个正在执行');
+    expect(await (await request.get(`${server.url}/api/runtime`)).json()).toMatchObject({ activity: { members: 2, running: 0 } });
+    await writeOverview();
+    await expect(overview.locator('strong')).toHaveText(['2', '未知']);
     expect(runtime.workers.pool()!.memberIds).toEqual(expect.arrayContaining(memberIds));
     await page.screenshot({ path: testInfo.outputPath('combination-desktop.png'), fullPage: true });
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${server.url}/?lang=en`);
+    await expect(page.getByRole('region', { name: 'Collaboration overview', exact: true }).locator('strong')).toHaveText(['2', 'Unknown']);
     await expect(card.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '35');
     await expect(card).toContainText('Waiting');
     await expect(page.getByRole('button', { name: 'Reduce member', exact: true })).toBeVisible();
@@ -92,6 +116,7 @@ test('progress, preferences and capacity controls coexist without losing each ot
     await expect(page.getByRole('button', { name: 'View resource Synthetic combined resource', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Clear saved preferences', exact: true }).click();
     await expect(page.getByLabel('Preference text', { exact: true })).toHaveValue('');
+    await expect(page.getByRole('region', { name: 'Collaboration overview', exact: true })).not.toContainText('Synthetic overview chosen for this fixture');
     expect(await (await request.get(`${server.url}/api/preferences`)).json()).toMatchObject({ text: '', version: 2 });
     expect((await readTask()).progress).toEqual(originalProgress);
     const board = await (await request.get(`${server.url}/api/board`)).json();

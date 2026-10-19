@@ -38,6 +38,8 @@ export async function startStdioServer(options: StdioOptions = {}) {
   const poolMember = process.env.SWARMBOARD_POOL_MEMBER === '1';
   const workerId = process.env.SWARMBOARD_WORKER_ID;
   const peerState = poolMember && workerId ? new WorkerStore(sidecar) : undefined;
+  // The collaborator reader also supplies overview facts; no second reader,
+  // EventRuntime owner or watcher is needed.
   let updateCursor = peerState && workerId ? (peerState.get(workerId).deliveryCursor ?? peerState.get(workerId).cursor) : 0;
   const mayAct = () => {
     const pool = peerState?.pool();

@@ -12,6 +12,8 @@ async function preview(page: Page) {
   const activity = { members: 1, running: 0, idle: 1, state: 'idle', executionMode: 'internal-only', watchdog: { state: 'watching', attempts: 0, nextWakeAt: null } };
   await page.route('**/api/board', route => route.fulfill({ json: board }));
   await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'events', workers: [], error: '', pool: { id: 'preview', size: 1, enabled: true, version: 1, state: 'active', error: '' }, activity } }));
+  await page.route('**/api/overview', route => route.fulfill({ json: { status: 'missing', reason: 'NO_OVERVIEW', record: null,
+    facts: { revision: 'synthetic', observedAt: updatedAt, available: true, items: [] } } }));
   await page.route('**/api/tasks/*', route => {
     const patch = route.request().postDataJSON(); writes.push(patch);
     const task = board.tasks.find(item => route.request().url().endsWith(`/${item.id}`))!;
@@ -30,11 +32,12 @@ test('shows reported progress only in progress and keeps execution independent',
   await expect(card(page, 'unknown').getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
   await expect(card(page, 'unknown')).not.toContainText('0%');
   await expect(card(page, 'review').getByRole('progressbar')).toHaveCount(0);
-  await expect(page.getByRole('status')).toContainText('0 个正在执行');
+  await expect(page.getByRole('region', { name: '协作概览', exact: true })).toContainText('尚无有效协作概览');
+  expect(await page.evaluate(async () => (await (await fetch('/api/runtime')).json()).activity)).toMatchObject({ running: 0, idle: 1 });
   await page.screenshot({ path: testInfo.outputPath('progress-three-states.png') });
   activity.running = 1; activity.idle = 0; activity.state = 'running';
   await page.getByRole('button', { name: '刷新面板', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('1 个正在执行');
+  expect(await page.evaluate(async () => (await (await fetch('/api/runtime')).json()).activity)).toMatchObject({ running: 1, idle: 0 });
   await expect(card(page, 'active').getByRole('progressbar')).toHaveAttribute('aria-valuenow', '70');
   board.tasks[0]!.progress = null;
   await page.getByRole('button', { name: '刷新面板', exact: true }).click();
