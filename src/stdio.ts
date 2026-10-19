@@ -37,6 +37,9 @@ export async function startStdioServer(options: StdioOptions = {}) {
   const poolMember = process.env.SWARMBOARD_POOL_MEMBER === '1';
   const workerId = process.env.SWARMBOARD_WORKER_ID;
   const peerState = poolMember && workerId ? new WorkerStore(sidecar) : undefined;
+  // An external child reads aggregate facts from the existing sidecar without
+  // constructing an EventRuntime, owning workers or starting any watcher.
+  const overviewPeers = collaboratorState && !runtime && !peerState ? new WorkerStore(sidecar) : undefined;
   let updateCursor = peerState && workerId ? (peerState.get(workerId).deliveryCursor ?? peerState.get(workerId).cursor) : 0;
   const mayAct = () => {
     const pool = peerState?.pool();
@@ -53,13 +56,14 @@ export async function startStdioServer(options: StdioOptions = {}) {
   };
   const server = createMcpServer(store, widgetPath, runtime, {
     poolMember,
+    ...(overviewPeers ? { overviewSource: () => ({ owner: overviewPeers.owner(), ownerEpoch: overviewPeers.ownerEpoch(), pool: overviewPeers.pool(), workers: overviewPeers.list(), collaborators: collaboratorState!.list() }) } : {}),
     ...(peerState ? { sharedUpdates, mayAct, peers: peerState, workerId, ci: new PipelineEvents(store, peerState) } : {}),
     ...(collaboratorState && collaboratorId && role ? { collaborator: true, collaboratorId, collaborators: collaboratorState, sharedUpdates: role.sharedUpdates, mayAct: role.mayAct, workerId: collaboratorId } : {}),
   });
   const transport = new StdioServerTransport();
   let closing: Promise<void> | undefined;
   const close = () => closing ??= (async () => {
-    try { await runtime?.close(); await server.close(); } finally { collaboratorState?.close(); peerState?.close(); store.close(); }
+    try { await runtime?.close(); await server.close(); } finally { overviewPeers?.close(); collaboratorState?.close(); peerState?.close(); store.close(); }
   })();
   try { await server.connect(transport); }
   catch (error) { await close(); throw error; }
