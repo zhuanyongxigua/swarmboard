@@ -114,14 +114,16 @@ async function capture(locale) {
     expect(factValues.get('native.running')).toBeNull();
     expect(factValues.get('external.model')).toBeNull();
     const preferences = await call('preferences_read');
-    const overviewNote = copy("文档示例数据：仅显示已登记的原生成员；当前活动与模型身份未知。");
+    const overviewNote = copy("文档示例：");
     const writtenOverview = await callOverview('overview_write', {
       expectedVersion: overviewFactsView.record?.version ?? 0,
       factsRevision: overviewFactsView.facts.revision,
       preferencesVersion: preferences.version, ttlSeconds: 900,
       parts: [
         { kind: 'text', text: overviewNote },
+        { kind: 'text', text: copy("原生登记") },
         { kind: 'fact', factId: 'native.members' },
+        { kind: 'text', text: copy("· 外部模型") },
         { kind: 'fact', factId: 'external.model' },
       ],
     });
@@ -144,6 +146,17 @@ async function capture(locale) {
     await expect(overview).toContainText(overviewNote);
     await expect(overview.locator('strong')).toHaveText([String(memberIds.length), copy("未知")]);
     await expect(page.getByRole('button', { name: copy("停止协作"), exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: copy("恢复协作"), exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: copy("增加成员"), exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: copy("减少成员"), exact: true })).toBeVisible();
+    await expect(overview.locator('details, dl, small, [title]')).toHaveCount(0);
+    // A short, explicitly synthetic overview must occupy one row at desktop
+    // width; narrow-screen wrapping is covered by the direct browser suite.
+    const overviewHeight = await overview.evaluate(element => ({
+      actual: element.getBoundingClientRect().height,
+      line: Number.parseFloat(getComputedStyle(element).lineHeight),
+    }));
+    expect(overviewHeight.actual).toBeLessThanOrEqual(overviewHeight.line + 2);
     await expect(page.locator('.task-card')).toHaveCount(6);
     await expect(page.locator('.task-progress')).toHaveCount(3);
     for (const [state, percent] of [['active', 70], ['waiting', 35], ['unknown', null]]) {

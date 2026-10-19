@@ -78,7 +78,7 @@ All goals done/canceled closes idle model processes; blocked or awaiting review 
 
 ### Agent-maintained collaboration overview
 
-Agents can choose what to present through `overview_read` and `overview_write` during normal contributions. Their notes and ordered fact references are persisted with an author, version and expiry. Facts carry their source and scope; external admission is distinct from execution, and an unobserved model stays unknown. Stale or expired overviews are visibly unavailable rather than presented as current. The product supplies no default vendor grouping or personal example counts and starts no model just to refresh this text. See the [overview contract](docs/architecture.md#协作概览).
+Agents can choose what to present through `overview_read` and `overview_write` during normal contributions. Their notes and ordered fact references are persisted with an author, version and expiry. Facts carry their source and scope; external admission is distinct from execution, and an unobserved model stays unknown. The main area stays a compact AI-authored line. Stale or expired reports remain visibly marked as previous, using their own verified values; legacy historical values that were not saved stay unknown. Evidence and metadata remain in the formal interface, while real errors are shown separately. The product supplies no default vendor grouping or personal example counts and starts no model just to refresh this text. See the [overview contract](docs/architecture.md#协作概览).
 
 ### Discuss a plan in the native conversation
 

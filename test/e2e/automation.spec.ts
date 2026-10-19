@@ -163,7 +163,7 @@ test('English initialization is localized while standalone preview stays clean a
   await page.goto('/');
   await expect(page.getByRole('banner').getByRole('button')).toHaveCount(1);
   await expect(page.getByRole('button', { name: /自动认领|Auto-claim/ })).toHaveCount(0);
-  await expect(page.getByRole('region', { name: '协作概览', exact: true })).toContainText('协作概览暂不可核实');
+  await expect(page.getByRole('region', { name: '协作概览', exact: true })).toHaveText('协作情况未知');
   await expect(page.getByRole('button', { name: '停止协作', exact: true })).toHaveCount(0);
   await expect(page.getByRole('tab')).toHaveText(['任务管理', '协作环境', '共享面板']);
 });

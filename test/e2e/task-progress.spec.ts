@@ -32,7 +32,7 @@ test('shows reported progress only in progress and keeps execution independent',
   await expect(card(page, 'unknown').getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
   await expect(card(page, 'unknown')).not.toContainText('0%');
   await expect(card(page, 'review').getByRole('progressbar')).toHaveCount(0);
-  await expect(page.getByRole('region', { name: '协作概览', exact: true })).toContainText('尚无有效协作概览');
+  await expect(page.getByRole('region', { name: '协作概览', exact: true })).toContainText('协作情况未知');
   expect(await page.evaluate(async () => (await (await fetch('/api/runtime')).json()).activity)).toMatchObject({ running: 0, idle: 1 });
   await page.screenshot({ path: testInfo.outputPath('progress-three-states.png') });
   activity.running = 1; activity.idle = 0; activity.state = 'running';
