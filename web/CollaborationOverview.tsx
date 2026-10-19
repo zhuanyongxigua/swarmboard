@@ -54,7 +54,7 @@ export function CollaborationOverview({ snapshot }: { snapshot: OverviewSnapshot
         <dt>{t('汇报来源')}</dt><dd>{record.authorId}</dd>
         <dt>{t('更新时间')}</dt><dd>{timestamp(record.updatedAt)}</dd>
         <dt>{t('有效至')}</dt><dd>{timestamp(record.expiresAt)}</dd>
-        <dt>{t('当前个人偏好版本')}</dt><dd>{record.preferencesVersion}</dd>
+        <dt>{t('采用的个人偏好版本')}</dt><dd>{record.preferencesVersion}</dd>
         {current && unique.map(fact => <div className="overview-source" key={fact.id}>
           <dt>{t(fact.scope)}</dt><dd>{fact.source} · {timestamp(snapshot.facts.observedAt)}</dd>
         </div>)}

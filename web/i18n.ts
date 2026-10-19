@@ -3,7 +3,7 @@
 export const locale = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('lang') === 'en' ? 'en' : 'zh-CN';
 const english: Record<string, string> = {
   '协作概览': 'Collaboration overview', 'AI 说明': 'AI note', '来源': 'Source',
-  '概览依据': 'Overview evidence', '有效至': 'Valid until', '当前个人偏好版本': 'Board preference version',
+  '概览依据': 'Overview evidence', '有效至': 'Valid until', '采用的个人偏好版本': 'Preference version used',
   '正在读取协作概览…': 'Loading collaboration overview…', '协作概览暂不可核实': 'Collaboration overview cannot currently be verified',
   '概览已失效，请在正常工作回合中更新。': 'The overview is stale. Update it during a normal contribution.',
   '尚无有效协作概览': 'No current collaboration overview', '未知': 'Unknown', '引用已失效': 'Reference unavailable',
