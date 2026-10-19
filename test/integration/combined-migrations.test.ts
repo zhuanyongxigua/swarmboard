@@ -22,7 +22,7 @@ it('creates all three features and preserves independent versions and a closed f
   const progress = store.writeTaskProgress(task.id, { expectedVersion: claimed.version, agentId: actor.id, progress: report });
   expect(store.closeResourceAdmission(actor.id)).toBe(true);
   const resource = store.createResource({ name: 'Synthetic resource' });
-  expect(schema(store.db)).toBe(8);
+  expect(schema(store.db)).toBe(9);
   store.close();
   const next = new Store(path);
   try {
@@ -42,11 +42,11 @@ it('upgrades the actual v5 table layout without changing legacy rows or board id
   const resource = store.createResource({ name: 'Retained resource', kind: 'legacy', accessNotes: 'Retain' });
   store.declareUsage({ resourceId: resource.id, agentId: actor.id, purpose: 'Retained usage' });
   const rows = oldRows(store.db), boardId = store.readAutomation().boardId;
-  store.db.exec(`${dropFence} DROP TABLE board_preferences; DROP TABLE task_progress; PRAGMA user_version=5;`);
+  store.db.exec(`DROP TABLE board_overview; ${dropFence} DROP TABLE board_preferences; DROP TABLE task_progress; PRAGMA user_version=5;`);
   store.close();
   const next = new Store(path);
   try {
-    expect(schema(next.db)).toBe(8);
+    expect(schema(next.db)).toBe(9);
     expect(oldRows(next.db)).toEqual(rows);
     expect(next.readPreferences()).toMatchObject({ boardId, version: 0, text: '' });
     expect(next.readTask(task.id).progress).toBeNull();
@@ -58,14 +58,14 @@ it('supports the declared preference v6 then progress v7 upgrade sequence withou
   const path = file(), store = new Store(path);
   const task = store.createTask({ title: 'Retained goal' });
   const preference = store.writePreferences({ text: 'Retained preference', source: 'main-chat-relay', expectedVersion: 0 });
-  store.db.exec(`${dropFence} DROP TABLE task_progress; PRAGMA user_version=6;`); store.close();
+  store.db.exec(`DROP TABLE board_overview; ${dropFence} DROP TABLE task_progress; PRAGMA user_version=6;`); store.close();
   const fromSix = new Store(path);
   expect(fromSix.readPreferences()).toEqual(preference);
   const progress = fromSix.writeTaskProgress(task.id, { expectedVersion: task.version, progress: report });
-  fromSix.db.exec(`${dropFence} PRAGMA user_version=7;`); fromSix.close();
+  fromSix.db.exec(`DROP TABLE board_overview; ${dropFence} PRAGMA user_version=7;`); fromSix.close();
   const fromSeven = new Store(path);
   try {
-    expect(schema(fromSeven.db)).toBe(8);
+    expect(schema(fromSeven.db)).toBe(9);
     expect(fromSeven.readPreferences()).toEqual(preference);
     expect(fromSeven.readTask(task.id)).toEqual(progress);
   } finally { fromSeven.close(); }
@@ -73,7 +73,7 @@ it('supports the declared preference v6 then progress v7 upgrade sequence withou
 
 it.each(['progress', 'retirement'])('rejects the unpublished standalone %s v6 rather than guessing its meaning', variant => {
   const path = file(), store = new Store(path);
-  store.db.exec('DROP TABLE board_preferences;');
+  store.db.exec('DROP TABLE board_overview; DROP TABLE board_preferences;');
   if (variant === 'progress') store.db.exec(dropFence);
   else store.db.exec('DROP TABLE task_progress;');
   store.db.exec('PRAGMA user_version=6;'); store.close();
@@ -87,7 +87,7 @@ it.each(['progress', 'retirement'])('rejects the unpublished standalone %s v6 ra
 
 it('rolls the complete upgrade back when a later migration fails', () => {
   const path = file(), store = new Store(path);
-  store.db.exec(`${dropFence} DROP TABLE board_preferences; DROP TABLE task_progress; CREATE VIEW task_progress AS SELECT id AS taskId FROM tasks; PRAGMA user_version=5;`);
+  store.db.exec(`DROP TABLE board_overview; ${dropFence} DROP TABLE board_preferences; DROP TABLE task_progress; CREATE VIEW task_progress AS SELECT id AS taskId FROM tasks; PRAGMA user_version=5;`);
   const rows = oldRows(store.db); store.close();
   expect(() => new Store(path)).toThrow(/already exists/);
   const db = new DatabaseSync(path);

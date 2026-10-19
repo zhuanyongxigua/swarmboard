@@ -40,7 +40,7 @@ codex plugin add swarmboard@swarmboard-local
 codex plugin list --marketplace swarmboard-local --json
 ```
 
-Restart the desktop app to load the new files. Collaboration data lives outside the plugin installation directory; rebuilding or updating the package does not overwrite the database.
+Restart the desktop app to load the new files. Collaboration data lives outside the plugin installation directory; rebuilding or updating the package does not overwrite the database. Schema 9 adds overview storage. Before upgrading, use authorized backend maintenance controls to pause new dispatch, let in-flight turns finish safely, and back up the board database, worker sidecar and configuration at one consistent checkpoint. A schema 8 binary cannot reopen a schema 9 database; rollback requires the matching binary and complete consistent backup, never a live database version downgrade.
 
 ## Portable ZIP
 
@@ -109,4 +109,4 @@ The command builds the current source, starts a temporary loopback service, writ
 
 Bind a human-authorized source project once with `pool_configure`; three equal peers are provided by default. A single existing authorized worker binding upgrades automatically and retains an explicit human pause. Peers receive committed task/context events and negotiate their own scopes in shared context. Internal subproblems never become task cards or resource definitions.
 
-All goals done/canceled closes idle model processes; blocked/in_review waits for events. Stop/Resume is versioned and does not discard code or history. Active turns finish safely. No native scheduled conversation is created; old schedules require explicit cleanup through official host tools. Before upgrading a separately running `--event-runtime` daemon, stop that old version safely, then start the installed new entrypoint. See [lifecycle and recovery](event-workers.md) (Chinese).
+All goals done/canceled closes idle model processes; blocked/in_review waits for events. The persistent Stop button is removed; authorized backend maintenance controls and resume remain versioned and do not discard code or history. Active turns finish safely. No native scheduled conversation is created; old schedules require explicit cleanup through official host tools. Before upgrading a separately running `--event-runtime` daemon, stop that old version safely, then start the installed new entrypoint. See [lifecycle and recovery](event-workers.md) (Chinese).
