@@ -53,8 +53,10 @@ const english = {
   '个人偏好': 'Personal preferences',
   '尚无个人偏好。': 'No personal preferences yet.',
   '资源池': 'Resources', '协作环境': 'Collaboration environment', '查看资源 dev-a': 'View resource dev-a', '共享面板': 'Shared board',
-  '文档示例数据：仅显示已登记的原生成员；当前活动与模型身份未知。': 'Documentation sample data: only registered native members are shown; current activity and model identity are unknown.',
+  '文档示例：': 'Documentation sample:',
+  '原生登记': 'Native registrations', '· 外部模型': '· External model',
   '协作概览': 'Collaboration overview', '未知': 'Unknown', '停止协作': 'Stop collaboration',
+  '恢复协作': 'Resume collaboration', '增加成员': 'Add member', '减少成员': 'Reduce member',
 };
 export function screenshotCopy(locale, text) {
   if (locale !== 'en') return text;
