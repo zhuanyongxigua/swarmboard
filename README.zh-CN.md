@@ -127,6 +127,8 @@ codex plugin add swarmboard@swarmboard-local
 
 ## 开发与文档
 
+[研发文档索引](docs/index.md)
+
 ```sh
 npx playwright install chromium
 npm run check

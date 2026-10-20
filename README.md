@@ -127,6 +127,8 @@ The default organization follows the whole board and notifies every member about
 
 ## Development and documentation
 
+[Developer documentation](docs/index.md)
+
 ```sh
 npx playwright install chromium
 npm run check
