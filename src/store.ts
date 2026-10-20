@@ -133,7 +133,7 @@ export class Store {
           PRAGMA user_version=8;
         `);
         if (version < 9) this.db.exec('CREATE TABLE board_overview(id INTEGER PRIMARY KEY CHECK(id=1),data TEXT NOT NULL); PRAGMA user_version=9;');
-        if (version < 10) this.db.exec('CREATE TABLE overview_status_facts(member_key TEXT PRIMARY KEY,data TEXT NOT NULL); PRAGMA user_version=10;');
+        if (version < 10) this.db.exec('CREATE TABLE overview_status_facts(member_id TEXT PRIMARY KEY,data TEXT NOT NULL); PRAGMA user_version=10;');
       });
     } catch (error) { this.db.close(); throw error; }
   }
@@ -250,16 +250,16 @@ export class Store {
       return next;
     });
   }
-  // Self-registered seat status facts. One row per (harness, member): a
-  // re-registration overwrites the previous envelope for that binding; expired
-  // rows are kept so stale groups surface as last-recorded, not as zero.
+  // Self-registered seat status facts. One row per member identity: the
+  // harness label is updatable metadata inside the envelope, so a re-registered
+  // member replaces its row and duplicate identities can never count twice.
+  // Expired rows are kept so stale groups surface as last-recorded, not zero.
   readOverviewStatusFacts(): StoredStatusFact[] {
-    const rows = this.db.prepare('SELECT data FROM overview_status_facts ORDER BY member_key').all() as { data: string }[];
+    const rows = this.db.prepare('SELECT data FROM overview_status_facts ORDER BY member_id').all() as { data: string }[];
     return rows.map(row => JSON.parse(row.data) as StoredStatusFact);
   }
   saveOverviewStatusFact(fact: StoredStatusFact): void {
-    const memberKey = `${fact.harness}\u0000${fact.memberId}`;
-    this.db.prepare('INSERT INTO overview_status_facts VALUES(?,?) ON CONFLICT(member_key) DO UPDATE SET data=excluded.data').run(memberKey, JSON.stringify(fact));
+    this.db.prepare('INSERT INTO overview_status_facts VALUES(?,?) ON CONFLICT(member_id) DO UPDATE SET data=excluded.data').run(fact.memberId, JSON.stringify(fact));
   }
   // Trusted human-host boundary only: do not expose this mutator to bound agents.
   // Source records declared provenance; it is never an authorization credential.

@@ -51,18 +51,54 @@ describe('registerStatusFact', () => {
     expect(stored.expiresAt).toBe('2026-10-20T03:15:00.000Z');
     expect((stored as Record<string, unknown>).ttlSeconds).toBeUndefined();
   });
-  it('upserts per harness/member and reopens durably', () => {
+  it('upserts one row per member identity (harness is updatable metadata) and reopens durably', () => {
     const path = `${process.env.TMPDIR ?? '/tmp'}/overview-status-facts-${Date.now()}.sqlite`;
     const fileStore = new Store(path);
     registerStatusFact(fileStore, input(), 'member-a', NOW);
     registerStatusFact(fileStore, input({ classification: 'unknown', activity: undefined, modelId: null }), 'member-a', NOW + 1000);
     registerStatusFact(fileStore, input({ harness: 'dsh' }), 'member-b', NOW);
+    // same identity under a different harness label replaces its row instead of adding one
+    registerStatusFact(fileStore, input({ harness: 'dsh' }), 'member-a', NOW + 2000);
     expect(fileStore.readOverviewStatusFacts()).toHaveLength(2);
+    expect(fileStore.readOverviewStatusFacts().find(f => f.memberId === 'member-a')).toMatchObject({ harness: 'dsh', classification: 'fact' });
     fileStore.close();
     const reopened = new Store(path);
     expect(reopened.readOverviewStatusFacts()).toHaveLength(2);
-    expect(reopened.readOverviewStatusFacts().find(f => f.memberId === 'member-a')?.classification).toBe('unknown');
     reopened.close();
+  });
+  it('rejects stale, future or predating evidence timestamps instead of refreshing them with a new TTL', () => {
+    expect(() => registerStatusFact(store, input({ activity: 'executing', executionEvidence: { kind: 'self-in-turn', at: '2001-01-01T00:00:00.000Z' }, asOf: '2001-01-01T00:00:00.000Z' }), 'member-a', NOW)).toThrow(/asOf must fall inside/);
+    expect(() => registerStatusFact(store, input({ asOf: '2026-10-20T03:30:00.000Z' }), 'member-a', NOW)).toThrow(/asOf must fall inside/);
+    expect(() => registerStatusFact(store, input({ activity: 'executing', executionEvidence: { kind: 'self-in-turn', at: '2001-01-01T00:00:00.000Z' } }), 'member-a', NOW)).toThrow(/evidence must fall inside/);
+    expect(() => registerStatusFact(store, input({ activity: 'executing', executionEvidence: { kind: 'self-in-turn', at: '2026-10-20T02:58:00.000Z' } }), 'member-a', NOW)).toThrow(/cannot predate/);
+  });
+  it('aggregation never counts executing evidence outside the hard freshness bound', () => {
+    const oldEvidence = executing('a', { executionEvidence: { kind: 'self-in-turn', at: '2026-10-20T00:30:00.000Z' } });
+    expect(Date.now).toBeTruthy();
+    const summary = aggregateStatusFacts([oldEvidence], Date.parse('2026-10-20T03:00:00.000Z'));
+    expect(summary.executing).toBe(0);
+    expect(summary.groups.zcode.unknown).toBe(1);
+  });
+  it('free-form harness labels cannot reach object prototypes', () => {
+    const summary = aggregateStatusFacts([
+      executing('a', { harness: '__proto__' }),
+      executing('b', { harness: 'constructor' }),
+      executing('c', { harness: '__proto__', classification: 'unknown', activity: undefined, modelId: null }),
+    ], NOW);
+    expect(summary.executing).toBe(2);
+    expect(Object.keys(summary.groups).sort()).toEqual(['__proto__', 'constructor']);
+    expect(Object.getOwnPropertyDescriptor(summary.groups, '__proto__')).toBeDefined();
+    expect(({} as Record<string, unknown>).membersTotal).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(summary.groups)).__proto__).toBeDefined();
+    expect(summary.groups['__proto__']!.models).toEqual([{ modelId: 'GLM-5.3', count: 1, executing: 1 }]);
+  });
+  it('duplicate identity across harness labels counts once after identity upsert', () => {
+    registerStatusFact(store, input({ harness: 'alpha-harness' }), 'same-member', NOW);
+    registerStatusFact(store, input({ harness: 'beta-harness' }), 'same-member', NOW + 1000);
+    const summary = aggregateStatusFacts(store.readOverviewStatusFacts(), NOW + 1000);
+    expect(summary.registered).toBe(1);
+    expect(summary.executing <= 1).toBe(true);
+    expect(Object.keys(summary.groups)).toEqual(['beta-harness']);
   });
 });
 
