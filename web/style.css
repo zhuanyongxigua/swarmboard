@@ -180,7 +180,8 @@ dialog::backdrop { background: light-dark(#0005, #0008); }
 .member-limit-tooltip { position: absolute; top: calc(100% + 6px); right: 0; z-index: 10; width: max-content; max-width: min(240px, 80vw); padding: 6px 10px; border-radius: 6px; background: var(--button); color: var(--button-text); box-shadow: 0 2px 8px #0002; visibility: hidden; }
 .add-peer-control:hover .member-limit-tooltip, .add-peer-control:focus-visible .member-limit-tooltip { visibility: visible; }
 
-.settings-button { margin-left: auto; display: grid; place-items: center; width: 34px; height: 34px; flex-shrink: 0; border: 0; background: transparent; color: var(--muted); border-radius: 5px; }
+.settings-button { margin-left: auto; display: grid; place-items: center; width: 34px; height: 34px; min-width: 34px; min-height: 34px; padding: 0; flex-shrink: 0; border: 0; background: transparent; color: var(--muted); border-radius: 50%; }
+@media (pointer: coarse) { .settings-button { width: 44px; height: 44px; min-width: 44px; min-height: 44px; } }
 .settings-button:hover { background: var(--hover); color: var(--text); }
 .settings-dialog { width: min(760px, calc(100% - 28px)); }
 .settings-body { padding: 20px 23px; }
