@@ -78,12 +78,14 @@ test('keeps both underlying pending states editable and hides only an explicit t
   await expect(status).toHaveValue('in_review');
   await status.selectOption('blocked');
   await page.getByRole('button', { name: '保存修改', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   expect((await savedTasks(request, isolatedUrl)).find(item => item.id === task.id)).toMatchObject({ status: 'blocked', version: 3 });
   await expect(page.locator(`[data-card-id="${task.id}"]`).getByText('受阻', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: `查看任务 ${task.title}`, exact: true }).click();
   await expect(status).toHaveValue('blocked');
   await status.selectOption('done');
   await page.getByRole('button', { name: '保存修改', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.locator(`[data-card-id="${task.id}"]`)).toHaveCount(0);
   expect((await savedTasks(request, isolatedUrl)).find(item => item.id === task.id)).toMatchObject({ status: 'done', version: 4 });
 });
