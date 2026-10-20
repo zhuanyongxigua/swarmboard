@@ -159,6 +159,7 @@ export class EventRuntime {
     this.notify(); return collaborator;
   }
   configurePool(input: unknown) { const pool = this.pool.configure(input); this.notify(); return pool; }
+  configureCapacity(input: unknown) { const pool = this.pool.capacity(input); this.notify(); return pool; }
   controlPool(input: unknown) { const pool = this.pool.control(input); this.notify(); return pool; }
   reducePool(input: unknown) { const result = this.pool.reduce(input); this.notify(); return result; }
   register(input: unknown) {

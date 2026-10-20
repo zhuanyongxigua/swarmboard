@@ -26,16 +26,17 @@ export class WorkerPool {
       if (before && (before.memberIds.length || ['active', 'stopping'].includes(before.state))) {
         const widening = before.taskIds.length > 0 && data.taskIds?.length === 0;
         if (workspacePath !== before.workspacePath || JSON.stringify(taskIds) !== JSON.stringify(before.taskIds) && !widening) throw new AppError('POOL_BOUND', 'Do not replace a bound organization project or narrow its subscriptions', 409);
-        const maxSize = data.maxSize ?? Math.max(before.maxSize, data.size);
-        if (data.size < before.size || maxSize < data.size) throw new AppError('PEER_BUDGET', 'Keep existing members and a budget covering the requested size', 409);
+        const maxSize = data.maxSize ?? before.maxSize;
+        if (data.size < before.size || maxSize < data.size || data.size < (before.minSize ?? 1)) throw new AppError('PEER_BUDGET', 'Keep existing members within the configured minimum and budget', 409);
         const scopeRefresh = widening ? { id: randomUUID(), previousTaskIds: before.taskIds } : before.scopeRefresh;
         if (widening) this.workers.replaceMemberSubscriptions(before.id, taskIds);
         return this.workers.savePool({ ...before, size: data.size, maxSize, taskIds, scopeRefresh, version: before.version + 1 });
       }
-      const maxSize = data.maxSize ?? Math.max(data.size, 8);
-      if (maxSize < data.size) throw new AppError('PEER_BUDGET', 'Member budget must cover initial members');
+      const minSize = before?.minSize ?? 1;
+      const maxSize = data.maxSize ?? before?.maxSize ?? Math.max(data.size, 8);
+      if (maxSize < data.size || minSize > data.size) throw new AppError('PEER_BUDGET', 'Member budget and minimum must cover initial members');
       const pool: Pool = { id: before?.id ?? randomUUID(), version: (before?.version ?? 0) + 1,
-        workspacePath, size: data.size, maxSize, taskIds, enabled: true,
+        workspacePath, size: data.size, minSize, maxSize, taskIds, enabled: true,
         memberIds: [], state: 'ready', error: '' };
       return this.workers.savePool(pool);
     });
@@ -48,6 +49,11 @@ export class WorkerPool {
       return this.workers.savePool({ ...pool, enabled: data.enabled, version: pool.version + 1,
         state: data.enabled ? 'ready' : 'stopping' });
     });
+  }
+  capacity(input: unknown) {
+    this.workers.configureCapacity(input, worker => (worker.status === 'idle' || worker.status === 'error' && !worker.deliveryId ? 0 : worker.status === 'running' ? 2 : 4) + (this.hasUsage(worker.id) ? 1 : 0));
+    this.settleRetirements();
+    return this.workers.pool()!;
   }
   reduce(input: unknown) {
     const data = parse(poolSchemas.reduce, input);

@@ -48,6 +48,10 @@ export function createApp(options: AppOptions = {}) {
     try { if (!options.runtime) throw new AppError('RUNTIME_UNAVAILABLE', 'Event runtime is not active in this preview', 503); res.json(options.runtime.configurePool(req.body)); }
     catch (error) { next(error); }
   });
+  app.post('/api/pool/capacity', (req,res,next) => {
+    try { if (!options.runtime) throw new AppError('RUNTIME_UNAVAILABLE', 'Event runtime is not active in this preview', 503); res.json(options.runtime.configureCapacity(req.body)); }
+    catch (error) { next(error); }
+  });
   app.post('/api/pool/reduce', (req,res,next) => {
     try { if (!options.runtime) throw new AppError('RUNTIME_UNAVAILABLE', 'Event runtime is not active in this preview', 503); res.json(options.runtime.reducePool(req.body)); }
     catch (error) { next(error); }
