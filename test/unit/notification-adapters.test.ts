@@ -6,6 +6,8 @@ import {
   dedupeEntries,
   reconcileDelivery,
   resolveNotificationTargets,
+  resolveReminderTargets,
+  isIdleReminder,
   type DeliveryIntent,
   type NotificationAdapterRegistration,
 } from '../../src/notification-adapters.js';
@@ -99,6 +101,60 @@ describe('versioned replacement and board-level scope', () => {
       .toBe('no-capability');
     expect(resolveNotificationTargets(entry({ kind: 'MESSAGE', taskId: 'goal' }), [synthetic({ capabilities: ['durableDelivery', 'timedReminder'] })], { capability: 'timedReminder' }).targets)
       .toHaveLength(1);
+  });
+});
+
+describe('recipient isolation (P1 from 4788)', () => {
+  const channel = (memberId: string, boardWide = false) => ({
+    id: 'chan-' + memberId, version: 1, displayName: 'chan', harness: 'h', enabled: true,
+    capabilities: ['durableDelivery'] as const,
+    members: [{ memberId, sessionRef: 'sess-' + memberId, taskIds: ['goal'], boardWide }],
+  });
+  it('never delivers a message addressed to someone else, even inside the task scope', () => {
+    const adapters = [channel('member-b')];
+    const toOther = entry({ kind: 'MESSAGE', taskId: 'goal', recipientId: 'member-c' });
+    expect(resolveNotificationTargets(toOther, adapters).targets).toHaveLength(0);
+    expect(resolveNotificationTargets(toOther, adapters).skipped[0]?.reason).toBe('out-of-scope');
+  });
+  it('never lets boardWide capture a message addressed to someone else', () => {
+    const adapters = [channel('member-b', true)];
+    const toOther = entry({ kind: 'MESSAGE', recipientId: 'member-c' });
+    expect(resolveNotificationTargets(toOther, adapters).targets).toHaveLength(0);
+  });
+  it('delivers a message addressed to the member itself', () => {
+    const adapters = [channel('member-b')];
+    const mine = entry({ kind: 'MESSAGE', recipientId: 'member-b' });
+    expect(resolveNotificationTargets(mine, adapters).targets.map(target => target.memberId)).toEqual(['member-b']);
+  });
+  it('delivers a public board-level event only to boardWide members', () => {
+    const announcement = entry({ kind: 'OBSERVED', agentId: 'human', detail: '{"status":"in_progress"}' });
+    expect(resolveNotificationTargets(announcement, [channel('member-b')]).targets).toHaveLength(0);
+    expect(resolveNotificationTargets(announcement, [channel('member-b', true)]).targets).toHaveLength(1);
+  });
+});
+
+describe('public idle reminder targeting', () => {
+  const channel = (memberId: string, boardWide = false) => ({
+    id: 'chan-' + memberId, version: 1, displayName: 'chan', harness: 'h', enabled: true,
+    capabilities: ['durableDelivery'] as const,
+    members: [{ memberId, sessionRef: 'sess-' + memberId, taskIds: [] as string[], boardWide }],
+  });
+  const reminder = entry({ kind: 'MESSAGE', agentId: 'runtime-pool-1', summary: 'IDLE_RECOVERY: inspect stranded human goals', recipientId: 'worker-1' });
+
+  it('recognises the runtime reminder as a public signal', () => {
+    expect(isIdleReminder(reminder)).toBe(true);
+    expect(isIdleReminder(entry({ kind: 'MESSAGE' }))).toBe(false);
+  });
+
+  it('reaches every registered member without boardWide or a task subscription', () => {
+    const targets = resolveReminderTargets(reminder, [channel('member-b')]);
+    expect(targets.targets.map(target => target.memberId)).toEqual(['member-b']);
+  });
+
+  it('still never treats the reminder as a directed message for normal delivery', () => {
+    // The rotation recipientId belongs to an internal worker; a normal resolver
+    // must not hand this to an unrelated member.
+    expect(resolveNotificationTargets(reminder, [channel('member-b')]).targets).toHaveLength(0);
   });
 });
 

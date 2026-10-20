@@ -8,7 +8,7 @@ import type { Entry } from './store.js';
 import type { Store } from './store.js';
 import type { CollaboratorStore } from './collaborators.js';
 import { NotificationAdapterStore } from './notification-adapter-store.js';
-import { resolveNotificationTargets, type DeliveryResolution } from './notification-adapters.js';
+import { isIdleReminder, resolveNotificationTargets, resolveReminderTargets, type DeliveryResolution } from './notification-adapters.js';
 
 export interface NotificationDispatcher {
   /** Record durable intents for one published entry and report the resolution.
@@ -34,7 +34,11 @@ export function createNotificationDispatcher(board: Store, collaborators?: Colla
       return page.items.length;
     },
     dispatch(entry: Entry): DeliveryResolution {
-      const resolution = resolveNotificationTargets(entry, store.list());
+      // An idle reminder is a public board signal: its recipientId only rotates
+      // the internal wake-up, so every registered member is an applicable target.
+      const resolution = isIdleReminder(entry)
+        ? resolveReminderTargets(entry, store.list())
+        : resolveNotificationTargets(entry, store.list());
       // Re-check admission and goal state at delivery time: a channel may have
       // been registered while the collaborator was active and revoked since, and
       // a finished goal must not wake anyone.

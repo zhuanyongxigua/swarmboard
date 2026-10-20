@@ -184,6 +184,9 @@ export function dedupeEntries(entries: readonly Entry[]): Entry[] {
 }
 
 function memberAccepts(member: AdapterMember, entry: Entry): 'accept' | 'out-of-scope' {
+  // A message addressed to another recipient is never delivered to this member,
+  // whatever its task scope or boardWide flag says: addressing wins over scope.
+  if (entry.recipientId !== undefined && entry.recipientId !== member.memberId) return 'out-of-scope';
   if (entry.recipientId === member.memberId) return 'accept';
   if (entry.taskId !== undefined) {
     return member.taskIds.includes(entry.taskId) || member.boardWide === true ? 'accept' : 'out-of-scope';
@@ -243,6 +246,49 @@ export function resolveNotificationTargets(entry: Entry, adapters: readonly Noti
       }
       if (memberAccepts(member, entry) === 'out-of-scope') {
         resolution.skipped.push({ adapterId: adapter.id, memberId: member.memberId, reason: 'out-of-scope' });
+        continue;
+      }
+      resolution.targets.push({ adapterId: adapter.id, memberId: member.memberId, sessionRef: member.sessionRef });
+    }
+  }
+  return resolution;
+}
+
+/** True for the runtime's idle-recovery reminder, which is a public board signal. */
+export function isIdleReminder(entry: Entry): boolean {
+  return typeof entry.agentId === 'string' && entry.agentId.startsWith('runtime-') &&
+    typeof entry.summary === 'string' && entry.summary.startsWith('IDLE_RECOVERY');
+}
+
+/**
+ * Resolve who should hear a public idle reminder.
+ *
+ * The reminder is published with a `recipientId` that only rotates the internal
+ * pool wake-up, so it must not be read as an addressing decision: every enabled
+ * registered member is an applicable target, and no `boardWide` opt-in, foreign
+ * recipient or task subscription is involved.
+ */
+export function resolveReminderTargets(entry: Entry, adapters: readonly NotificationAdapterRegistration[], options: ResolveOptions = {}): DeliveryResolution {
+  const resolution: DeliveryResolution = { targets: [], skipped: [] };
+  const required = options.capability === undefined ? 'durableDelivery' : options.capability;
+  for (const adapter of adapters) {
+    try {
+      validateRegistration(adapter);
+    } catch {
+      resolution.skipped.push({ adapterId: adapter?.id ?? '(unnamed)', memberId: null, reason: 'invalid-registration' });
+      continue;
+    }
+    if (!adapter.enabled) {
+      resolution.skipped.push({ adapterId: adapter.id, memberId: null, reason: 'disabled' });
+      continue;
+    }
+    if (required !== null && !adapter.capabilities.includes(required)) {
+      resolution.skipped.push({ adapterId: adapter.id, memberId: null, reason: 'no-capability' });
+      continue;
+    }
+    for (const member of adapter.members) {
+      if (member.memberId === entry.agentId) {
+        resolution.skipped.push({ adapterId: adapter.id, memberId: member.memberId, reason: 'self-authored' });
         continue;
       }
       resolution.targets.push({ adapterId: adapter.id, memberId: member.memberId, sessionRef: member.sessionRef });

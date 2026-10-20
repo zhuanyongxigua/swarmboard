@@ -63,12 +63,12 @@ function fixture() {
 describe('external notification consumer contract', () => {
   it('receives a runtime reminder, confirms it, and never replays it after restart', async () => {
     const f = fixture();
-    // A board-wide channel is required for idle reminders: the reminder is
-    // directed to an internal pool worker, not to the external collaborator.
+    // Idle reminders are public board signals: a registered member receives one
+    // without boardWide and without subscribing to the (internal) rotation target.
     f.service.register(f.admitted.id, {
       id: 'synthetic-consumer', version: 1, displayName: 'Synthetic consumer', harness: 'synthetic',
       enabled: true, capabilities: ['durableDelivery', 'receipt', 'sameSessionContinuation'],
-      members: [{ memberId: f.admitted.id, sessionRef: f.admitted.sessionRef, taskIds: [], boardWide: true }],
+      members: [{ memberId: f.admitted.id, sessionRef: f.admitted.sessionRef, taskIds: [] }],
     } as never);
     await f.settle();
     f.tick(); await f.settle();
