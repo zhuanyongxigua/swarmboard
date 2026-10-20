@@ -25,7 +25,7 @@ export class NotificationAdapterStore {
       CREATE TABLE IF NOT EXISTS notification_adapters(id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, data TEXT NOT NULL, updatedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS notification_deliveries(adapterId TEXT NOT NULL, memberId TEXT NOT NULL, sequence INTEGER NOT NULL, intent TEXT NOT NULL, receipt TEXT, PRIMARY KEY(adapterId, memberId, sequence));
       CREATE TABLE IF NOT EXISTS notification_dispatched(entryId INTEGER NOT NULL, adapterId TEXT NOT NULL, memberId TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(entryId, adapterId, memberId));
-      CREATE TABLE IF NOT EXISTS notification_dispatch_progress(id INTEGER PRIMARY KEY CHECK(id=1), through INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS notification_adapter_floor(adapterId TEXT PRIMARY KEY, through INTEGER NOT NULL);
     `);
   }
 
@@ -43,6 +43,9 @@ export class NotificationAdapterStore {
     }
     this.db.prepare('INSERT INTO notification_adapters(id, enabled, data, updatedAt) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled, data=excluded.data, updatedAt=excluded.updatedAt')
       .run(adapter.id, adapter.enabled ? 1 : 0, JSON.stringify(adapter), now);
+    // Pin the dispatch floor at registration: a channel starts from the board
+    // position it was declared at, never from the beginning of history.
+    this.adapterFloor(adapter.id);
     return adapter;
   }
 
@@ -100,15 +103,28 @@ export class NotificationAdapterStore {
    * plus one. An unsettled (pending/unknown) sequence keeps this value fixed so
    * a caller cannot quietly advance past an unresolved delivery.
    */
-  /** Highest board entry already scanned for dispatch. */
-  dispatchedThrough(): number {
-    const row = this.db.prepare('SELECT through FROM notification_dispatch_progress WHERE id=1').get() as unknown as { through: number } | undefined;
-    return row?.through ?? 0;
+  /**
+   * Per-adapter scan floor. A channel starts at the board high-water mark of its
+   * registration, so a newly registered member never receives board history.
+   */
+  adapterFloor(adapterId: string): number {
+    const row = this.db.prepare('SELECT through FROM notification_adapter_floor WHERE adapterId=?').get(adapterId) as unknown as { through: number } | undefined;
+    if (row) return row.through;
+    // A bare database without the board schema simply starts at zero.
+    let highest: number;
+    try { highest = (this.db.prepare('SELECT COALESCE(MAX(id),0) AS value FROM entries').get() as unknown as { value: number }).value; } catch { highest = 0; }
+    this.db.prepare('INSERT OR IGNORE INTO notification_adapter_floor(adapterId, through) VALUES(?,?)').run(adapterId, highest);
+    return highest;
   }
 
-  /** Advance the scan watermark; never moves backwards. */
-  advanceDispatch(through: number): void {
-    this.db.prepare('INSERT INTO notification_dispatch_progress(id, through) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET through=MAX(through, excluded.through)').run(through);
+  /** Advance one adapter floor; never moves backwards. */
+  advanceAdapterFloor(adapterId: string, through: number): void {
+    this.db.prepare('INSERT INTO notification_adapter_floor(adapterId, through) VALUES(?,?) ON CONFLICT(adapterId) DO UPDATE SET through=MAX(through, excluded.through)').run(adapterId, through);
+  }
+
+  /** Drop a claim so a failed dispatch can be retried instead of wedging it. */
+  releaseDispatch(entryId: number, adapterId: string, memberId: string): void {
+    this.db.prepare('DELETE FROM notification_dispatched WHERE entryId=? AND adapterId=? AND memberId=?').run(entryId, adapterId, memberId);
   }
 
   /** Claim one entry for one channel member. False means it was already claimed. */

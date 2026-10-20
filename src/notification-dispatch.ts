@@ -8,13 +8,18 @@ import type { Entry } from './store.js';
 import type { Store } from './store.js';
 import type { CollaboratorStore } from './collaborators.js';
 import { NotificationAdapterStore } from './notification-adapter-store.js';
-import { isIdleReminder, resolveNotificationTargets, resolveReminderTargets, type DeliveryResolution } from './notification-adapters.js';
+import {
+  isIdleReminder,
+  resolveNotificationTargets,
+  resolveReminderTargets,
+  type DeliveryResolution,
+  type NotificationAdapterRegistration,
+} from './notification-adapters.js';
 
 export interface NotificationDispatcher {
-  /** Record durable intents for one published entry and report the resolution.
-   *  Each board entry is offered at most once, so a re-scan cannot duplicate it. */
+  /** Record durable intents for one published entry and report the resolution. */
   dispatch(entry: Entry): DeliveryResolution;
-  /** Offer every entry after the last dispatched one (bounded). */
+  /** Offer each channel the entries after its own floor (bounded). */
   dispatchPending(limit?: number): number;
   /** Currently registered channels, for status output. */
   adapters(): ReturnType<NotificationAdapterStore['list']>;
@@ -22,63 +27,105 @@ export interface NotificationDispatcher {
 
 export function createNotificationDispatcher(board: Store, collaborators?: CollaboratorStore): NotificationDispatcher {
   const store = new NotificationAdapterStore(board.db);
+
+  const admitted = (memberId: string): boolean => {
+    if (!collaborators) return true;
+    try {
+      const record = collaborators.get(memberId);
+      return record.enabled && !record.revokedAt;
+    } catch { return false; }
+  };
+
+  /**
+   * Record the intent for one target. A claim is persisted first for idempotency
+   * and released again if recording fails, so a transient failure cannot wedge
+   * the entry as claimed-but-undeliverable.
+   */
+  const recordTarget = (
+    entry: Entry,
+    target: { adapterId: string; memberId: string },
+    resolution: DeliveryResolution,
+  ): void => {
+    if (!admitted(target.memberId)) {
+      resolution.skipped.push({ adapterId: target.adapterId, memberId: target.memberId, reason: 'collaborator-inactive' });
+      return;
+    }
+    if (entry.taskId !== undefined) {
+      const task = (() => { try { return board.readTask(entry.taskId!); } catch { return undefined; } })();
+      if (!task || ['done', 'canceled'].includes(task.status)) {
+        resolution.skipped.push({ adapterId: target.adapterId, memberId: target.memberId, reason: 'goal-terminal' });
+        return;
+      }
+    }
+    // Idempotent per (entry, channel, member): a re-scan cannot duplicate it.
+    if (!store.claimDispatch(entry.id, target.adapterId, target.memberId)) return;
+    try {
+      const pending = store.pendingIntent(target.adapterId, target.memberId);
+      if (pending) {
+        // Busy merge: batch into the unconfirmed delivery rather than opening a
+        // second sequence, which the cross-sequence fence would reject.
+        store.appendEntries(target.adapterId, target.memberId, pending.sequence, [entry.id]);
+        return;
+      }
+      store.recordIntent({
+        adapterId: target.adapterId,
+        memberId: target.memberId,
+        sequence: store.nextSequence(target.adapterId, target.memberId),
+        entryIds: [entry.id],
+        createdAt: entry.createdAt,
+      });
+    } catch {
+      // Roll the claim back so the entry is retried later instead of being lost,
+      // and keep the failure inside this channel (acceptance-4 isolation).
+      store.releaseDispatch(entry.id, target.adapterId, target.memberId);
+      resolution.skipped.push({ adapterId: target.adapterId, memberId: target.memberId, reason: 'dispatch-failed' });
+    }
+  };
+
+  const applyTargets = (
+    entry: Entry,
+    resolution: DeliveryResolution,
+    filter?: (adapterId: string) => boolean,
+  ): DeliveryResolution => {
+    for (const target of resolution.targets) {
+      if (filter && !filter(target.adapterId)) continue;
+      recordTarget(entry, target, resolution);
+    }
+    return resolution;
+  };
+
+  const resolveAll = (entry: Entry, adapters: readonly NotificationAdapterRegistration[]): DeliveryResolution =>
+    // An idle reminder is a public board signal: its recipientId only rotates the
+    // internal wake-up, so every registered member is an applicable target.
+    isIdleReminder(entry)
+      ? resolveReminderTargets(entry, adapters)
+      : resolveNotificationTargets(entry, adapters);
+
+  const dispatchTo = (adapter: NotificationAdapterRegistration, entry: Entry): DeliveryResolution => {
+    const resolution = resolveAll(entry, [adapter]);
+    return applyTargets(entry, resolution, adapterId => adapterId === adapter.id);
+  };
+
   return {
     adapters: () => store.list(),
     dispatchPending(limit = 200): number {
-      if (!store.list().length) return 0;
-      const after = store.dispatchedThrough();
-      const page = board.readEntries({ after, limit });
-      for (const entry of page.items) this.dispatch(entry);
-      const highest = page.items.at(-1)?.id;
-      if (highest !== undefined) store.advanceDispatch(highest);
-      return page.items.length;
+      const adapters = store.list();
+      if (!adapters.length) return 0;
+      let scanned = 0;
+      for (const adapter of adapters) {
+        // Each channel has its own floor, so a newly registered member starts at
+        // the current board position instead of receiving the whole history.
+        const page = board.readEntries({ after: store.adapterFloor(adapter.id), limit });
+        for (const entry of page.items) dispatchTo(adapter, entry);
+        const highest = page.items.at(-1)?.id;
+        if (highest !== undefined) store.advanceAdapterFloor(adapter.id, highest);
+        scanned += page.items.length;
+      }
+      return scanned;
     },
     dispatch(entry: Entry): DeliveryResolution {
-      // An idle reminder is a public board signal: its recipientId only rotates
-      // the internal wake-up, so every registered member is an applicable target.
-      const resolution = isIdleReminder(entry)
-        ? resolveReminderTargets(entry, store.list())
-        : resolveNotificationTargets(entry, store.list());
-      // Re-check admission and goal state at delivery time: a channel may have
-      // been registered while the collaborator was active and revoked since, and
-      // a finished goal must not wake anyone.
-      const admitted = (memberId: string): boolean => {
-        if (!collaborators) return true;
-        try {
-          const record = collaborators.get(memberId);
-          return record.enabled && !record.revokedAt;
-        } catch { return false; }
-      };
-      for (const target of resolution.targets) {
-        if (!admitted(target.memberId)) {
-          resolution.skipped.push({ adapterId: target.adapterId, memberId: target.memberId, reason: 'collaborator-inactive' });
-          continue;
-        }
-        if (entry.taskId !== undefined) {
-          const task = (() => { try { return board.readTask(entry.taskId!); } catch { return undefined; } })();
-          if (!task || ['done', 'canceled'].includes(task.status)) {
-            resolution.skipped.push({ adapterId: target.adapterId, memberId: target.memberId, reason: 'goal-terminal' });
-            continue;
-          }
-        }
-        // Idempotent per (entry, channel, member): a re-scan cannot duplicate it.
-        if (!store.claimDispatch(entry.id, target.adapterId, target.memberId)) continue;
-        const pending = store.pendingIntent(target.adapterId, target.memberId);
-        if (pending) {
-          // Busy merge: batch into the unconfirmed delivery rather than opening
-          // a second sequence, which the cross-sequence fence would reject.
-          store.appendEntries(target.adapterId, target.memberId, pending.sequence, [entry.id]);
-          continue;
-        }
-        store.recordIntent({
-          adapterId: target.adapterId,
-          memberId: target.memberId,
-          sequence: store.nextSequence(target.adapterId, target.memberId),
-          entryIds: [entry.id],
-          createdAt: entry.createdAt,
-        });
-      }
-      return resolution;
+      const resolution = resolveAll(entry, store.list());
+      return applyTargets(entry, resolution);
     },
   };
 }

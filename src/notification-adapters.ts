@@ -61,7 +61,8 @@ export type DeliverySkipReason =
   | 'self-authored'
   | 'no-capability'
   | 'collaborator-inactive'
-  | 'goal-terminal';
+  | 'goal-terminal'
+  | 'dispatch-failed';
 
 export interface DeliveryTarget {
   adapterId: string;
