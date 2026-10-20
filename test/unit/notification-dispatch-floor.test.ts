@@ -37,6 +37,28 @@ describe('per-channel dispatch floor', () => {
     expect(unsettled[0]!.intent.entryIds).toEqual([fresh.id]);
   });
 
+  it('does not advance the floor past a failed entry, so the runtime path retries it (P1-D)', () => {
+    const f = fixture();
+    f.register();
+    // First delivery, then reported unknown: the sequence is frozen.
+    f.message('first');
+    f.dispatcher.dispatchPending();
+    const seq = f.channels.unsettled()[0]!.intent.sequence;
+    f.channels.recordReceipt('synthetic', f.me.id, { sequence: seq, consumed: false });
+    // A new event arrives while frozen; the runtime path (dispatchPending) fails it.
+    const blocked = f.message('blocked');
+    expect(f.dispatcher.dispatchPending()).toBeGreaterThan(0);
+    expect(f.channels.unsettled().map(item => item.intent.sequence)).toEqual([seq]);
+    // Reconciliation opens the sequence; the SAME runtime path must deliver the
+    // event that failed earlier, not skip it because the floor moved on.
+    f.channels.recordAbandoned('synthetic', f.me.id, seq, 'reconciled by operator');
+    f.dispatcher.dispatchPending();
+    const unsettled = f.channels.unsettled();
+    expect(unsettled).toHaveLength(1);
+    expect(unsettled[0]!.intent.entryIds).toEqual([blocked.id]);
+    expect(unsettled[0]!.intent.sequence).toBe(seq + 1);
+  });
+
   it('releases the claim when the intent cannot be recorded, then delivers after reconciliation', () => {
     const f = fixture();
     f.register();

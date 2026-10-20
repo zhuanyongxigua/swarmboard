@@ -101,9 +101,11 @@ export function createNotificationDispatcher(board: Store, collaborators?: Colla
       ? resolveReminderTargets(entry, adapters)
       : resolveNotificationTargets(entry, adapters);
 
-  const dispatchTo = (adapter: NotificationAdapterRegistration, entry: Entry): DeliveryResolution => {
+  /** Dispatch one entry to one adapter; true when a target could not be recorded. */
+  const dispatchTo = (adapter: NotificationAdapterRegistration, entry: Entry): { resolution: DeliveryResolution; failed: boolean } => {
     const resolution = resolveAll(entry, [adapter]);
-    return applyTargets(entry, resolution, adapterId => adapterId === adapter.id);
+    applyTargets(entry, resolution, adapterId => adapterId === adapter.id);
+    return { resolution, failed: resolution.skipped.some(item => item.reason === 'dispatch-failed') };
   };
 
   return {
@@ -115,10 +117,18 @@ export function createNotificationDispatcher(board: Store, collaborators?: Colla
       for (const adapter of adapters) {
         // Each channel has its own floor, so a newly registered member starts at
         // the current board position instead of receiving the whole history.
-        const page = board.readEntries({ after: store.adapterFloor(adapter.id), limit });
-        for (const entry of page.items) dispatchTo(adapter, entry);
-        const highest = page.items.at(-1)?.id;
-        if (highest !== undefined) store.advanceAdapterFloor(adapter.id, highest);
+        const start = store.adapterFloor(adapter.id);
+        const page = board.readEntries({ after: start, limit });
+        let advanced = start;
+        for (const entry of page.items) {
+          const { failed } = dispatchTo(adapter, entry);
+          // Never move the floor past an entry this channel could not record:
+          // otherwise a failed event would sit below the floor and never be
+          // retried after the operator reconciles the frozen sequence.
+          if (failed) break;
+          advanced = entry.id;
+        }
+        if (advanced !== start) store.advanceAdapterFloor(adapter.id, advanced);
         scanned += page.items.length;
       }
       return scanned;
