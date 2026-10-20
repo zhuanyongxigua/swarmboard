@@ -51,6 +51,8 @@ Agent 心跳是会话活动信息。界面把超过两分钟未报告的会话�
 
 ### 个人偏好传输边界
 
+设置界面将原个人偏好显示为“系统提示词”，并增加独立的“用户提示词”。兼容数据、模式 11、独立版本、正式读写接口及原资源保留边界见 [看板提示词配置](board-prompt-settings.md)。
+
 `GET /api/preferences` 与 MCP `preferences_read` 返回同一当前快照。可信人类宿主通过 `PATCH /api/preferences` 或 MCP `preferences_write` 保存或清除，携带 `text`、`source`、`expectedVersion`；HTTP 沿用环回地址、同源和可选 Bearer 门禁。`source` 只记录声明的来源，不是身份或权限证明。服务访问权属于现有可信宿主模型，不提供对抗性多租户隔离，也不因自称人类而赋权。
 
 绑定原生成员和外部协作者没有 `preferences_write` 工具；读取当前偏好须连接的 `mayAct` 实时明确允许。撤销、暂停或目标全部终态后，`preferences_read` 拒绝读取；既有 `board_read`、`board_open` 保留安全收尾需要的原受限内容和更新提示，但移除 `preferences` 字段。未提供授权检查的绑定连接同样不能取得偏好。授权仍有效时，三条读取路径都从持久存储取当前版本，不依赖近期历史窗口。

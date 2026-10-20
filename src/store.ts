@@ -49,6 +49,7 @@ export type TaskSummary = Omit<Task, 'description' | 'acceptanceCriteria' | 'pro
 export interface Resource { id: string; name: string; kind: string; description: string; capabilities: string[]; accessNotes: string; version: number; createdAt: string; updatedAt: string }
 export interface Agent { id: string; name: string; lastSeenAt: string }
 export interface Preferences { boardId: string; text: string; source: typeof preferenceSources[number] | null; version: number; updatedAt: string | null }
+export interface PromptSettings { systemPrompt: Preferences; userPrompt: Preferences }
 export interface Entry { id: number; kind: typeof entryKinds[number]; agentId: string; summary: string; detail: string; taskId?: string; resourceId?: string; recipientId?: string; createdAt: string }
 export interface Usage { id: string; resourceId: string; agentId: string; purpose: string; scope: string; sharing: string; taskId?: string; active: boolean; version: number; createdAt: string; updatedAt: string }
 export function parse<T>(schema: z.ZodType<T>, input: unknown): T {
@@ -81,7 +82,7 @@ export class Store {
       // Separate desktop MCP processes must inspect and apply migrations under the same write lock.
       this.transaction(() => {
         const version = Number((this.db.prepare('PRAGMA user_version').get() as {user_version: number}).user_version);
-        if (version > 10) throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500);
+        if (version > 11) throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500);
         // Standalone review candidates reused v6; only the declared release sequence may upgrade.
         if (version >= 6) {
           const features = ['board_preferences', 'task_progress', 'resource_admission_fences', 'board_overview'];
@@ -89,6 +90,8 @@ export class Store {
             const exists = !!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table);
             if (exists !== (version >= index + 6)) throw new AppError('SCHEMA_VARIANT_MISMATCH', 'Database belongs to an incompatible unpublished schema candidate; restore its matching backup before upgrading', 500);
           }
+          const userPromptExists = !!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='board_user_prompt'").get();
+          if (userPromptExists !== (version >= 11)) throw new AppError('SCHEMA_VARIANT_MISMATCH', 'Database belongs to an incompatible prompt schema candidate', 500);
         }
         if (version === 0) this.db.exec(`
           CREATE TABLE agents(id TEXT PRIMARY KEY, name TEXT NOT NULL, lastSeenAt TEXT NOT NULL);
@@ -134,6 +137,11 @@ export class Store {
         `);
         if (version < 9) this.db.exec('CREATE TABLE board_overview(id INTEGER PRIMARY KEY CHECK(id=1),data TEXT NOT NULL); PRAGMA user_version=9;');
         if (version < 10) this.db.exec('CREATE TABLE overview_status_facts(member_id TEXT PRIMARY KEY,data TEXT NOT NULL); PRAGMA user_version=10;');
+        if (version < 11) this.db.exec(`
+          CREATE TABLE board_user_prompt(id INTEGER PRIMARY KEY CHECK(id=1), text TEXT NOT NULL, source TEXT CHECK(source IN ('human-input','main-chat-relay')), version INTEGER NOT NULL CHECK(version>=0), updatedAt TEXT);
+          INSERT INTO board_user_prompt VALUES(1,'',NULL,0,NULL);
+          PRAGMA user_version=11;
+        `);
       });
     } catch (error) { this.db.close(); throw error; }
   }
@@ -173,7 +181,7 @@ export class Store {
   private checkVersion(actual: number, expected: number) { if (actual !== expected) throw new AppError('VERSION_CONFLICT', 'State changed; read the latest version before retrying', 409); }
   private touch(agentId: string) { this.db.prepare('UPDATE agents SET lastSeenAt = ? WHERE id = ?').run(new Date().toISOString(), agentId); }
   board() {
-    return this.transaction(() => ({ preferences: this.readPreferences(), tasks: this.list<Task>('tasks'), resources: this.list<Resource>('resources'), usages: this.list<Usage>('usages'), agents: this.list<Agent>('agents'), entries: this.db.prepare('SELECT * FROM (SELECT * FROM entries ORDER BY id DESC LIMIT 100) ORDER BY id').all().map(row => this.decode('entries', row) as unknown as Entry), cursor: Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor) }));
+    return this.transaction(() => ({ preferences: this.readPreferences(), userPrompt: this.readUserPrompt(), tasks: this.list<Task>('tasks'), resources: this.list<Resource>('resources'), usages: this.list<Usage>('usages'), agents: this.list<Agent>('agents'), entries: this.db.prepare('SELECT * FROM (SELECT * FROM entries ORDER BY id DESC LIMIT 100) ORDER BY id').all().map(row => this.decode('entries', row) as unknown as Entry), cursor: Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor) }));
   }
   readTask(taskId: string): Task { return this.get<Task>('tasks', taskId); }
   // Runtime lifecycle checks need states, never full human requirements or context.
@@ -221,7 +229,7 @@ export class Store {
     return this.transaction(() => {
       const page = this.taskPage({}, subscribedIds);
       const visibility = Store.historyScopeClause(history ?? {});
-      return { preferences: this.readPreferences(), tasks: page.items, taskPage: { cursor: page.cursor, hasMore: page.hasMore },
+      return { preferences: this.readPreferences(), userPrompt: this.readUserPrompt(), tasks: page.items, taskPage: { cursor: page.cursor, hasMore: page.hasMore },
         resources: this.list<Resource>('resources'), usages: this.list<Usage>('usages'), agents: this.list<Agent>('agents'),
         entries: this.db.prepare(`SELECT id,kind,agentId,summary,substr(detail,1,1000) AS detail,length(detail)>1000 AS detailTruncated,taskId,resourceId,recipientId,createdAt FROM (SELECT * FROM entries ${visibility ? 'WHERE ' + visibility.clause : ''} ORDER BY id DESC LIMIT 20) ORDER BY id`).all(...(visibility?.values ?? [])).map(row => this.decode('entries', row)),
         cursor: Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor) };
@@ -234,6 +242,15 @@ export class Store {
   readPreferences(): Preferences {
     const row = this.db.prepare('SELECT text,source,version,updatedAt FROM board_preferences WHERE id=1').get() as unknown as Omit<Preferences, 'boardId'>;
     return { ...row, boardId: this.readAutomation().boardId };
+  }
+  readUserPrompt(): Preferences {
+    const row = this.db.prepare('SELECT text,source,version,updatedAt FROM board_user_prompt WHERE id=1').get() as unknown as Omit<Preferences, 'boardId'>;
+    return { ...row, boardId: this.readAutomation().boardId };
+  }
+  // One SQLite snapshot keeps the two independently versioned prompts coherent
+  // while preparing a normal worker turn. Display names do not grant authority.
+  readPromptSettings(): PromptSettings {
+    return this.transaction(() => ({ systemPrompt: this.readPreferences(), userPrompt: this.readUserPrompt() }));
   }
   readOverviewRecord(): OverviewRecord | null {
     const row = this.db.prepare('SELECT data FROM board_overview WHERE id=1').get();
@@ -275,6 +292,16 @@ export class Store {
       // Keep a versioned empty row when clearing so stale drafts cannot resurrect it.
       this.db.prepare('UPDATE board_preferences SET text=?,source=?,version=?,updatedAt=? WHERE id=1 AND version=?').run(next.text,next.source,next.version,next.updatedAt,before.version);
       this.append({ kind: 'OBSERVED', agentId: 'host-preferences', summary: 'Personal preferences updated', detail: JSON.stringify({ signalId: 'BOARD_PREFERENCES_UPDATED', version: next.version, source: next.source, cleared: next.text === '' }) });
+      return next;
+    });
+  }
+  writeUserPrompt(input: unknown): Preferences {
+    const data = parse(schemas.preferencesUpdate, input);
+    return this.transaction(() => {
+      const before = this.readUserPrompt(); this.checkVersion(before.version, data.expectedVersion);
+      const next = { ...before, text: data.text, source: data.source, version: before.version + 1, updatedAt: new Date().toISOString() };
+      this.db.prepare('UPDATE board_user_prompt SET text=?,source=?,version=?,updatedAt=? WHERE id=1 AND version=?').run(next.text,next.source,next.version,next.updatedAt,before.version);
+      this.append({ kind: 'OBSERVED', agentId: 'host-user-prompt', summary: 'User prompt updated', detail: JSON.stringify({ signalId: 'BOARD_USER_PROMPT_UPDATED', version: next.version, source: next.source, cleared: next.text === '' }) });
       return next;
     });
   }

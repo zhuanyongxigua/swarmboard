@@ -117,17 +117,17 @@ it('captures only selected verified values once, including unknown, and leaves l
   expect(read.status).toBe('stale');
   expect(read.record).not.toHaveProperty('factSnapshot');
   expect(read.record?.parts).toEqual(first.record?.parts);
-  expect(s.db.prepare('PRAGMA user_version').get()!.user_version).toBe(10);
+  expect(s.db.prepare('PRAGMA user_version').get()!.user_version).toBe(11);
 });
 
 it('appends schema nine to a real schema eight database without changing prior rows', () => {
   const dir = mkdtempSync(join(tmpdir(), 'overview-upgrade-')); cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, 'board.sqlite'), s = open(path);
   const task = s.createTask({ title: 'Retained' });
-  s.db.exec('DROP TABLE board_overview; DROP TABLE overview_status_facts; PRAGMA user_version=8;');
+  s.db.exec('DROP TABLE board_overview; DROP TABLE overview_status_facts; DROP TABLE board_user_prompt; PRAGMA user_version=8;');
   const upgraded = open(path);
   expect(upgraded.readTask(task.id)).toEqual(task);
-  expect(upgraded.db.prepare('PRAGMA user_version').get()!.user_version).toBe(10);
+  expect(upgraded.db.prepare('PRAGMA user_version').get()!.user_version).toBe(11);
   expect(readOverview(upgraded, source()).status).toBe('missing');
 });
 
@@ -145,7 +145,7 @@ it('rolls back the new migration when its target conflicts without mutating lega
   const dir = mkdtempSync(join(tmpdir(), 'overview-rollback-')); cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, 'board.sqlite'), s = open(path);
   const task = s.createTask({ title: 'Retained rollback goal' });
-  s.db.exec('DROP TABLE board_overview; DROP TABLE overview_status_facts; CREATE VIEW board_overview AS SELECT id FROM tasks; PRAGMA user_version=8;');
+  s.db.exec('DROP TABLE board_overview; DROP TABLE overview_status_facts; DROP TABLE board_user_prompt; CREATE VIEW board_overview AS SELECT id FROM tasks; PRAGMA user_version=8;');
   expect(() => new Store(path)).toThrow(/already exists/);
   expect(s.db.prepare('PRAGMA user_version').get()!.user_version).toBe(8);
   expect(s.readTask(task.id)).toEqual(task);

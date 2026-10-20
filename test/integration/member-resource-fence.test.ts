@@ -84,7 +84,7 @@ it('keeps admission closed across a crash before finalizing retirement and compl
 
 it('upgrades v5 without changing declaration history and retains release access', () => {
   const f = fixture(), member = f.workers.list()[0]!, usage = f.declare(member.id), snapshot = f.board.board();
-  f.board.db.exec('DROP TRIGGER usage_admission_insert; DROP TRIGGER usage_admission_update; DROP TABLE resource_admission_fences; DROP TABLE task_progress; DROP TABLE board_overview; DROP TABLE overview_status_facts; DROP TABLE board_preferences; PRAGMA user_version=5;');
+  f.board.db.exec('DROP TRIGGER usage_admission_insert; DROP TRIGGER usage_admission_update; DROP TABLE resource_admission_fences; DROP TABLE task_progress; DROP TABLE board_overview; DROP TABLE overview_status_facts; DROP TABLE board_user_prompt; DROP TABLE board_preferences; PRAGMA user_version=5;');
   const upgraded = new Store(f.path);
   try {
     expect(upgraded.board()).toEqual(snapshot);
