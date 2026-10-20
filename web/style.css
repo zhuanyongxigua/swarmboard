@@ -190,11 +190,7 @@ dialog::backdrop { background: light-dark(#0005, #0008); }
 .capacity-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
 .capacity-fields label { display: grid; gap: 6px; }
 .capacity-fields input { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
-.legacy-resources { margin: 24px 0; border-top: 1px solid var(--line); padding-top: 16px; }
-.legacy-resources summary { cursor: pointer; font-weight: 500; }
-.legacy-resources .resources { padding: 0; }
-.legacy-resources .resource-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); }
-@media (max-width: 560px) { .settings-body { padding: 16px; } .capacity-fields { grid-template-columns: 1fr; } .legacy-resources .resource-grid { display: grid; grid-template-columns: 1fr; } }
+@media (max-width: 560px) { .settings-body { padding: 16px; } .capacity-fields { grid-template-columns: 1fr; } }
 .settings-dialog[open] { display: flex; flex-direction: column; overflow: hidden; }
 .settings-dialog > .dialog-header { flex-shrink: 0; }
 .settings-dialog > .settings-body { overflow: auto; min-height: 0; }

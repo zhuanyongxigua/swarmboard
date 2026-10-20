@@ -1,5 +1,5 @@
 import { seedLegacyResource } from './legacy-fixtures.js';
-import { openResources, refreshBoard, closeSettings } from './settings-helpers.js';
+import { openSettings, refreshBoard, closeSettings } from './settings-helpers.js';
 import { test, expect } from '@playwright/test';
 
 test('preferences remain separate from empty resources, save, clear, and reload in both languages', async ({ page }) => {
@@ -14,9 +14,9 @@ test('preferences remain separate from empty resources, save, clear, and reload 
     return route.fulfill({ json: current });
   });
   await page.goto('/');
-  await openResources(page);
-  await expect(page.getByText('原资源记录', { exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '暂无资源', exact: true })).toBeVisible();
+  await openSettings(page);
+  await expect(page.getByText('原资源记录', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '暂无资源', exact: true })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: '系统提示词', exact: true })).toBeVisible();
   await expect(page.getByLabel('系统提示词内容', { exact: true })).toHaveValue('');
   await page.getByLabel('系统提示词内容', { exact: true }).fill('Synthetic preference for this fixture');
@@ -25,7 +25,7 @@ test('preferences remain separate from empty resources, save, clear, and reload 
   await expect(page.getByRole('status').filter({ hasText: '系统提示词已保存。' })).toBeVisible();
   expect(writes).toEqual([{ text: 'Synthetic preference for this fixture', expectedVersion: 0, source: 'main-chat-relay' }]);
   await page.reload();
-  await openResources(page);
+  await openSettings(page);
   await expect(page.getByLabel('当前保存的系统提示词')).toContainText('主聊天转达');
   await expect(page.getByLabel('系统提示词内容', { exact: true })).toHaveValue(current.text);
   await page.getByRole('button', { name: '清空系统提示词', exact: true }).click();
@@ -33,8 +33,8 @@ test('preferences remain separate from empty resources, save, clear, and reload 
   await expect(page.getByLabel('当前保存的系统提示词')).toContainText('v2');
   expect(writes).toHaveLength(2);
   await page.goto('/?lang=en');
-  await openResources(page);
-  await expect(page.getByText('Original resource records', { exact: true })).toBeVisible();
+  await openSettings(page);
+  await expect(page.getByText('Original resource records', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'System prompt', exact: true })).toBeVisible();
   await expect(page.getByLabel('System prompt text', { exact: true })).toHaveValue('');
   await expect(page.getByLabel('Currently saved system prompt')).toContainText('No prompt set.');
@@ -55,7 +55,7 @@ test('conflicts retain the draft and require explicit adoption before retrying; 
     return route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'Synthetic write unavailable' } } });
   });
   await page.goto('/');
-  await openResources(page);
+  await openSettings(page);
   await page.getByLabel('系统提示词内容', { exact: true }).fill('My unsaved draft');
   await page.getByRole('button', { name: '保存系统提示词', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('草稿已保留');
@@ -85,7 +85,7 @@ test('a delayed save locks editing and duplicate submission while preserving pla
     return route.fulfill({ json: { ...current, ...input, version: 1 } });
   });
   await page.goto('/');
-  await openResources(page);
+  await openSettings(page);
   const text = page.getByLabel('系统提示词内容', { exact: true });
   await text.fill('<img src=x onerror=alert(1)>');
   await page.getByRole('button', { name: '保存系统提示词', exact: true }).click();
@@ -98,23 +98,23 @@ test('a delayed save locks editing and duplicate submission while preserving pla
   expect(writes).toBe(1);
 });
 
-test('resource references open the original record read-only and preserve legacy fields', async ({ page, request }, testInfo) => {
+test('historical resource references remain plain text and preserve legacy fields', async ({ page, request }, testInfo) => {
   await page.route('**/api/preferences', route => route.fulfill({ json: { boardId: 'fixture', text: '', version: 0, source: null, updatedAt: null } }));
   const agent = await (await request.post('/api/agents', { data: { name: 'Resource fixture author' } })).json();
   const resource = seedLegacyResource({ name: 'Preference UI resource', kind: 'legacy-kind', capabilities: ['legacy-capability'], accessNotes: 'Coordinate before use' });
   await request.post('/api/entries', { data: { agentId: agent.id, kind: 'FACT', summary: 'Resource compatibility fixture', resourceId: resource.id } });
   await page.goto('/');
   await closeSettings(page); await page.getByRole('tab', { name: '共享面板', exact: true }).click();
-  await page.getByRole('article').filter({ hasText: 'Resource compatibility fixture' })
-    .getByRole('button', { name: '资源 · Preference UI resource', exact: true }).click();
-  await expect(page.getByRole('dialog', { name: '设置', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '查看资源 Preference UI resource', exact: true })).toBeFocused();
-  await expect(page.getByRole('button', { name: '编辑资源 Preference UI resource', exact: true })).toHaveCount(0);
+  const entry = page.getByRole('article').filter({ hasText: 'Resource compatibility fixture' });
+  await expect(entry).toContainText('Preference UI resource');
+  await expect(entry.getByRole('button', { name: /Preference UI resource/ })).toHaveCount(0);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   const board = await (await request.get('/api/board')).json();
   expect(board.resources.find((item: { id: string }) => item.id === resource.id)).toMatchObject({
     id: resource.id, kind: 'legacy-kind', capabilities: ['legacy-capability'], description: ''
   });
   await page.setViewportSize({ width: 390, height: 844 });
+  await openSettings(page);
   await expect(page.getByRole('heading', { name: '系统提示词', exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('environment-mobile.png'), fullPage: true });
@@ -124,7 +124,7 @@ test('refresh keeps a dirty draft and displays a newer saved preference without 
   let current = { boardId: 'fixture', text: 'Initial current', version: 1, source: 'human-input', updatedAt: null };
   await page.route('**/api/preferences', route => route.fulfill({ json: current }));
   await page.goto('/');
-  await openResources(page);
+  await openSettings(page);
   await page.getByLabel('系统提示词内容', { exact: true }).fill('Local draft to preserve');
   current = { ...current, text: 'Updated outside this form', version: 2 };
   const agent = await (await request.post('/api/agents', { data: { name: 'Refresh fixture author' } })).json();
@@ -152,7 +152,7 @@ test('refresh during save retains the newer saved version after completion and a
     return route.fulfill({ json: response });
   });
   await page.goto('/');
-  await openResources(page);
+  await openSettings(page);
   await expect(page.getByLabel('系统提示词内容', { exact: true })).toHaveValue('Initial value');
   await page.getByLabel('系统提示词内容', { exact: true }).fill('My saved version one');
   await page.getByRole('button', { name: '保存系统提示词', exact: true }).click();

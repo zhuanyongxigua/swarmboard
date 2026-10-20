@@ -1,4 +1,4 @@
-import { openResources, refreshBoard, closeSettings } from './settings-helpers.js';
+import { openSettings, refreshBoard, closeSettings } from './settings-helpers.js';
 // Verify the three reviewed product features coexist through real HTTP and
 // disposable SQLite, while explicitly forbidding native or model dispatch.
 import { test, expect } from '@playwright/test';
@@ -76,8 +76,8 @@ test('progress, preferences and capacity controls coexist without losing each ot
     await page.getByRole('button', { name: '关闭编辑窗口', exact: true }).click();
     await expect(page.locator('button button')).toHaveCount(0);
 
-    await openResources(page);
-    await expect(page.getByRole('button', { name: '查看资源 Synthetic combined resource', exact: true })).toBeVisible();
+    await openSettings(page);
+    await expect(page.getByRole('button', { name: '查看资源 Synthetic combined resource', exact: true })).toHaveCount(0);
     await page.getByLabel('系统提示词内容', { exact: true }).fill('Synthetic user expectation');
     await page.getByLabel('系统提示词 · 内容来源', { exact: true }).selectOption('main-chat-relay');
     await page.getByRole('button', { name: '保存系统提示词', exact: true }).click();
@@ -113,9 +113,9 @@ test('progress, preferences and capacity controls coexist without losing each ot
     await expect(card).toContainText('Waiting');
     await expect(page.getByRole('button', { name: 'Reduce member', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await openResources(page);
+    await openSettings(page);
     await expect(page.getByLabel('System prompt text', { exact: true })).toHaveValue('Synthetic user expectation');
-    await expect(page.getByRole('button', { name: 'View resource Synthetic combined resource', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'View resource Synthetic combined resource', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Clear system prompt', exact: true }).click();
     await expect(page.getByLabel('System prompt text', { exact: true })).toHaveValue('');
     await closeSettings(page);

@@ -114,11 +114,13 @@ async function capture(locale) {
     expect(factValues.get('native.running')).toBeNull();
     expect(factValues.get('external.model')).toBeNull();
     const preferences = await call('preferences_read');
+    const userText = ['dev-a', copy("共享开发环境 · 不同页面可并行验证"), copy("独立账号与工作目录；重启服务前先协商。"), 'dev-b', copy("备用开发环境 · 适合构建与独立验证"), copy("开始前声明使用范围，结束后释放声明。")].join('\n\n');
+    const userPrompt = await call('user_prompt_write', { expectedVersion: 0, source: 'human-input', text: userText });
     const overviewNote = copy("文档示例：");
     const writtenOverview = await callOverview('overview_write', {
       expectedVersion: overviewFactsView.record?.version ?? 0,
       factsRevision: overviewFactsView.facts.revision,
-      preferencesVersion: preferences.version, ttlSeconds: 900,
+      preferencesVersion: preferences.version, userPromptVersion: userPrompt.version, ttlSeconds: 900,
       parts: [
         { kind: 'text', text: overviewNote },
         { kind: 'text', text: copy("原生登记") },
@@ -176,17 +178,16 @@ async function capture(locale) {
     }
     await checkLanguage();
     await page.screenshot({ path: path.join(output, 'tasks.png') });
-    // Capture real settings and preserved resource records, with no private prompts.
+    // Capture settings and resource definitions in the user prompt using synthetic content only.
     await page.getByRole('button', { name: copy("设置"), exact: true }).click();
     await expect(page.getByRole('heading', { name: copy("系统提示词"), exact: true })).toBeVisible();
-    await expect(page.locator('.preference-text')).toHaveText([copy("尚未设置提示词。"), copy("尚未设置提示词。")]);
+    await expect(page.locator('.preference-text')).toHaveText([copy("尚未设置提示词。"), userText]);
     await expect(page.locator('#system-prompt-text')).toHaveValue('');
     await checkLanguage();
     await page.screenshot({ path: path.join(output, 'settings.png'), fullPage: true });
-    await page.getByText(copy("原资源记录"), { exact: true }).click();
-    await expect(page.locator('.resource-row')).toHaveCount(3);
-    await page.getByRole('button', { name: copy("查看资源 dev-a"), exact: true }).click();
-    await expect(page.locator('.usage-line')).toHaveCount(2);
+    await expect(page.locator('.legacy-resources, .resource-row')).toHaveCount(0);
+    await page.locator('#user-prompt-text').scrollIntoViewIfNeeded();
+    await expect(page.locator('#user-prompt-text')).toHaveValue(userText);
     await checkLanguage();
     await page.screenshot({ path: path.join(output, 'resources.png'), fullPage: true });
     await page.getByRole('button', { name: copy("关闭设置"), exact: true }).click();

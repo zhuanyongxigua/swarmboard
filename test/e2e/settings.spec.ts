@@ -33,7 +33,7 @@ for (const surface of [
   });
 }
 
-test('settings replaces connection controls and the environment tab; prompts save independently and resources stay readable', async ({ page }, info) => {
+test('settings replaces connection controls and the environment tab; prompts save independently without legacy resource controls', async ({ page }, info) => {
   const resource = { id: 'legacy', name: 'Legacy resource', description: 'Original description', kind: 'machine', capabilities: ['build'], accessNotes: 'Coordinate first', version: 3 };
   await page.route('**/api/board', route => route.fulfill({ json: { tasks: [], resources: [resource], agents: [], usages: [], entries: [], cursor: 0 } }));
   const prompt = (text: string) => ({ boardId: 'synthetic', text, version: 1, source: 'human-input', updatedAt: null });
@@ -61,11 +61,8 @@ test('settings replaces connection controls and the environment tab; prompts sav
   await expect(dialog.getByText('用户提示词已保存。', { exact: true })).toBeVisible(); expect(system.text).toBe('Original preference');
   await dialog.getByRole('button', { name: '清空系统提示词', exact: true }).click();
   await expect(dialog.getByLabel('系统提示词内容', { exact: true })).toHaveValue(''); expect(user.text).toBe('New user context');
-  await dialog.getByText('原资源记录', { exact: true }).click();
-  await dialog.getByRole('button', { name: '查看资源 Legacy resource', exact: true }).click();
-  await expect(dialog.getByText('Original description', { exact: true })).toBeVisible();
-  await expect(dialog.getByRole('button', { name: '编辑资源 Legacy resource', exact: true })).toHaveCount(0);
-  await expect(dialog.getByText('machine', { exact: true })).toBeVisible();
+  await expect(dialog.locator('.legacy-resources, .resource-grid')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: /查看资源|编辑资源/ })).toHaveCount(0);
   await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(settings).toBeFocused();
   await settings.click(); await expect(page.getByLabel('用户提示词内容', { exact: true })).toHaveValue('New user context');
   await page.setViewportSize({ width: 390, height: 844 });
