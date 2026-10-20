@@ -449,11 +449,10 @@ function Workspace() {
         : automation?.state === 'pending' ? <p className="automation-notice" role="status">{automation.setupMode === 'reconcile'
           ? t("正在核对自动认领状态。") : t("正在初始化自动认领，等待宿主确认。")}</p> : null}
     <main id={`panel-${tab}`} className={tab === 'tasks' ? 'task-panel' : undefined} role="tabpanel" aria-labelledby={`tab-${tab}`}>
-      <div className="panel-toolbar">
-        <span className="subtle">{tab === 'tasks' ? `${board?.tasks.length ?? 0} ${t('个任务')}`
-          : t("Agent 交互记录")}</span>
-        {tab === 'shared' ? <span className="subtle">{t("只读")}</span> : null}
-      </div>
+      {tab === 'shared' && <div className="panel-toolbar">
+        <span className="subtle">{t("Agent 交互记录")}</span>
+        <span className="subtle">{t("只读")}</span>
+      </div>}
       {error && <div className="error" role="alert"><span>{error}</span><button type="button" onClick={() => void refresh()}>{t("重试")}</button></div>}
       {loading ? <Empty title={t("正在读取协作空间")} text={t("获取任务、资源与最新共享记录…")} loading />
         : !board ? <Empty title={t("协作空间暂未连接")} text={t("恢复连接后可查看已有任务、资源与共享记录。")} />

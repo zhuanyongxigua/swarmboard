@@ -3,6 +3,29 @@ import { openResources } from './settings-helpers.js';
 // access to overflowed tasks and preservation of the complete saved content.
 import { test, expect } from '@playwright/test';
 
+test('task columns occupy the removed total toolbar space in both languages', async ({ page, request }, info) => {
+  expect((await request.post('/api/tasks', { data: { title: 'Layout: compact task header' } })).ok()).toBe(true);
+  for (const lang of ['zh-CN', 'en']) {
+    await page.goto(`/?lang=${lang}`);
+    await expect(page.locator('.task-board')).toBeVisible();
+    const geometry = await page.locator('.task-panel').evaluate(panel => {
+      const board = panel.querySelector('.task-board')!.getBoundingClientRect();
+      return { panelTop: panel.getBoundingClientRect().top, boardTop: board.top,
+        columnTops: [...panel.querySelectorAll('.task-column')].map(column => column.getBoundingClientRect().top) };
+    });
+    console.info(JSON.stringify({ lang, ...geometry }));
+    await info.attach(`task-header-${lang}`, { body: JSON.stringify(geometry), contentType: 'application/json' });
+    await expect(page.locator('.task-panel > .panel-toolbar')).toHaveCount(0);
+    expect(Math.abs(geometry.boardTop - geometry.panelTop)).toBeLessThan(1);
+    expect(geometry.columnTops).toHaveLength(3);
+    expect(geometry.columnTops.every(top => Math.abs(top - geometry.boardTop) < 1)).toBe(true);
+    const counts = await page.locator('.column-heading > span').allTextContents();
+    expect(counts).toHaveLength(3); expect(counts.every(value => /^\d+$/.test(value))).toBe(true);
+    await page.getByRole('tab', { name: lang === 'en' ? 'Shared board' : '共享面板', exact: true }).click();
+    await expect(page.locator('#panel-shared > .panel-toolbar')).toBeVisible();
+  }
+});
+
 test('keeps empty and populated columns aligned and scrolls only the overflowing list', async ({ page, request }) => {
   const title = 'Layout: a deliberately long task title that must remain readable without making every card excessively tall';
   const description = 'Follow-up depends on cee7ccb3-0844-46ba-9ad6-4814067ee5e6. ' + 'Keep the complete description in task details. '.repeat(12);

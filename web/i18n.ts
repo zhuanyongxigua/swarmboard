@@ -119,7 +119,7 @@ const english: Record<string, string> = {
   '标题': 'Title', '状态': 'Status', '执行者': 'Assignee', '任务说明': 'Description', '验收条件': 'Acceptance criteria', '资源': 'Resources',
   '资源名称': 'Resource name', '资源说明': 'Description', '说明访问和共享条件，请勿填写密码、密钥或订阅凭据。': 'Describe access and sharing conditions. Do not enter passwords, keys or subscription credentials.',
   '载入最新内容': 'Load latest content', '取消': 'Cancel', '正在保存…': 'Saving…', '保存修改': 'Save changes',
-  '上次同步': 'Last synced', '个任务': 'tasks', '项资源': 'resources', '查看任务': 'View task', '查看资源': 'View resource',
+  '上次同步': 'Last synced', '项资源': 'resources', '查看任务': 'View task', '查看资源': 'View resource',
   '已移至': 'moved to', '未能移动': 'Could not move',
   '移动端暂不支持追加原生对话草稿，请在 ChatGPT 桌面端打开。': 'Native draft append is unavailable on mobile. Open in ChatGPT Desktop.',
   '当前宿主不支持原生对话草稿追加，请在支持此功能的 ChatGPT 桌面端打开。': 'This host does not support native draft append. Open in a supported ChatGPT Desktop host.',
