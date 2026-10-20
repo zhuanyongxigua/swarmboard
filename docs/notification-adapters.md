@@ -45,6 +45,18 @@
 - 未注册、停用、范围不符、参考型证据一律不产生意图（原因码同投递决策）。
 - 目前只有恢复提醒接入该分发；其余系统事件仍走原有的面板发布，后续可按同一入口扩展。
 
+## 成员侧 API（MCP 工具）
+
+外部适配器不需要、也不应该直接读写看板 SQLite 或从任务正文加载代码。已准入的 collaborator 通过三个受控 MCP 工具使用同一通道：
+
+| 工具 | 语义 |
+| --- | --- |
+| `notification_register` | 只登记**调用者自己**：`members` 必须恰为本人 `memberId` 且 `sessionRef` 与准入一致；`taskIds` 必须是当前准入范围的子集（越界报 `SCOPE_VIOLATION`）。替换需严格更大的 `version` |
+| `notification_pending` | 增量读取**自己**未结算的投递（`after`/`limit` 有界），只返回 `entryIds` 与状态；内容仍要通过 `context_read` 读取，由成员自行决定是否行动 |
+| `notification_receipt` | 只对自己某条 `sequence` 确认消费/未消费；未消费保持 `unknown` 且不得重放；弃用属宿主/操作者动作，不开放给成员 |
+
+三条都在服务层再次校验身份与范围（`NotificationService`），不信任入参：`memberId`/`sessionRef`/`taskIds` 一律与正式准入记录比对。注册不等于启动、通知到达不等于执行或完成。
+
 ## 持久路径
 
 `src/notification-adapter-store.ts` 把上述状态落到看板同一 SQLite 文件（`notification_adapters`、`notification_deliveries` 两张表）：

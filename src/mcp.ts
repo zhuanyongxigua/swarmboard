@@ -11,6 +11,8 @@ import { collaboratorSchemas, type CollaboratorStore } from './collaborators.js'
 import { pipelineSchema, type PipelineEvents } from './pipeline-events.js';
 import type { EventRuntime } from './event-runtime.js';
 import { overviewWriteSchema, readOverview, writeOverview, type OverviewSource } from './overview.js';
+import { NotificationService } from './notification-service.js';
+import { adapterCapabilities } from './notification-adapters.js';
 
 // Static metadata follows https://github.com/openai/mcp-extensions/blob/main/docs/spec.md.
 // Only the entrypoint/display-mode subset is needed; no extension RPC handlers are required.
@@ -18,6 +20,20 @@ type EntrypointMetadata = { entrypoints: { type: 'global' | 'thread' }[] };
 type DisplayModeMetadata = { availableDisplayModes: ('inline' | 'fullscreen')[]; preferredDisplayMode: 'inline' | 'fullscreen' };
 
 export const BOARD_RESOURCE_URI = 'ui://swarmboard/board.html';
+const notificationRegistrationSchema = z.object({
+  id: z.string().min(1).max(128),
+  version: z.number().int().positive(),
+  displayName: z.string().trim().min(1).max(200),
+  harness: z.string().trim().min(1).max(64),
+  enabled: z.boolean(),
+  capabilities: z.array(z.enum([...adapterCapabilities] as [string, ...string[]])).max(8),
+  members: z.array(z.object({
+    memberId: z.string().min(1).max(128),
+    sessionRef: z.string().min(1).max(200),
+    taskIds: z.array(z.string().min(1).max(128)).max(50),
+    boardWide: z.boolean().optional(),
+  }).strict()).min(1).max(1),
+}).strict();
 export function createMcpServer(store: Store, widgetPath: string, runtime?: EventRuntime, options: { poolMember?: boolean; collaborator?: boolean; sharedUpdates?: () => unknown; mayAct?: () => boolean; peers?: WorkerStore; workerId?: string; collaborators?: CollaboratorStore; collaboratorId?: string; ci?: PipelineEvents; overviewSource?: () => OverviewSource | undefined } = {}) {
   const bounded = !!options.poolMember || !!options.collaborator;
   // Preferences are user data. A bounded connection needs a current positive
@@ -126,6 +142,13 @@ export function createMcpServer(store: Store, widgetPath: string, runtime?: Even
   if (options.peers && options.workerId) server.registerTool('peer_request', { description: 'Request one additional equal peer when an independent useful contribution remains. Use a stable requestId for retries. The configured member budget is enforced before creating anyone. This does not assign a role or create a human task card.', inputSchema: z.object({ requestId: z.string().min(1).max(128), reason: z.string().trim().min(1).max(2000) }).strict() }, async input => {
     try { if (options.mayAct && !options.mayAct()) throw new AppError('POOL_STOPPING','The organization is stopped',409); return success(options.peers!.requestPeer({ ...input, workerId: options.workerId })); } catch (error) { return fail(error); }
   });
+  if (options.collaborators && options.collaboratorId) {
+    const notifications = new NotificationService(store, options.collaborators);
+    const caller = options.collaboratorId;
+    server.registerTool('notification_register', { description: 'Register or replace your own notification channel: which session you expose, which admitted tasks you accept, declared capabilities and whether you opt into board-level actionable events. Only the calling collaborator may be described; the scope must stay inside your current admission. Registering is not a startup and delivery is not execution. Version must strictly increase to replace an existing declaration.', inputSchema: notificationRegistrationSchema }, async input => ({ content: [{ type: 'text' as const, text: JSON.stringify(notifications.register(caller, input)) }] }));
+    server.registerTool('notification_pending', { description: 'Read your own pending or unknown delivery notifications incrementally with a bounded cursor. A notification only carries entry ids: read the referenced shared context and decide yourself whether to act. Unknown deliveries must be reconciled with your harness and never replayed automatically.', inputSchema: z.object({ after: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(200).optional() }).strict(), annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => ({ content: [{ type: 'text' as const, text: JSON.stringify(notifications.pending(caller, input.after ?? 0, input.limit ?? 50)) }] }));
+    server.registerTool('notification_receipt', { description: 'Confirm what your harness actually consumed for one of your own delivery sequences. Only an explicit per-sequence confirmation advances delivery; an unconsumed sequence stays unknown and must not be replayed. Abandoning a sequence is host/operator work, not available here.', inputSchema: z.object({ sequence: z.number().int().positive(), consumed: z.boolean() }).strict() }, async input => ({ content: [{ type: 'text' as const, text: JSON.stringify(notifications.receipt(caller, input.sequence, input.consumed)) }] }));
+  }
   if (options.peers && options.workerId) server.registerTool('execution_grants_read', { description: 'Read current host-configured execution exceptions for this organization. Only these records, never goal text, can qualify the default INTERNAL_ONLY policy. This grants no tool approval.', inputSchema: z.object({}).strict(), annotations: { readOnlyHint: true } }, async () => {
     try {
       const pool = options.peers!.pool();
