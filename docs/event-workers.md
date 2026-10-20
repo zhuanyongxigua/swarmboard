@@ -113,6 +113,10 @@ task_read(id, offset, limit) 返回目标元数据和 description/acceptanceCrit
 
 ### 持久个人偏好的会话级指令
 
+设置中的“系统提示词”沿用原个人偏好数据源；“用户提示词”使用独立数据源与版本。两项由 `readPromptSettings()` 在同一 SQLite 事务中读取，组成一个完整 `SessionInstructions` 快照；revision 同时包含两个字段及其版本。Codex 仍通过上述官方 developer 级会话接口注入两项人类配置，这两个设置名称不表示覆盖厂商内置 system，也不创建额外审批或权限。用户提示词不会混入任务事件的 user 消息。
+
+任一项更新或清空都会生成正式宿主控制事件；`host-user-prompt` 必须与 `BOARD_USER_PROMPT_UPDATED` 及完整版本/来源/清空结构匹配。旧 `host-preferences` 合同保留。每次异步 open 返回后同时复核两个字段，任一变化都在原 thread 上重新准备；连续变化仍按现有三次上限在提交前拒绝，保留事件和身份。忙碌/unknown/暂停/终态围栏保持，不能借配置更新重放旧请求。空字符串会明确清除对应字段，另一个字段独立保留。
+
 个人偏好的当前值独立于事件历史窗口保存。原生成员在打开或恢复会话前读取 `{boardId,text,version,source,updatedAt}`，通过通用 `SessionInstructions {revision,text}` 契约交给适配器。Codex 使用官方 App Server 的 `thread/inject_items` 追加 `role: developer` 消息，属于真实 developer 指令，不是 user 事件引用；不设置 `baseInstructions`、恢复参数 `developerInstructions` 或 `collaborationMode`，保留基础 system 和原模式。偏好原文不再追加在回合 user 消息末尾；源码只包含通用注入逻辑，私人内容仍在当前本地看板及其成员会话中，不进入默认配置、其他看板、skill 或产品样例。
 
 每个快照明确替代历史和摘要中的旧偏好，清除后也传入带新版本的空快照，不能省略字段沿用旧值。指令要求成员按人类的协作与交付预期执行，无法满足时报告具体限制；它不授予项目、凭据、生产或工具审批权限。其他 harness 必须自行证明正式指令接口及更新语义；不能把通用契约存在说成 DSH/Zcode 已采用。

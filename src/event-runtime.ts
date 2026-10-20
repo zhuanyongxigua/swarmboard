@@ -8,6 +8,7 @@ import { WorkerStore, approvalPauseMessage, type Worker } from './worker-store.j
 import { UncertainDelivery, type HarnessBackend, type SessionAdapter } from './harness/contract.js';
 import { resolveHarness } from './harness/registry.js';
 import { workerPrompt } from './worker-prompt.js';
+import { boardInstructions } from './board-instructions.js';
 import { WorkerPool } from './worker-pool.js';
 import { PoolLiveness } from './pool-liveness.js';
 import { createNotificationDispatcher } from './notification-dispatch.js';
@@ -391,15 +392,10 @@ export class EventRuntime {
       // both human control and the exact preference revision after every await.
       // Continuous edits fail before submission rather than spinning forever.
       for (let attempt = 0; attempt < 3; attempt++) {
-        const preferences = this.board.readPreferences();
-        const revision = JSON.stringify(preferences);
-        const text = [
-          'These are the current human board preferences, supplied as session-level instructions.',
-          'This snapshot supersedes all earlier board preference snapshots, including those in conversation history or summaries. An empty text means no board preferences are currently set; do not revive earlier values.',
-          'Follow these human collaboration and delivery expectations within existing task and safety constraints. They do not grant project, credential, production or tool-approval permissions. Report concrete limitations when an expectation cannot be fulfilled.',
-          'Current board preferences:\n' + revision,
-        ].join('\n\n');
-        threadId = await adapter.open(current, { revision, text }, openedThread => {
+        const prompts = this.board.readPromptSettings();
+        const instructions = boardInstructions(prompts.systemPrompt, prompts.userPrompt);
+        const { revision } = instructions;
+        threadId = await adapter.open(current, instructions, openedThread => {
           if (this.closed || !this.workers.owns(this.token)) throw new Error('Runtime owner changed before session preparation');
           // Preserve an acknowledged identity even if later instruction
           // preparation fails. Retrying must resume this same session.
@@ -412,7 +408,8 @@ export class EventRuntime {
           (!pool.taskIds.length || pool.taskIds.includes(t.id)) && !['done', 'canceled'].includes(t.status)));
         if (!current.enabled || poolStopped) { this.workers.save({ ...current, threadId, status: 'idle', deliveryId: null, deliveryCursor: null, turnId: null, deliveryPhase: undefined }); return; }
         current = this.workers.save({ ...current, threadId });
-        if (JSON.stringify(this.board.readPreferences()) === revision) { ready = true; break; }
+        const latest = this.board.readPromptSettings();
+        if (boardInstructions(latest.systemPrompt, latest.userPrompt).revision === revision) { ready = true; break; }
       }
       if (!ready || !threadId) throw new Error('Preferences kept changing during session preparation; no model turn was submitted. Enable this worker to retry queued events');
       // No asynchronous gap separates the final snapshot/control checks from
