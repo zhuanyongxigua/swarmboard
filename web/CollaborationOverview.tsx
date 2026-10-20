@@ -28,14 +28,22 @@ export function CollaborationOverview({ snapshot }: { snapshot: OverviewSnapshot
     const timer = setTimeout(() => setNow(Date.now()), Math.max(0, Math.min(expires - Date.now() + 1, 2147483647)));
     return () => clearTimeout(timer);
   }, [expires]);
-  const expired = !Number.isFinite(expires) || expires <= Math.max(now, Date.now());
+  // Only a parseable, actually elapsed expiry makes a record expired; a
+  // missing record must stay missing/unavailable and a malformed date must not
+  // be relabelled as expired.
+  const expired = !!record && Number.isFinite(expires) && expires <= Math.max(now, Date.now());
   const current = snapshot?.status === 'current' && snapshot.facts.available && !!record && !expired;
   const facts = new Map((current ? snapshot.facts.items : record?.factSnapshot ?? []).map(item => [item.id, item]));
   const unavailable = snapshot?.status === 'unavailable';
   // No fixed text prefix: the state stays machine-readable and visually muted
   // so a stale/expired record is never presented as current.
-  const viewState = current ? 'current' : expired ? 'expired' : snapshot?.status ?? 'missing';
-  const freshness = current ? undefined : record ? t('协作概览已过期') : t('协作情况未知');
+  const viewState = current ? 'current'
+    : !record ? (unavailable ? 'unavailable' : 'missing')
+    : expired ? 'expired' : snapshot?.status ?? 'missing';
+  const freshness = current ? undefined
+    : !record ? t('协作情况未知')
+    : expired ? t('协作概览已过期')
+    : t('协作概览不是最新');
 
   return <section className="collaboration-overview" aria-label={t('协作概览')} aria-description={freshness} title={freshness} data-overview-state={viewState}>
     <p className="overview-line">{record?.parts.length ? <>

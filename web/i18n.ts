@@ -3,7 +3,7 @@
 export const locale = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('lang') === 'en' ? 'en' : 'zh-CN';
 const english: Record<string, string> = {
   '协作概览': 'Collaboration overview', '未知': 'Unknown',
-  '协作情况未知': 'Collaboration status unknown', '协作概览已过期': 'Overview is stale',
+  '协作情况未知': 'Collaboration status unknown', '协作概览已过期': 'Overview is stale', '协作概览不是最新': 'Overview is not current',
   '协作概览暂不可核实': 'Collaboration overview cannot currently be verified',
   '完成进度': 'Completion progress', '进度依据': 'Progress evidence', '待评估': 'Not estimated',
   '正常推进': 'Progressing', '等待中': 'Waiting', '尚无可靠估算': 'No reliable estimate',

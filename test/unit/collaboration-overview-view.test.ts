@@ -42,7 +42,8 @@ describe('collaboration overview', () => {
     const html = render(value); expect(html).toContain('Start with the source');
     expect(html).not.toContain('上次概览'); expect(html).not.toContain('Previous overview');
     expect(html).toContain(`data-overview-state="${status}"`);
-    expect(html).toContain('title="协作概览已过期"');
+    expect(html).toContain('title="协作概览不是最新"');
+    expect(html).not.toContain('title="协作概览已过期"');
     expect(html).toContain('>3<'); expect(html).not.toContain('>9<');
     expect(html.includes('role="alert"')).toBe(status === 'unavailable');
   });
@@ -50,7 +51,36 @@ describe('collaboration overview', () => {
     const value = snapshot(); value.record!.expiresAt = new Date(Date.now() - 1).toISOString();
     const html = render(value); expect(html).toContain('Start with the source');
     expect(html).not.toContain('上次概览'); expect(html).toContain('data-overview-state="expired"');
+    expect(html).toContain('title="协作概览已过期"');
     expect(html).toContain('>3<'); expect(html).not.toContain('正常工作回合');
+  });
+  it('separates missing, unavailable-without-record, future-dated stale/unavailable and malformed expiry', () => {
+    const missing = snapshot(); missing.record = null; missing.status = 'missing'; missing.facts.available = false;
+    let html = render(missing);
+    expect(html).toContain('data-overview-state="missing"');
+    expect(html).toContain('title="协作情况未知"');
+    expect(html).not.toContain('title="协作概览已过期"'); expect(html).not.toContain('title="协作概览不是最新"');
+
+    const unavailable = snapshot(); unavailable.record = null; unavailable.status = 'unavailable';
+    html = render(unavailable);
+    expect(html).toContain('data-overview-state="unavailable"');
+    expect(html).toContain('title="协作情况未知"');
+    expect(html).toContain('role="alert"');
+
+    for (const status of ['stale', 'unavailable'] as const) {
+      const value = snapshot(); value.status = status;
+      value.record!.expiresAt = new Date(Date.now() + 60000).toISOString();
+      html = render(value);
+      expect(html).toContain(`data-overview-state="${status}"`);
+      expect(html).toContain('title="协作概览不是最新"');
+      expect(html).not.toContain('title="协作概览已过期"');
+    }
+
+    const malformed = snapshot(); malformed.status = 'stale'; malformed.record!.expiresAt = 'not-a-date';
+    html = render(malformed);
+    expect(html).toContain('data-overview-state="stale"');
+    expect(html).toContain('title="协作概览不是最新"');
+    expect(html).not.toContain('title="协作概览已过期"');
   });
   it('does not reconstruct missing legacy historical values from current facts', () => {
     const value = snapshot(); value.status = 'stale'; delete value.record!.factSnapshot;
