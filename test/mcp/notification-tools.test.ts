@@ -54,6 +54,13 @@ it('completes register -> pending -> receipt through the MCP tools', async () =>
   expect(confirmed.isError).toBeFalsy();
   expect(json(confirmed)).toMatchObject({ sequence: 1, consumed: true });
   expect(channels.unsettled()).toHaveLength(0);
+  // A lost response can be retried through the actual MCP schema after settlement.
+  const repeated = await call(client, 'notification_receipt', { sequence: 1, consumed: true, entryIds: [10] });
+  expect(repeated.isError).toBeFalsy();
+  expect(json(repeated)).toEqual(json(confirmed));
+  const lateWrongEcho = await call(client, 'notification_receipt', { sequence: 1, consumed: true, entryIds: [999] });
+  expect(lateWrongEcho.isError).toBe(true);
+  expect(String((lateWrongEcho.content as { text?: string }[])[0]?.text)).toContain('STALE_DELIVERY_VIEW');
 });
 
 it('refuses a receipt echo that does not match the current batch', async () => {

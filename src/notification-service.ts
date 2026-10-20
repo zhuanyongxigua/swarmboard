@@ -105,8 +105,12 @@ export class NotificationService {
     this.admitted(collaboratorId);
     if (!Number.isSafeInteger(sequence) || sequence < 1) throw new AppError('VALIDATION_ERROR', 'Invalid delivery sequence', 400);
     if (typeof consumed !== 'boolean') throw new AppError('VALIDATION_ERROR', 'consumed must be a boolean', 400);
-    const mine = this.adapters.unsettled().find(item => item.intent.memberId === collaboratorId && item.intent.sequence === sequence);
-    if (!mine) throw new AppError('DELIVERY_NOT_FOUND', 'No unsettled delivery with that sequence for this collaborator', 404);
+    const matches = this.adapters.deliveriesForSequence(collaboratorId, sequence);
+    // Sequence numbers are scoped to an adapter, but the legacy receipt API
+    // supplies no adapter id. Never acknowledge a different channel by guessing.
+    if (matches.length > 1) throw new AppError('AMBIGUOUS_DELIVERY', 'Delivery sequence is ambiguous across adapters; operator reconciliation required', 409);
+    const mine = matches[0];
+    if (!mine || mine.state.state === 'abandoned') throw new AppError('DELIVERY_NOT_FOUND', 'No unsettled delivery with that sequence for this collaborator', 404);
     const current = [...mine.intent.entryIds];
     if (consumed) {
       if (!Array.isArray(consumedEntryIds)) {
@@ -119,6 +123,12 @@ export class NotificationService {
         // an entry the caller never saw.
         throw new AppError('STALE_DELIVERY_VIEW', 'Delivery contents changed since this read; poll pending again before confirming', 409);
       }
+    }
+    if (mine.state.state === 'delivered') {
+      if (!consumed) throw new AppError('RECEIPT_CONFLICT', 'Delivery was already confirmed consumed', 409);
+      // The exact echo above identifies the original consumed batch. Return it
+      // without touching the persisted receipt or any newer delivery.
+      return { sequence, consumed: true, entryIds: current };
     }
     this.adapters.recordReceipt(mine.intent.adapterId, collaboratorId, { sequence, consumed });
     return { sequence, consumed, entryIds: current };
