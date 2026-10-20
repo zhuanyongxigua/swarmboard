@@ -34,6 +34,15 @@
 
 **一个适配器异常不影响其他通道**：非法声明只让该通道记 `invalid-registration`，其余通道照常解析。
 
+## 持久路径
+
+`src/notification-adapter-store.ts` 把上述状态落到看板同一 SQLite 文件（`notification_adapters`、`notification_deliveries` 两张表）：
+
+- `save()` 先做与纯注册表相同的校验，再按 id upsert；重开数据库后仍能列出同一批声明。
+- `recordIntent()` 在任何适配器被要求投递**之前**写入意图；同一 `(adapter, member, sequence)` 重复记录是幂等的，但**同序号不同内容会报错**而不是覆盖证据。
+- `recordReceipt()` 只接受已存在意图的回执，不会为一个没记录过的序号凭空确认。
+- `unsettled()` 重开后仍会返回未确认（含 `unknown`）的投递，供人工/成员对账；**不提供任何自动重发入口**。
+
 ## 投递、回执与未知
 
 - 投递前先落**持久意图** `DeliveryIntent{adapterId, memberId, sequence, entryIds, createdAt}`。
