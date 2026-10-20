@@ -61,7 +61,7 @@ export class EventRuntime {
     this.pool = new WorkerPool(this.workers, board, options.databasePath);
     this.grants = new ExecutionGrants(board, this.workers);
     this.collaborators = new CollaboratorStore(this.statePath);
-    this.liveness = new PoolLiveness(board, this.workers, options.idleMs ?? 10 * 60 * 1000);
+    this.liveness = new PoolLiveness(board, this.workers, options.idleMs ?? 5 * 60 * 1000);
     this.ci = new PipelineEvents(board, this.workers, options.pipelineReader, options.now, () => !this.closed && this.workers.owns(this.token));
   }
   start() {
