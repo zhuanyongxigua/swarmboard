@@ -3,7 +3,7 @@ import { t } from './i18n.js';
 
 export type SettingsPool = { workspacePath?: string; taskIds?: string[]; size: number; minSize?: number; maxSize?: number; version: number };
 export function SettingsDialog({ pool, saveCapacity, refresh, close, children }: {
-  pool: SettingsPool | null; saveCapacity: (min: number, max: number, expectedVersion: number) => Promise<void>;
+  pool: SettingsPool | null; saveCapacity: (min: number, max: number, expectedVersion: number, onSaved?: () => void) => Promise<void>;
   refresh: () => Promise<void>; close: () => void; children: React.ReactNode;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -35,9 +35,14 @@ export function SettingsDialog({ pool, saveCapacity, refresh, close, children }:
     }
     if (lower > upper) { setError(t('最少成员不能大于最多成员。')); return; }
     busy.current = true; setSaving(true); setError(''); setNotice('');
-    try { await saveCapacity(lower, upper, revision); setDirty(false); setNotice(t('成员上下限已保存。人数调整将在安全边界完成。')); }
+    try { await saveCapacity(lower, upper, revision, () => { setDirty(false); setConflict(false); }); setDirty(false); setNotice(t('成员上下限已保存。人数调整将在安全边界完成。')); }
     catch (failure) {
-      if ((failure as { code?: string })?.code === 'VERSION_CONFLICT') { setConflict(true); setError(t('成员配置已更新，草稿已保留。请重新读取并核对后保存。')); }
+      if ((failure as { saved?: boolean })?.saved) {
+        // The POST already committed; a later runtime read failed. Keep the
+        // saved value visible and show the refresh error separately.
+        setDirty(false); setConflict(false); setNotice(t('成员上下限已保存。人数调整将在安全边界完成。'));
+        setError(failure instanceof Error ? failure.message : t('成员上下限已保存，但最新状态读取失败，请重新读取核对。'));
+      } else if ((failure as { code?: string })?.code === 'VERSION_CONFLICT') { setConflict(true); setError(t('成员配置已更新，草稿已保留。请重新读取并核对后保存。')); }
       else setError(failure instanceof Error ? failure.message : t('成员配置未保存，请重试。'));
     } finally { busy.current = false; setSaving(false); }
   }

@@ -328,14 +328,27 @@ function Workspace() {
   const autoUnavailable = Boolean(automation?.desiredEnabled && nativeUnavailable);
   const autoError = automationError || (automation?.state === 'error' ? automation.lastError : '');
   async function refreshSettings() { const cursor = board?.cursor; const latest = await refresh(); await ensureAutomation(true); await readRuntimeAndOverview(); if (!latest || latest.cursor === cursor) setSettingsRefresh(value => value + 1); }
-  async function saveCapacity(minSize: number, maxSize: number, expectedVersion: number) {
+  async function saveCapacity(minSize: number, maxSize: number, expectedVersion: number, onSaved?: () => void) {
     const pool = eventRuntime?.pool;
     if (!pool?.workspacePath || poolOperation.current) throw new Error(t('正在更新成员，请稍候。'));
     poolOperation.current = true; setPoolBusy(true);
     try {
       await operation('pool_capacity', { minSize, maxSize, expectedVersion });
-      await readRuntimeAndOverview();
-    } catch (failure) { await readRuntimeAndOverview().catch(() => {}); throw failure; }
+      // The POST is authoritative: adopt its version before the refresh so the
+      // SettingsDialog draft effect cannot mistake our own confirmed revision
+      // for a concurrent edit and raise a false conflict.
+      onSaved?.();
+      try { await readRuntimeAndOverview(); }
+      catch (failure) {
+        const detail = failure instanceof Error && failure.message ? ' ' + failure.message : '';
+        const error = new Error(t('成员上下限已保存，但最新状态读取失败，请重新读取核对。') + detail);
+        (error as { saved?: boolean }).saved = true;
+        throw error;
+      }
+    } catch (failure) {
+      if (!(failure as { saved?: boolean })?.saved) await readRuntimeAndOverview().catch(() => {});
+      throw failure;
+    }
     finally { poolOperation.current = false; setPoolBusy(false); }
   }
 
