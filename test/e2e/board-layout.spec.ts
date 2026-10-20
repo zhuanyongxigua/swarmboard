@@ -14,7 +14,7 @@ test('keeps empty and populated columns aligned and scrolls only the overflowing
   }
   await page.setViewportSize({ width: 1089, height: 714 }); await page.goto('/');
   const board = page.getByRole('region', { name: '任务状态看板' });
-  const blocked = page.locator('[data-status="blocked"] .column-list');
+  const blocked = page.locator('[data-status="pending"] .column-list');
   await expect(blocked.locator(`[data-task-id="${lastId}"]`)).toBeAttached();
   const geometry = await page.locator('.column-list').evaluateAll(lists => lists.map(list => {
     const rect = list.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom };
@@ -47,7 +47,7 @@ test('keeps readable columns and keyboard navigation inside a narrow viewport', 
   expect((await request.patch(`/api/tasks/${task.id}`, { data: { expectedVersion: 1, status: 'blocked' } })).ok()).toBe(true);
   await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/');
   const board = page.getByRole('region', { name: '任务状态看板' });
-  await expect(page.locator('[data-status="blocked"]')).toBeAttached();
+  await expect(page.locator('[data-status="pending"]')).toBeAttached();
   expect(await board.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   const columns = await page.locator('.task-column').evaluateAll(items => items.map(item => {

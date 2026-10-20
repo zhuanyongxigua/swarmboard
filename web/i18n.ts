@@ -44,6 +44,8 @@ const english: Record<string, string> = {
   '正在初始化自动认领，等待宿主确认。': 'Initializing auto-claim; awaiting native confirmation.',
   '宿主未接受自动认领配置请求，请检查新会话后重试。': 'The host rejected auto-claim initialization. Check the new native conversation.',
   '待认领': 'To do', '进行中': 'In progress', '待验收': 'In review', '已完成': 'Done', '受阻': 'Blocked', '已取消': 'Canceled',
+  '待处理': 'Needs attention', '选择待处理状态': 'Choose pending status',
+  '请选择待验收或受阻，取消不会修改任务。': 'Choose In review or Blocked. Cancel leaves the task unchanged.',
   '观察': 'Observation', '事实': 'Fact', '失败经验': 'Failed approach', '工作声明': 'Work declaration', '成果摘要': 'Result summary', '消息': 'Message',
   '任务管理': 'Tasks', '资源池': 'Resources', '共享面板': 'Shared board',
   '内容已被其他参与者更新。看板将刷新，请核对最新内容后重试。': 'Another participant updated this item. Review the latest content before retrying.',
