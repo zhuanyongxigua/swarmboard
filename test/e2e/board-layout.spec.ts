@@ -1,6 +1,30 @@
+import { openResources } from './settings-helpers.js';
 // Exercise the uneven-column regression in a real browser, including keyboard
 // access to overflowed tasks and preservation of the complete saved content.
 import { test, expect } from '@playwright/test';
+
+test('task columns occupy the removed total toolbar space in both languages', async ({ page, request }, info) => {
+  expect((await request.post('/api/tasks', { data: { title: 'Layout: compact task header' } })).ok()).toBe(true);
+  for (const lang of ['zh-CN', 'en']) {
+    await page.goto(`/?lang=${lang}`);
+    await expect(page.locator('.task-board')).toBeVisible();
+    const geometry = await page.locator('.task-panel').evaluate(panel => {
+      const board = panel.querySelector('.task-board')!.getBoundingClientRect();
+      return { panelTop: panel.getBoundingClientRect().top, boardTop: board.top,
+        columnTops: [...panel.querySelectorAll('.task-column')].map(column => column.getBoundingClientRect().top) };
+    });
+    console.info(JSON.stringify({ lang, ...geometry }));
+    await info.attach(`task-header-${lang}`, { body: JSON.stringify(geometry), contentType: 'application/json' });
+    await expect(page.locator('.task-panel > .panel-toolbar')).toHaveCount(0);
+    expect(Math.abs(geometry.boardTop - geometry.panelTop)).toBeLessThan(1);
+    expect(geometry.columnTops).toHaveLength(3);
+    expect(geometry.columnTops.every(top => Math.abs(top - geometry.boardTop) < 1)).toBe(true);
+    const counts = await page.locator('.column-heading > span').allTextContents();
+    expect(counts).toHaveLength(3); expect(counts.every(value => /^\d+$/.test(value))).toBe(true);
+    await page.getByRole('tab', { name: lang === 'en' ? 'Shared board' : '共享面板', exact: true }).click();
+    await expect(page.locator('#panel-shared > .panel-toolbar')).toBeVisible();
+  }
+});
 
 test('keeps empty and populated columns aligned and scrolls only the overflowing list', async ({ page, request }) => {
   const title = 'Layout: a deliberately long task title that must remain readable without making every card excessively tall';
@@ -59,6 +83,6 @@ test('keeps readable columns and keyboard navigation inside a narrow viewport', 
   await page.getByRole('button', { name: '查看任务 Layout: narrow viewport target', exact: true }).focus();
   await page.keyboard.press('Enter'); await expect(page.getByLabel('标题', { exact: true })).toHaveValue('Layout: narrow viewport target');
   await page.keyboard.press('Escape');
-  await page.getByRole('tab', { name: '协作环境', exact: true }).click();
-  await expect(page.getByRole('button', { name: '添加资源', exact: true })).toBeVisible();
+  await openResources(page);
+  await expect(page.getByLabel('用户提示词内容', { exact: true })).toBeVisible();
 });

@@ -145,7 +145,25 @@ export class WorkerStore {
     const row = this.db.prepare('SELECT data FROM worker_pool WHERE id=1').get();
     if (!row) return null;
     const pool = JSON.parse(String(row.data)) as Pool;
-    return { ...pool, maxSize: pool.maxSize ?? Math.max(pool.size, 8) };
+    return { ...pool, minSize: pool.minSize ?? 1, maxSize: pool.maxSize ?? Math.max(pool.size, 8) };
+  }
+  configureCapacity(input: unknown, rank: (worker: Worker) => number) {
+    const data = parse(poolSchemas.capacity, input);
+    return this.transaction(() => {
+      const pool = this.pool();
+      if (!pool) throw new AppError('NOT_FOUND', 'Organization not found', 404);
+      if (pool.version !== data.expectedVersion) throw new AppError('VERSION_CONFLICT', 'Pool changed; read runtime_read', 409);
+      const size = Math.max(data.minSize, Math.min(pool.size, data.maxSize));
+      const candidates = pool.memberIds.slice().reverse().map(id => this.get(id)).filter(w => !w.retirement);
+      candidates.sort((a, b) => rank(a) - rank(b));
+      // Limits and all retirement intents commit together. Completion uses the
+      // existing resource/native-delivery fences, never cancellation or replay.
+      for (const member of candidates.slice(0, Math.max(0, candidates.length - size))) {
+        this.write({ ...member, enabled: false, version: member.version + 1,
+          retirement: { state: 'draining', previousEnabled: member.enabled, requestedAt: new Date().toISOString(), requestId: `capacity:${pool.version + 1}:${member.id}` } });
+      }
+      return this.savePool({ ...pool, minSize: data.minSize, maxSize: data.maxSize, size, version: pool.version + 1 });
+    });
   }
   /** Capacity state only. The host selects a member and verifies resource
    *  handoff before completion; this primitive is not an agent-facing tool. */
@@ -161,7 +179,7 @@ export class WorkerStore {
       }
       if (pool.version !== data.expectedVersion) throw new AppError('VERSION_CONFLICT', 'Pool changed; read runtime_read', 409);
       if (!pool.enabled || ['stopping', 'stopped', 'completed'].includes(pool.state)) throw new AppError('POOL_STOPPED', 'The organization is stopped', 409);
-      if (pool.size <= 1) throw new AppError('MEMBER_MINIMUM', 'Keep at least one member in the organization', 409);
+      if (pool.size <= (pool.minSize ?? 1)) throw new AppError('MEMBER_MINIMUM', 'The configured member minimum has been reached; keep at least one member', 409);
       const member = this.get(data.memberId);
       if (!pool.memberIds.includes(member.id) || member.poolId !== pool.id || member.retirement) throw new AppError('NOT_MEMBER', 'Select a current member without a pending retirement', 409);
       const next = this.write({ ...member, enabled: false, version: member.version + 1,
@@ -252,18 +270,19 @@ export class WorkerStore {
       if (!current || current.id !== pool.id || current.workspacePath !== pool.workspacePath) throw new AppError('VERSION_CONFLICT', 'Pool configuration changed', 409);
       return this.savePool({ ...pool, enabled: current.enabled, version: current.version,
         memberIds: current.version === pool.version ? pool.memberIds : current.memberIds,
-        size: current.size, maxSize: current.maxSize, taskIds: current.taskIds, scopeRefresh: current.scopeRefresh,
+        size: current.size, minSize: current.minSize, maxSize: current.maxSize, taskIds: current.taskIds, scopeRefresh: current.scopeRefresh,
         state: current.version === pool.version ? pool.state : current.state });
     });
   }
 }
 
 export interface Pool {
-  id: string; version: number; workspacePath: string; size: number; maxSize: number; taskIds: string[];
+  id: string; version: number; workspacePath: string; size: number; minSize?: number; maxSize: number; taskIds: string[];
   scopeRefresh?: { id: string; previousTaskIds: string[] };
   enabled: boolean; memberIds: string[]; state: 'ready' | 'active' | 'waiting' | 'completed' | 'stopping' | 'stopped' | 'error'; error: string;
 }
 export const poolSchemas = {
+  capacity: z.object({ minSize: z.number().int().min(1).max(128), maxSize: z.number().int().min(1).max(128), expectedVersion: z.number().int().positive() }).strict().refine(data => data.minSize <= data.maxSize, { message: 'Member minimum must not exceed maximum', path: ['minSize'] }),
   configure: z.object({ workspacePath: z.string().max(4096), size: z.number().int().min(1).max(128).default(3), maxSize: z.number().int().min(1).max(128).optional(), taskIds: z.array(z.string().min(1).max(128)).max(200).optional(), expectedVersion: z.number().int().nonnegative().default(0) }).strict(),
   control: z.object({ expectedVersion: z.number().int().positive(), enabled: z.boolean() }).strict(),
   reduce: z.object({ expectedVersion: z.number().int().positive(), requestId: z.string().trim().min(1).max(128) }).strict(),

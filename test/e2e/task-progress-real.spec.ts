@@ -1,3 +1,4 @@
+import { refreshBoard } from './settings-helpers.js';
 // Verify the integrated progress UI against real HTTP and disposable SQLite data, without model calls.
 import { test, expect } from '@playwright/test';
 
@@ -23,7 +24,7 @@ test('real progress writes survive refresh and clear to unknown without completi
   const waiting = await request.patch(`/api/tasks/${task.id}/progress`, { data: { expectedVersion: task.version, progress: { ...progress, percent: 100, state: 'waiting', phase: 'Awaiting synthetic review' } } });
   expect(waiting.ok()).toBe(true); task = await waiting.json();
   expect(task.status).toBe('in_progress');
-  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  await refreshBoard(page);
   await expect(card.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
   await expect(card).toContainText('等待中');
   const cleared = await request.patch(`/api/tasks/${task.id}/progress`, { data: { expectedVersion: task.version, progress: null } });
@@ -34,7 +35,7 @@ test('real progress writes survive refresh and clear to unknown without completi
   await expect(card.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
   const reviewed = await request.patch(`/api/tasks/${task.id}`, { data: { expectedVersion: task.version, status: 'in_review' } });
   expect(reviewed.ok()).toBe(true);
-  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  await refreshBoard(page);
   await expect(page.locator('[data-status="pending"]').locator(`[data-card-id="${task.id}"]`)).toBeVisible();
   await expect(card.getByRole('progressbar')).toHaveCount(0);
 });

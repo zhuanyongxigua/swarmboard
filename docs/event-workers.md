@@ -90,7 +90,9 @@ task_read(id, offset, limit) 返回目标元数据和 description/acceptanceCrit
 
 ## 停止、等待与恢复
 
-成员容量通过版本化 `pool_configure` 的 `maxSize` 在线调整，保持当前 `size` 不变即可只调整上限，不创建新成员，也不需要重启监听器。达到配置上限后，“增加成员”按钮置灰；鼠标悬浮或键盘聚焦按钮外层时，显示“已达成员上限（N 人）”，其中 N 来自当前配置。成员容量不规定同伴的任务分工。
+成员上下限通过人类设置接口 `pool_capacity`（HTTP 为 `POST /api/pool/capacity`）在线调整，参数为 `minSize`、`maxSize` 与当前组织 `expectedVersion`。上下限均须为 1–128 的整数，最小值不能超过最大值；旧数据缺失最小值时读取为 1。范围和退出意向在同一事务中提交，版本冲突或非法输入不作部分保存。目标人数 `size` 保持在新范围内：低于新下限时补齐原组织，高于新上限时复用安全退场链，实际 `memberIds` 可能在在途回合或资源声明收尾期间暂时超过上限，不强杀、不重放、不清除历史或未知投递，也不解除人类暂停。
+
+`pool_reduce` 不能低于当前下限；`peer_request` 与显式增员不能突破当前预算。已有 `pool_configure` 仍可由人类显式调整预算，但省略 `maxSize` 不再暗中抬高上限。范围保存、增减与运行时检查点均保留最新配置；正常补齐复用已退场的原身份和会话。达到配置上限后，“增加成员”按钮置灰；鼠标悬浮或键盘聚焦按钮外层时，显示“已达成员上限（N 人）”，其中 N 来自当前配置。成员容量不规定同伴的任务分工。
 
 - 全部订阅目标 done/canceled：安全收尾后 completed，关闭空闲 App Server 进程；会话历史、代码和证据保留。出现新的人类目标后复用原成员与 threadId。
 - 只剩 blocked/in_review：waiting，等待新事实、消息或人类状态变化；不把受阻伪装为完成，也不靠模型轮询。
@@ -110,6 +112,10 @@ task_read(id, offset, limit) 返回目标元数据和 description/acceptanceCrit
 ## 执行与权限
 
 ### 持久个人偏好的会话级指令
+
+设置中的“系统提示词”沿用原个人偏好数据源；“用户提示词”使用独立数据源与版本。两项由 `readPromptSettings()` 在同一 SQLite 事务中读取，组成一个完整 `SessionInstructions` 快照；revision 同时包含两个字段及其版本。Codex 仍通过上述官方 developer 级会话接口注入两项人类配置，这两个设置名称不表示覆盖厂商内置 system，也不创建额外审批或权限。用户提示词不会混入任务事件的 user 消息。
+
+任一项更新或清空都会生成正式宿主控制事件；`host-user-prompt` 必须与 `BOARD_USER_PROMPT_UPDATED` 及完整版本/来源/清空结构匹配。旧 `host-preferences` 合同保留。每次异步 open 返回后同时复核两个字段，任一变化都在原 thread 上重新准备；连续变化仍按现有三次上限在提交前拒绝，保留事件和身份。忙碌/unknown/暂停/终态围栏保持，不能借配置更新重放旧请求。空字符串会明确清除对应字段，另一个字段独立保留。
 
 个人偏好的当前值独立于事件历史窗口保存。原生成员在打开或恢复会话前读取 `{boardId,text,version,source,updatedAt}`，通过通用 `SessionInstructions {revision,text}` 契约交给适配器。Codex 使用官方 App Server 的 `thread/inject_items` 追加 `role: developer` 消息，属于真实 developer 指令，不是 user 事件引用；不设置 `baseInstructions`、恢复参数 `developerInstructions` 或 `collaborationMode`，保留基础 system 和原模式。偏好原文不再追加在回合 user 消息末尾；源码只包含通用注入逻辑，私人内容仍在当前本地看板及其成员会话中，不进入默认配置、其他看板、skill 或产品样例。
 

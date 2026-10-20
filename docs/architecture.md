@@ -2,7 +2,7 @@
 
 ## 产品与协作内核
 
-三个 Tab 读写同一业务服务：任务管理采用紧凑状态看板，协作环境展示资源列表和个人偏好，共享面板仅以只读记录流展示协作事件。Agents 通过 MCP 读写相同的数据。界面不会模拟后台 Agent，服务也没有中心编排模型。
+两个顶层 Tab 与统一设置读写同一业务服务：任务管理采用紧凑状态看板，共享面板仅以只读记录流展示协作事件；右上角设置提供成员上下限、独立系统／用户提示词及保留的原资源记录。Agents 通过 MCP 读写相同的数据。界面不会模拟后台 Agent，服务也没有中心编排模型。
 
 任务看板在可用窗口高度内保持各状态列等高，任务较多时只在该列内部纵向滚动。列宽至少 240px，窄窗口以看板内横向滚动保留状态顺序，不挤压列宽或改为多行。键盘可聚焦看板滚动区域，也可逐个聚焦任务卡片。
 
@@ -51,6 +51,8 @@ Agent 心跳是会话活动信息。界面把超过两分钟未报告的会话�
 
 ### 个人偏好传输边界
 
+设置界面将原个人偏好显示为“系统提示词”，并增加独立的“用户提示词”。兼容数据、模式 11、独立版本、正式读写接口及原资源保留边界见 [看板提示词配置](board-prompt-settings.md)。
+
 `GET /api/preferences` 与 MCP `preferences_read` 返回同一当前快照。可信人类宿主通过 `PATCH /api/preferences` 或 MCP `preferences_write` 保存或清除，携带 `text`、`source`、`expectedVersion`；HTTP 沿用环回地址、同源和可选 Bearer 门禁。`source` 只记录声明的来源，不是身份或权限证明。服务访问权属于现有可信宿主模型，不提供对抗性多租户隔离，也不因自称人类而赋权。
 
 绑定原生成员和外部协作者没有 `preferences_write` 工具；读取当前偏好须连接的 `mayAct` 实时明确允许。撤销、暂停或目标全部终态后，`preferences_read` 拒绝读取；既有 `board_read`、`board_open` 保留安全收尾需要的原受限内容和更新提示，但移除 `preferences` 字段。未提供授权检查的绑定连接同样不能取得偏好。授权仍有效时，三条读取路径都从持久存储取当前版本，不依赖近期历史窗口。
@@ -58,6 +60,8 @@ Agent 心跳是会话活动信息。界面把超过两分钟未报告的会话�
 成功写入提交后通知事件运行时；冲突或校验失败不通知、不自动重试写入。通知和原生开始／恢复时的当前快照接线分别验证，MCP 返回或游标前进不证明模型已阅读，更不证明尚未连接的外部会话获知。协议测试使用合成数据、真实临时 HTTP／SQLite 和内存 MCP 传输，涵盖保存、清除、服务实例关闭后重开、冲突、写权限及失活后的旧读取入口；不替代真实宿主安装验收。
 
 ### 协作概览
+
+概览同时绑定两个提示词版本：写入时提供 `preferences_read` 的 `version` 作为 `preferencesVersion`，以及 `user_prompt_read` 的 `version` 作为 `userPromptVersion`。服务端在保存概览的同一事务内校验两者，读取时在同一 SQLite 快照内核对记录与两个提示词；任一提示词更新或清空后，旧概览为 stale，旧草稿写入被拒。为兼容尚未使用用户提示词的旧客户端，省略 `userPromptVersion` 只表示初始版本 0，不能绕过首次编辑或清空后的版本检查；旧 JSON 概览缺少此字段时也只按 0 比较，不改写历史记录或迁移。用户提示词变化的读取原因是 `USER_PROMPT_CHANGED`，写入冲突代码是 `OVERVIEW_USER_PROMPT_CHANGED`。
 
 概览是成员自主选择的安全说明与事实引用，不由产品固定拼接成员数、厂商或执行状态。`overview_read`／`GET /api/overview` 返回当前事实目录和持久概览；`overview_write`／`POST /api/overview` 使用 `expectedVersion`、`factsRevision`、`preferencesVersion`、`parts` 和可选 `ttlSeconds`，默认有效 300 秒、最多 900 秒，空 `parts` 清除当前概览。作者和更新时间由服务端绑定，客户端不能伪造；并发、失活连接与事实版本变化按现有授权和版本门禁处理。模式 9 在已发布模式 8 之后追加存储，不改写历史迁移。外部座位可通过 `overview_status_facts_write` 以正式边界自注册 harness 无关的状态事实封套（member-status-fact v2 语义：executing 须执行证据、投递在途无证据记 unknown、过期记 last-recorded stale），身份由会话绑定不可自选；`external.running`、各组 `external.harness.<组>.members/executing/...` 与 `organization.total`（原生绑定＋准入协作者的去重成员数，属成员证据而非执行证据）据此计算，未知组不抹已知组数字；当前 fact 分类的已验证模型身份（可含数字，如 GLM-5.3）以独立字符串事实暴露供 AI 引用展示，文字数字禁令不变，且模型身份与执行状态分离——执行未知不抹已知模型；封套变化计入事实指纹，使旧概览转 stale。模式 10 在模式 9 之后追加 `overview_status_facts` 存储。
 
