@@ -65,7 +65,27 @@ describe('portable desktop plugin', () => {
     const client = await connect(path, work, { SWARMBOARD_DISABLE_RUNTIME: '1', SWARMBOARD_POOL_MEMBER: '1', SWARMBOARD_WORKER_ID: member.id });
     try {
       const names = (await client.listTools()).tools.map(t => t.name);
-      for (const name of ['task_create','resource_create','resource_update','pool_configure','pool_control']) expect(names).not.toContain(name);
+      for (const name of ['task_create','resource_create','resource_update','pool_configure','pool_control','notification_register','notification_receipt']) expect(names).not.toContain(name);
+      const overview = await call<{ facts: { items: { id: string; value: number | null }[] } }>(client, 'overview_read');
+      expect(overview.facts.items.find(f => f.id === 'organization.observed-members')?.value).toBe(1);
+      expect(state.db.prepare("SELECT name FROM sqlite_master WHERE name='external_collaborators'").get()).toBeUndefined();
+      expect(state.owner()).toBeNull();
+      const admissions = new CollaboratorStore(path + '.runtime.sqlite');
+      try {
+        const admit = (name: string, enabled = true) => admissions.configure({ expectedVersion: 0, name,
+          harness: 'synthetic-adapter', sessionRef: name, taskIds: [goal.id], enabled }, board).collaborator;
+        const current = admit('Current reporter'); admit('Historical admission'); const revoked = admit('Revoked reporter', false);
+        const observedAt = new Date().toISOString();
+        for (const reporter of [current, revoked]) board.saveOverviewStatusFact({ memberId: reporter.id, harness: reporter.harness,
+          classification: 'fact', activity: 'turn-settled', modelId: null, asOf: observedAt, observedAt,
+          expiresAt: new Date(Date.now() + 60_000).toISOString() });
+        const mixed = await call<{ facts: { items: { id: string; value: number | null }[] } }>(client, 'overview_read');
+        const value = (id: string) => mixed.facts.items.find(f => f.id === id)?.value;
+        expect(value('organization.observed-members')).toBe(2);
+        expect(value('external.admitted')).toBe(2);
+        expect(value('organization.total')).toBe(3);
+        expect((await client.listTools()).tools.map(t => t.name)).toEqual(names);
+      } finally { admissions.close(); }
       expect(names).toEqual(expect.arrayContaining(['pipeline_watch','peer_request']));
       const spoof = await client.callTool({name:'context_publish',arguments:{agentId:'other-peer',taskId:goal.id,kind:'CLAIM',summary:'Impersonation'}});
       expect(spoof.isError).toBe(true);expect(JSON.stringify(spoof.content)).toContain('BOUND_IDENTITY');

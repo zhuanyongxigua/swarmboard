@@ -8,7 +8,7 @@ import { Store } from './store.js';
 import { EventRuntime } from './event-runtime.js';
 import { resolveHarness } from './harness/registry.js';
 import { WorkerStore } from './worker-store.js';
-import { CollaboratorStore, collaboratorRole } from './collaborators.js';
+import { CollaboratorStore, collaboratorRole, readCollaboratorSnapshot } from './collaborators.js';
 import { PipelineEvents } from './pipeline-events.js';
 import { ExecutionGrants } from './execution-grants.js';
 
@@ -37,6 +37,10 @@ export async function startStdioServer(options: StdioOptions = {}) {
   const poolMember = process.env.SWARMBOARD_POOL_MEMBER === '1';
   const workerId = process.env.SWARMBOARD_WORKER_ID;
   const peerState = poolMember && workerId ? new WorkerStore(sidecar) : undefined;
+  // Native pool children need the same read-only admission snapshot the external
+  // overview path already gets. Read the sidecar without CREATE TABLE/write or
+  // exposing the CollaboratorStore as a collaborator role.
+  const overviewAdmissions = poolMember && workerId ? () => readCollaboratorSnapshot(sidecar) : undefined;
   // An external child reads aggregate facts from the existing sidecar without
   // constructing an EventRuntime, owning workers or starting any watcher.
   const overviewPeers = collaboratorState && !runtime && !peerState ? new WorkerStore(sidecar) : undefined;
@@ -57,6 +61,7 @@ export async function startStdioServer(options: StdioOptions = {}) {
   const server = createMcpServer(store, widgetPath, runtime, {
     poolMember,
     ...(overviewPeers ? { overviewSource: () => ({ owner: overviewPeers.owner(), ownerEpoch: overviewPeers.ownerEpoch(), pool: overviewPeers.pool(), workers: overviewPeers.list(), collaborators: collaboratorState!.list() }) } : {}),
+    ...(overviewAdmissions ? { overviewAdmissions } : {}),
     ...(peerState ? { sharedUpdates, mayAct, peers: peerState, workerId, ci: new PipelineEvents(store, peerState) } : {}),
     ...(collaboratorState && collaboratorId && role ? { collaborator: true, collaboratorId, collaborators: collaboratorState, sharedUpdates: role.sharedUpdates, mayAct: role.mayAct, workerId: collaboratorId } : {}),
   });
