@@ -132,6 +132,7 @@ npm run check
 
 - [安装与配置](docs/setup.zh-CN.md)：桌面安装、升级、数据库位置和开发预览。
 - [架构与协作语义](docs/architecture.md)：MCP 接口、版本检查、资源协商与运行边界。
+- [通用通知适配](docs/notification-adapters.md)：通道注册、范围投递与回执、五分钟持续提醒及故障恢复边界。
 - [测试分层](docs/testing.md) / [验证记录](docs/verification.md)：分别记录行为覆盖和实际执行结果。
 - 中英文截图分别保存在 `docs/assets/en/` 和 `docs/assets/zh-CN/`，可通过 `npm run docs:screenshots` 一起重建；使用临时数据库和示例数据，不调用模型或真实开发机。
 
