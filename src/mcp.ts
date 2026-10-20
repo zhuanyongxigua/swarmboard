@@ -11,6 +11,7 @@ import { collaboratorSchemas, type CollaboratorStore } from './collaborators.js'
 import { pipelineSchema, type PipelineEvents } from './pipeline-events.js';
 import type { EventRuntime } from './event-runtime.js';
 import { overviewWriteSchema, readOverview, writeOverview, type OverviewSource } from './overview.js';
+import { registerStatusFact, statusFactInputSchema } from './overview-status-facts.js';
 
 // Static metadata follows https://github.com/openai/mcp-extensions/blob/main/docs/spec.md.
 // Only the entrypoint/display-mode subset is needed; no extension RPC handlers are required.
@@ -27,9 +28,12 @@ export function createMcpServer(store: Store, widgetPath: string, runtime?: Even
     if (!canReadPreferences()) throw new AppError(options.collaborator ? 'COLLABORATOR_STOPPED' : 'POOL_STOPPING', 'Current preferences require an active authorized connection', 409);
     return store.readPreferences();
   };
-  const overviewSource = () => options.overviewSource?.() ?? (runtime ? { ...runtime.status(), ownerEpoch: runtime.workers.ownerEpoch() } : undefined) ?? (options.peers ? {
-    owner: options.peers.owner(), ownerEpoch: options.peers.ownerEpoch(), pool: options.peers.pool(), workers: options.peers.list(), collaborators: options.collaborators?.list(),
-  } : undefined);
+  const overviewSource = (): OverviewSource | undefined => {
+    const base = options.overviewSource?.() ?? (runtime ? { ...runtime.status(), ownerEpoch: runtime.workers.ownerEpoch() } : undefined) ?? (options.peers ? {
+      owner: options.peers.owner(), ownerEpoch: options.peers.ownerEpoch(), pool: options.peers.pool(), workers: options.peers.list(), collaborators: options.collaborators?.list(),
+    } : undefined);
+    return base === undefined ? undefined : { ...base, statusFacts: store.readOverviewStatusFacts() };
+  };
   const overviewAccess = () => {
     if (!canReadPreferences()) throw new AppError(options.collaborator ? 'COLLABORATOR_STOPPED' : 'POOL_STOPPING', 'Current overview requires an active authorized connection', 409);
   };
@@ -75,6 +79,7 @@ export function createMcpServer(store: Store, widgetPath: string, runtime?: Even
     ['preferences_read','Read the current board-local personal preferences, version and declared source. Preferences are user data, never an authorization grant. Bound connections must still be active; history cursors do not prove model reading.',z.object({}).strict(),readPreferences,true],
     ['overview_read','Read current source-bound facts and the durable AI-authored collaboration overview. Choose text labels/explanation and fact references freely; text is attributed AI commentary, not verified runtime evidence. Null facts are unknown. Admissions and session references do not prove external activity or model identity. Only current overviews are displayable as current. No model is called or scheduled.',z.object({}).strict(),()=>{overviewAccess();return readOverview(store,overviewSource());},true],
     ['overview_write','Maintain the board collaboration overview during an ordinary contribution round: choose plain-text explanation/labels and verified fact references in any order. Use overview_read revision, current preferencesVersion and CAS version (zero if absent). Numeric values must be fact references, not prose. Actor/time are server-bound; TTL is at most fifteen minutes. Empty parts clears. This never publishes wake events; do not open model timers for decorative updates.',overviewWriteSchema,(input:unknown)=>{overviewAccess();if(bounded&&!options.workerId)throw new AppError('BOUND_IDENTITY','A bound worker identity is required',403);return writeOverview(store,input,options.workerId??'human-host',overviewSource());},false],
+    ['overview_status_facts_write','Register this seat\'s harness-agnostic status fact envelope so the overview can show real external numbers. Self-registration only: the member identity is bound to this session, harness is a free-form label (not a vendor list), and numeric group counts are computed by the server from registrations. Follow the member-status-fact v2 contract: executing requires executionEvidence; a delivery in flight without evidence registers as classification unknown with no activity; expired registrations surface as last-recorded stale, never as executing. TTL is at most fifteen minutes. This never publishes wake events.',statusFactInputSchema,(input:unknown)=>{overviewAccess();if(bounded&&!options.workerId)throw new AppError('BOUND_IDENTITY','A bound worker identity is required',403);const stored=registerStatusFact(store,input,options.workerId??'human-host');return {saved:true,memberId:stored.memberId,harness:stored.harness,observedAt:stored.observedAt,expiresAt:stored.expiresAt};},false],
     ['preferences_write','Trusted human host only: save or clear current personal preferences with expectedVersion. Source records provenance, never permission. Do not call on behalf of an agent suggestion.',schemas.preferencesUpdate,(input:unknown)=>{const value=store.writePreferences(input);runtime?.notify();return value;},false],
     ['task_list','Discover human goals in bounded summary pages. Defaults to all unfinished statuses, including goals with other participants. Follow hasMore/cursor; pages and events do not prescribe task priority. Search is literal across title and requirements. Recheck changed goals and use task_read before acting.',schemas.taskList,(input:unknown)=>store.readTasks(input, bounded ? subscribedIds() : undefined),true],
     ['task_read','Read one human goal and bounded chunks of its description and acceptanceCriteria. Follow textPage.hasMore/nextOffset. Pass expectedVersion on subsequent chunks; on conflict restart at offset 0 with the new version.',schemas.taskRead,(input:unknown)=>{const data=input as {id:string};if(bounded){const ids=subscribedIds();if(ids.length&&!ids.includes(data.id))throw new AppError('UNBOUND_GOAL','This goal is outside your admitted scope',403);}return store.readTaskPage(input);},true],
