@@ -9,6 +9,7 @@ import type { DeliveryIntent, NotificationAdapterRegistration } from '../../src/
 
 const adapter = (patch: Partial<NotificationAdapterRegistration> = {}): NotificationAdapterRegistration => ({
   id: 'synthetic-alpha',
+  version: 1,
   displayName: 'Synthetic Alpha',
   harness: 'anything-goes',
   enabled: true,
@@ -30,6 +31,7 @@ describe('durable notification channel state', () => {
       const store = new NotificationAdapterStore(first);
       store.save(adapter());
       expect(() => store.save(adapter({ id: 'broken', members: [] }))).toThrow(/at least one member/);
+      expect(() => store.save(adapter({ version: 1, enabled: false }))).toThrow(/must increase version/);
       first.close();
 
       const second = new DatabaseSync(path);

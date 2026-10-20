@@ -17,6 +17,7 @@ const entry = (patch: Partial<Entry> = {}): Entry => ({
 
 const synthetic = (patch: Partial<NotificationAdapterRegistration> = {}): NotificationAdapterRegistration => ({
   id: 'synthetic-alpha',
+  version: 1,
   displayName: 'Synthetic Alpha',
   harness: 'anything-goes',
   enabled: true,
@@ -48,11 +49,56 @@ describe('notification adapter registration', () => {
     expect(() => registry.register(synthetic({ id: 'second', capabilities: ['teleport' as never] }))).toThrow(/Unknown notification capability/);
     // Identity alone is not a channel.
     expect(() => registry.register(synthetic({ id: 'third', members: [] }))).toThrow(/at least one member/);
+    expect(() => registry.register(synthetic({ id: 'noversion', version: 0 }))).toThrow(/version must be a positive integer/);
     expect(() => registry.register(synthetic({ id: 'fourth', members: [{ memberId: 'm', sessionRef: '', taskIds: [] }] }))).toThrow(/memberId and sessionRef/);
     expect(() => registry.register(synthetic({ id: 'fifth', members: [
       { memberId: 'm', sessionRef: 's', taskIds: [] },
       { memberId: 'm', sessionRef: 's2', taskIds: [] },
     ] }))).toThrow(/Duplicate notification member/);
+  });
+});
+
+describe('versioned replacement and board-level scope', () => {
+  it('replaces a channel only with a strictly newer declaration', () => {
+    const registry = createNotificationRegistry([synthetic()]);
+    const replaced = registry.replace(synthetic({ version: 2, members: [{ memberId: 'member-1', sessionRef: 'session-1', taskIds: ['goal', 'new-goal'] }] }));
+    expect(replaced.version).toBe(2);
+    expect(registry.get('synthetic-alpha')?.members[0]?.taskIds).toEqual(['goal', 'new-goal']);
+    expect(() => registry.replace(synthetic({ version: 2 }))).toThrow(/must increase version/);
+    expect(() => registry.replace(synthetic({ version: 1 }))).toThrow(/must increase version/);
+    expect(() => registry.replace(synthetic({ id: 'missing', version: 9 }))).toThrow(/Unknown notification adapter/);
+  });
+
+  it('reaches a newly admitted goal only after the scope is re-declared', () => {
+    const before = resolveNotificationTargets(entry({ kind: 'MESSAGE', taskId: 'new-goal' }), [synthetic()]);
+    expect(before.targets).toHaveLength(0);
+    expect(before.skipped[0]?.reason).toBe('out-of-scope');
+    const registry = createNotificationRegistry([synthetic()]);
+    registry.replace(synthetic({ version: 2, members: [{ memberId: 'member-1', sessionRef: 'session-1', taskIds: ['goal', 'new-goal'] }] }));
+    const after = resolveNotificationTargets(entry({ kind: 'MESSAGE', taskId: 'new-goal' }), registry.list());
+    expect(after.targets).toHaveLength(1);
+  });
+
+  it('delivers board-level actionable events only to boardWide members', () => {
+    const announcement = entry({ kind: 'OBSERVED', agentId: 'human', taskId: undefined, detail: '{"status":"in_progress"}' });
+    expect(resolveNotificationTargets(announcement, [synthetic()]).targets).toHaveLength(0);
+    const wide = synthetic({ members: [{ memberId: 'member-1', sessionRef: 'session-1', taskIds: [], boardWide: true }] });
+    const resolution = resolveNotificationTargets(announcement, [wide]);
+    expect(resolution.targets).toEqual([{ adapterId: 'synthetic-alpha', memberId: 'member-1', sessionRef: 'session-1' }]);
+    // A directed message still reaches a member that is not board-wide.
+    expect(resolveNotificationTargets(entry({ kind: 'MESSAGE', recipientId: 'member-1' }), [synthetic()]).targets).toHaveLength(1);
+  });
+
+  it('requires durable delivery for ordinary deliveries unless a caller opts out', () => {
+    const ephemeral = synthetic({ capabilities: ['receipt'] });
+    expect(resolveNotificationTargets(entry({ kind: 'MESSAGE', taskId: 'goal' }), [ephemeral]).skipped[0]?.reason).toBe('no-capability');
+    expect(resolveNotificationTargets(entry({ kind: 'MESSAGE', taskId: 'goal' }), [ephemeral], { capability: null }).targets).toHaveLength(1);
+    expect(resolveNotificationTargets(entry({ kind: 'MESSAGE', taskId: 'goal' }), [ephemeral], { capability: 'receipt' }).targets).toHaveLength(1);
+    // The timed-reminder path is exercised explicitly.
+    expect(resolveNotificationTargets(entry({ kind: 'MESSAGE', taskId: 'goal' }), [synthetic()], { capability: 'timedReminder' }).skipped[0]?.reason)
+      .toBe('no-capability');
+    expect(resolveNotificationTargets(entry({ kind: 'MESSAGE', taskId: 'goal' }), [synthetic({ capabilities: ['durableDelivery', 'timedReminder'] })], { capability: 'timedReminder' }).targets)
+      .toHaveLength(1);
   });
 });
 
@@ -128,5 +174,7 @@ describe('durable delivery and unknown handling', () => {
   it('dedupes a re-delivered page without dropping order or distinct entries', () => {
     const page = [entry({ id: 3 }), entry({ id: 1 }), entry({ id: 3 }), entry({ id: 2 })];
     expect(dedupeEntries(page).map(item => item.id)).toEqual([3, 1, 2]);
+    // A malformed id fails loudly instead of silently dropping evidence.
+    expect(() => dedupeEntries([entry({ id: -1 })])).toThrow(/non-negative safe integer/);
   });
 });

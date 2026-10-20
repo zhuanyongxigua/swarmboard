@@ -26,9 +26,18 @@ export class NotificationAdapterStore {
     `);
   }
 
-  /** Register or replace one channel declaration. Validation matches the pure registry. */
+  /**
+   * Register or replace one channel declaration. Validation matches the pure
+   * registry, and a replacement must strictly increase `version` so a stale
+   * declaration can never overwrite a newer one after a scope change.
+   */
   save(adapter: NotificationAdapterRegistration, now = new Date().toISOString()): NotificationAdapterRegistration {
     validateRegistration(adapter);
+    const existing = this.db.prepare('SELECT data FROM notification_adapters WHERE id=?').get(adapter.id) as unknown as { data: string } | undefined;
+    if (existing) {
+      const prior = JSON.parse(existing.data) as NotificationAdapterRegistration;
+      if (adapter.version <= prior.version) throw new Error(`Notification adapter ${JSON.stringify(adapter.id)} replacement must increase version`);
+    }
     this.db.prepare('INSERT INTO notification_adapters(id, enabled, data, updatedAt) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled, data=excluded.data, updatedAt=excluded.updatedAt')
       .run(adapter.id, adapter.enabled ? 1 : 0, JSON.stringify(adapter), now);
     return adapter;

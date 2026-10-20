@@ -25,14 +25,26 @@ export type AdapterCapability = (typeof adapterCapabilities)[number];
 export interface AdapterMember {
   memberId: string;
   sessionRef: string;
-  /** Tasks whose scoped events this member accepts. Empty means it hears only directed messages. */
+  /**
+   * Tasks whose scoped events this member accepts. A newly admitted goal that
+   * is not listed yet stays undeliverable until a replacement declaration
+   * carries it — the mismatch seen when a collaborator gains a new scope.
+   */
   taskIds: readonly string[];
+  /**
+   * Opt-in subscription to board-level actionable events that carry no task
+   * (for example a human board announcement or a host control observation).
+   * Off by default: a channel must ask for board-wide traffic explicitly.
+   */
+  boardWide?: boolean;
 }
 
 /** A channel declaration. `harness` is a free-form label: the core never branches on it. */
 export interface NotificationAdapterRegistration {
   /** Stable id, unique across the process. */
   id: string;
+  /** Monotonic declaration version; a replacement must strictly increase it. */
+  version: number;
   displayName: string;
   harness: string;
   enabled: boolean;
@@ -67,8 +79,12 @@ export interface DeliveryResolution {
 }
 
 export interface ResolveOptions {
-  /** Required capability for this delivery, e.g. 'timedReminder' for a scheduled nudge. */
-  capability?: AdapterCapability;
+  /**
+   * Capability this delivery needs. Defaults to 'durableDelivery': an adapter
+   * that cannot survive a restart must not be handed ordinary deliveries
+   * silently. Pass `null` only for a caller that genuinely needs no capability.
+   */
+  capability?: AdapterCapability | null;
 }
 
 const capabilitySet = new Set<string>(adapterCapabilities);
@@ -80,6 +96,7 @@ function nonEmpty(value: string): boolean {
 /** Reject declarations that would only look like a working channel. */
 export function validateRegistration(adapter: NotificationAdapterRegistration): void {
   if (!adapter || !nonEmpty(adapter.id)) throw new Error('Notification adapter id is required');
+  if (!Number.isSafeInteger(adapter.version) || adapter.version < 1) throw new Error('Notification adapter version must be a positive integer');
   if (!nonEmpty(adapter.displayName)) throw new Error('Notification adapter displayName is required');
   if (!nonEmpty(adapter.harness)) throw new Error('Notification adapter harness label is required');
   if (typeof adapter.enabled !== 'boolean') throw new Error('Notification adapter enabled flag is required');
@@ -98,16 +115,31 @@ export function validateRegistration(adapter: NotificationAdapterRegistration): 
     if (!Array.isArray(member.taskIds) || taskIds.some(id => typeof id !== 'string' || !nonEmpty(id))) {
       throw new Error('Notification adapter member scope must be a list of task ids');
     }
+    if (member.boardWide !== undefined && typeof member.boardWide !== 'boolean') throw new Error('Notification adapter boardWide flag must be a boolean');
     if (members.has(member.memberId)) throw new Error(`Duplicate notification member ${JSON.stringify(member.memberId)}`);
     members.add(member.memberId);
   }
 }
 
 export interface NotificationRegistry {
-  /** Register one channel. Duplicate ids and invalid declarations throw. */
+  /** Register one new channel. Duplicate ids and invalid declarations throw. */
   register(adapter: NotificationAdapterRegistration): Readonly<NotificationAdapterRegistration>;
+  /**
+   * Replace an existing channel with a strictly newer declaration, e.g. after a
+   * collaborator gains a new task scope. Same or lower version is refused so a
+   * stale declaration can never overwrite a newer one.
+   */
+  replace(adapter: NotificationAdapterRegistration): Readonly<NotificationAdapterRegistration>;
   list(): readonly NotificationAdapterRegistration[];
   get(id: string): Readonly<NotificationAdapterRegistration> | undefined;
+}
+
+function freezeRegistration(adapter: NotificationAdapterRegistration): Readonly<NotificationAdapterRegistration> {
+  return Object.freeze({
+    ...adapter,
+    capabilities: Object.freeze([...adapter.capabilities]),
+    members: Object.freeze(adapter.members.map(member => Object.freeze({ ...member, taskIds: Object.freeze([...member.taskIds]) }))),
+  });
 }
 
 export function createNotificationRegistry(initial: readonly NotificationAdapterRegistration[] = []): NotificationRegistry {
@@ -115,16 +147,23 @@ export function createNotificationRegistry(initial: readonly NotificationAdapter
   const register = (adapter: NotificationAdapterRegistration) => {
     validateRegistration(adapter);
     if (byId.has(adapter.id)) throw new Error(`Duplicate notification adapter ${JSON.stringify(adapter.id)}`);
-    const frozen = Object.freeze({
-      ...adapter,
-      capabilities: Object.freeze([...adapter.capabilities]),
-      members: Object.freeze(adapter.members.map(member => Object.freeze({ ...member, taskIds: Object.freeze([...member.taskIds]) }))),
-    });
+    const frozen = freezeRegistration(adapter);
+    byId.set(adapter.id, frozen);
+    return frozen;
+  };
+  const replace = (adapter: NotificationAdapterRegistration) => {
+    validateRegistration(adapter);
+    const existing = byId.get(adapter.id);
+    if (!existing) throw new Error(`Unknown notification adapter ${JSON.stringify(adapter.id)}`);
+    if (adapter.version <= existing.version) {
+      throw new Error(`Notification adapter ${JSON.stringify(adapter.id)} replacement must increase version`);
+    }
+    const frozen = freezeRegistration(adapter);
     byId.set(adapter.id, frozen);
     return frozen;
   };
   for (const adapter of initial) register(adapter);
-  return { register, list: () => [...byId.values()], get: id => byId.get(id) };
+  return { register, replace, list: () => [...byId.values()], get: id => byId.get(id) };
 }
 
 /** Collapse a page of entries to its first appearance of each id, keeping order. */
@@ -132,19 +171,25 @@ export function dedupeEntries(entries: readonly Entry[]): Entry[] {
   const seen = new Set<number>();
   const unique: Entry[] = [];
   for (const entry of entries) {
-    if (!Number.isSafeInteger(entry.id) || seen.has(entry.id)) continue;
+    // A malformed id means the page cannot be deduped safely; fail loudly
+    // instead of silently dropping evidence.
+    if (!Number.isSafeInteger(entry.id) || entry.id < 0) throw new Error('Entry id must be a non-negative safe integer');
+    if (seen.has(entry.id)) continue;
     seen.add(entry.id);
     unique.push(entry);
   }
   return unique;
 }
 
-function memberAccepts(member: AdapterMember, entry: Entry): 'accept' | 'out-of-scope' | 'directed' {
-  if (entry.recipientId === member.memberId) return 'directed';
-  if (entry.taskId !== undefined) return member.taskIds.includes(entry.taskId) ? 'accept' : 'out-of-scope';
-  // A board-level entry with no task and no recipient is shared context, not a
-  // directed wake: it must not reach a member that never subscribed to it.
-  return 'out-of-scope';
+function memberAccepts(member: AdapterMember, entry: Entry): 'accept' | 'out-of-scope' {
+  if (entry.recipientId === member.memberId) return 'accept';
+  if (entry.taskId !== undefined) {
+    return member.taskIds.includes(entry.taskId) || member.boardWide === true ? 'accept' : 'out-of-scope';
+  }
+  // Board-level actionable event with no task: only members that explicitly
+  // opted into board-wide traffic receive it, so an announcement cannot leak
+  // into every idle channel.
+  return member.boardWide === true ? 'accept' : 'out-of-scope';
 }
 
 /**
@@ -156,14 +201,23 @@ function memberAccepts(member: AdapterMember, entry: Entry): 'accept' | 'out-of-
  */
 export function resolveNotificationTargets(entry: Entry, adapters: readonly NotificationAdapterRegistration[], options: ResolveOptions = {}): DeliveryResolution {
   const resolution: DeliveryResolution = { targets: [], skipped: [] };
-  const required = options.capability;
+  const required = options.capability === undefined ? 'durableDelivery' : options.capability;
   const actionable = actionableWake(entry);
+  // Validate each distinct declaration once per call instead of once per entry.
+  const validated = new Map<string, boolean>();
   for (const adapter of adapters) {
-    let candidates: readonly AdapterMember[];
-    try {
-      validateRegistration(adapter);
-      candidates = adapter.members;
-    } catch {
+    const key = `${adapter?.id ?? ''}@${adapter?.version ?? ''}`;
+    let accepted = validated.get(key);
+    if (accepted === undefined) {
+      try {
+        validateRegistration(adapter);
+        accepted = true;
+      } catch {
+        accepted = false;
+      }
+      validated.set(key, accepted);
+    }
+    if (!accepted) {
       // One malformed channel must not stop the others from being notified.
       resolution.skipped.push({ adapterId: adapter?.id ?? '(unnamed)', memberId: null, reason: 'invalid-registration' });
       continue;
@@ -176,17 +230,16 @@ export function resolveNotificationTargets(entry: Entry, adapters: readonly Noti
       resolution.skipped.push({ adapterId: adapter.id, memberId: null, reason: 'disabled' });
       continue;
     }
-    if (required !== undefined && !adapter.capabilities.includes(required)) {
+    if (required !== null && !adapter.capabilities.includes(required)) {
       resolution.skipped.push({ adapterId: adapter.id, memberId: null, reason: 'no-capability' });
       continue;
     }
-    for (const member of candidates) {
+    for (const member of adapter.members) {
       if (member.memberId === entry.agentId) {
         resolution.skipped.push({ adapterId: adapter.id, memberId: member.memberId, reason: 'self-authored' });
         continue;
       }
-      const scope = memberAccepts(member, entry);
-      if (scope === 'out-of-scope') {
+      if (memberAccepts(member, entry) === 'out-of-scope') {
         resolution.skipped.push({ adapterId: adapter.id, memberId: member.memberId, reason: 'out-of-scope' });
         continue;
       }
@@ -196,7 +249,15 @@ export function resolveNotificationTargets(entry: Entry, adapters: readonly Noti
   return resolution;
 }
 
-/** Durable intent recorded before any adapter is asked to deliver. */
+/**
+ * Durable intent recorded before any adapter is asked to deliver.
+ *
+ * `sequence` is assigned by the caller and must strictly increase per
+ * (adapterId, memberId): the store refuses to reuse a sequence with a different
+ * `entryIds` set. Consumption is per intent, so a partially consumed batch must
+ * be recorded as a new intent for the entries that were not consumed instead of
+ * leaving an all-or-nothing unknown.
+ */
 export interface DeliveryIntent {
   adapterId: string;
   memberId: string;

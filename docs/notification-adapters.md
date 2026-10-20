@@ -13,12 +13,15 @@
 | 字段 | 语义 |
 | --- | --- |
 | `id` | 进程内唯一稳定标识 |
+| `version` | 单调递增的声明版本；替换必须严格更大 |
 | `displayName` / `harness` | 展示名与**自由文本**的 harness 标签；内核不对其分支 |
 | `enabled` | 当前是否启用 |
 | `capabilities` | 声明能力：`durableDelivery`、`receipt`、`sameSessionContinuation`、`approvalSignals`、`timedReminder` |
-| `members` | 所服务的稳定成员：`{memberId, sessionRef, taskIds}`；`taskIds` 为空表示只收定向消息 |
+| `members` | 所服务的稳定成员：`{memberId, sessionRef, taskIds, boardWide?}`；`taskIds` 为空表示只收定向消息，`boardWide: true` 额外接收无 task 的板级可唤醒事件 |
 
-`createNotificationRegistry().register()` 会拒绝：重复 `id`、未知能力位、缺少 `displayName`/`harness`、**没有任何成员**（"只列 identity"不构成通道）、成员缺 `memberId`/`sessionRef`、同一成员重复登记。登记会被冻结，调用方无法事后自行扩大范围。
+`createNotificationRegistry().register()` 会拒绝：重复 `id`、未知能力位、缺少 `version`/`displayName`/`harness`、**没有任何成员**（"只列 identity"不构成通道）、成员缺 `memberId`/`sessionRef`、同一成员重复登记。登记会被冻结，调用方无法事后自行扩大范围。
+
+成员获得**新任务范围**时用 `replace()`：必须 `version` **严格更大**，否则拒绝；这样过期声明无法覆盖新声明。持久层 `NotificationAdapterStore.save()` 有同样的版本护栏。
 
 > **注册不等于启动**：登记一份声明不会创建会话、不会拉起进程、也不代表成员在线。
 
@@ -27,8 +30,8 @@
 `resolveNotificationTargets(entry, adapters, {capability?})` 返回 `{targets, skipped}`：
 
 1. 是否"可唤醒"**直接复用** `src/wake-policy.ts` 的 `actionableWake`。因此 FACT/CLAIM/PATCH_SUMMARY 等同伴证据保持为**参考上下文**，只有 MESSAGE、FAIL、人类/宿主控制类 OBSERVED 才投递——"可见/扫描到"不等于"已通知"。
-2. 适配器需 `enabled`，并按需具备本次要求的 `capability`。
-3. 成员的 `taskIds` 决定任务范围；**没有 taskId 也没有 `recipientId` 的看板级条目不是定向唤醒**，不会投给未订阅成员。
+2. 适配器需 `enabled`，并具备本次要求的 `capability`。**默认要求 `durableDelivery`**（不能跨重启保活就不该静默接普通投递）；调用方确需豁免时显式传 `capability: null`，定时提醒则传 `timedReminder`。
+3. 成员的 `taskIds` 决定任务范围；**没有 taskId 也没有 `recipientId` 的板级可唤醒条目只投给显式声明 `boardWide: true` 的成员**，默认不投，避免广播泄漏到所有空闲通道。
 4. 跳过自己发布的事件（`self-authored`）。
 5. 每个不投递的组合都给出原因码：`invalid-registration`、`disabled`、`reference-only`、`out-of-scope`、`self-authored`、`no-capability`。
 
@@ -46,6 +49,8 @@
 ## 投递、回执与未知
 
 - 投递前先落**持久意图** `DeliveryIntent{adapterId, memberId, sequence, entryIds, createdAt}`。
+- `sequence` 由**调用方**分配，必须按 `(adapterId, memberId)` 严格递增；同序号不同 `entryIds` 会被拒绝，不会覆盖既有证据。
+- 消费粒度是**整条意图**：一批只被部分消费时，必须为未消费的条目**新建一条新序号意图**继续推进，而不是让整批永远停在 unknown。
 - `reconcileDelivery(intent, receipt)`：只有收到**同序号且 consumed** 的回执才算 `delivered`；无回执为 `pending`；回执未消费、早于或晚于意图一律 `unknown`。
 - `unknown` **禁止自动重放**，必须由调用方与适配器核对后处置——与执行侧的 `UncertainDelivery` 同一原则。
 - 分页重复用 `dedupeEntries` 按 `id` 保序去重，重复投递不会变成多个模型回合。
