@@ -17,19 +17,20 @@ afterEach(async () => { for (const fn of cleanups.splice(0).reverse()) await fn(
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'notify-contract-'));
   const boardPath = join(dir, 'board.sqlite');
-  const collaboratorPath = join(dir, 'collaborators.sqlite');
-  const open = () => {
+  const open = (collaborators: CollaboratorStore) => {
     const board = new Store(boardPath);
-    const collaborators = new CollaboratorStore(collaboratorPath);
     return { board, collaborators, service: new NotificationService(board, collaborators) };
   };
-  let state = open();
   let now = 1000;
   const turns: string[] = [];
-  const runtime = new EventRuntime(state.board, { notificationBatchMs: 0, databasePath: boardPath, serverEntry: 'unused', now: () => now, idleMs: 100,
+  const boardProbe = new Store(boardPath);
+  const runtime = new EventRuntime(boardProbe, { notificationBatchMs: 0, databasePath: boardPath, serverEntry: 'unused', now: () => now, idleMs: 100,
     adapter: worker => ({ open: async w => w.threadId ?? 'thread-' + w.id, run: async () => { turns.push(worker.id); }, close: async () => {} }) });
-  const goal = state.board.createTask({ title: 'Contract goal' });
-  const admitted = state.collaborators.configure({ expectedVersion: 0, name: 'external', harness: 'anything', sessionRef: 'sess-external', taskIds: [goal.id], enabled: true }, state.board).collaborator;
+  const goal = boardProbe.createTask({ title: 'Contract goal' });
+  // Admit through the runtime's own collaborator store: that is the store the
+  // dispatcher re-checks at delivery time.
+  const admitted = runtime.collaborators.configure({ expectedVersion: 0, name: 'external', harness: 'anything', sessionRef: 'sess-external', taskIds: [goal.id], enabled: true }, boardProbe).collaborator;
+  let state = open(runtime.collaborators);
   runtime.configurePool({ workspacePath: dir });
   const settle = async () => { await runtime.scan(); await vi.waitFor(() => expect(runtime.workers.list().every(w => w.status === 'idle')).toBe(true)); await runtime.scan(); };
   // Reverse order runs these: close the runtime before the databases it reads,
@@ -37,9 +38,9 @@ function fixture() {
   const quiet = (fn: () => void) => () => { try { fn(); } catch { /* already closed */ } };
   cleanups.push(
     () => rmSync(dir, { recursive: true, force: true }),
-    quiet(() => state.collaborators.close()),
     quiet(() => state.board.close()),
     async () => { try { await runtime.close(); } catch { /* already closed */ } },
+    quiet(() => boardProbe.close()),
   );
   return {
     get board() { return state.board; },
@@ -50,10 +51,10 @@ function fixture() {
     tick: (ms = 100) => { now += ms; },
     /** Simulate a process restart: reopen both databases and rebuild the APIs. */
     async restart() {
-      await runtime.close();
+      // Reopen the board database and rebuild the member API exactly as a new
+      // process would; admission lives in the runtime sidecar and stays open.
       state.board.close();
-      state.collaborators.close();
-      state = open();
+      state = open(runtime.collaborators);
       return state.service;
     },
   };

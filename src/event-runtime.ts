@@ -65,7 +65,7 @@ export class EventRuntime {
     this.collaborators = new CollaboratorStore(this.statePath);
     // Reminders are also offered to registered notification channels as durable
     // intents; the core never delivers or starts anything itself.
-    this.notificationDispatcher = createNotificationDispatcher(board);
+    this.notificationDispatcher = createNotificationDispatcher(board, this.collaborators);
     this.liveness = new PoolLiveness(board, this.workers, options.idleMs ?? 5 * 60 * 1000,
       entry => { this.notificationDispatcher.dispatch(entry); });
     this.ci = new PipelineEvents(board, this.workers, options.pipelineReader, options.now, () => !this.closed && this.workers.owns(this.token));

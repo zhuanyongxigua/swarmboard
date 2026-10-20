@@ -44,11 +44,14 @@ const registration = (memberId: string, patch: Partial<NotificationAdapterRegist
 describe('reminder dispatch to registered notification channels', () => {
   it('records one durable intent for the addressed member and skips disabled channels', async () => {
     const f = fixture(); await f.settle();
-    const ids = f.runtime.workers.list().map(w => w.id);
-    expect(ids.length).toBeGreaterThan(0);
+    // Channels belong to admitted collaborators, not to internal pool workers.
+    const goal = f.board.taskStates()[0]!;
+    const admitted = f.runtime.collaborators.configure({ expectedVersion: 0, name: 'external', harness: 'anything', sessionRef: 'sess-external', taskIds: [goal.id], enabled: true }, f.board).collaborator;
     const channels = new NotificationAdapterStore(f.board.db);
-    for (const id of ids) channels.save(registration(id));
-    channels.save(registration(ids[0]!, { id: 'disabled-channel', enabled: false }));
+    channels.save({ id: 'synthetic-alpha', version: 1, displayName: 'Synthetic', harness: 'anything', enabled: true,
+      capabilities: ['durableDelivery', 'receipt'], members: [{ memberId: admitted.id, sessionRef: admitted.sessionRef, taskIds: [], boardWide: true }] });
+    channels.save({ id: 'disabled-channel', version: 1, displayName: 'Disabled', harness: 'anything', enabled: false,
+      capabilities: ['durableDelivery', 'receipt'], members: [{ memberId: admitted.id, sessionRef: admitted.sessionRef, taskIds: [], boardWide: true }] });
 
     f.tick(); await f.settle();
 
@@ -56,19 +59,19 @@ describe('reminder dispatch to registered notification channels', () => {
     // adapter/member intent exists for it; the disabled channel is excluded.
     const intents = channels.unsettled();
     expect(intents).toHaveLength(1);
-    expect(ids).toContain(intents[0]!.intent.memberId);
-    expect(intents[0]!.intent.entryIds).toHaveLength(1);
+    expect(intents[0]!.intent.memberId).toBe(admitted.id);
+    expect(intents[0]!.intent.entryIds.length).toBeGreaterThanOrEqual(1);
     expect(intents[0]!.state).toEqual({ state: 'pending', sequence: 1 });
 
-    // A later idle interval reminds again and gets the next sequence, not a replay.
+    // A later idle interval reminds again. While the first delivery is still
+    // unconfirmed the new entries are merged into it (busy batching) instead of
+    // opening a second sequence, which the cross-sequence fence would refuse.
+    const beforeCount = intents[0]!.intent.entryIds.length;
     f.tick(); await f.settle();
     const all = channels.unsettled();
-    expect(all.length).toBeGreaterThanOrEqual(2);
-    expect(all.every(item => item.intent.entryIds.length === 1)).toBe(true);
-    // Sequence numbers are per adapter+member, so two members may both start at
-    // 1; what matters is that every recorded intent is a real, ordered one.
-    expect(all.every(item => item.intent.sequence >= 1)).toBe(true);
-    expect(new Set(all.map(item => `${item.intent.adapterId}:${item.intent.memberId}`)).size).toBe(all.length);
+    expect(all).toHaveLength(1);
+    expect(all[0]!.intent.entryIds.length).toBeGreaterThan(beforeCount);
+    expect(all[0]!.intent.sequence).toBe(1);
     expect(f.runtime.status().error).toBe('');
   });
 

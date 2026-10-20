@@ -59,7 +59,9 @@ export type DeliverySkipReason =
   | 'reference-only'
   | 'out-of-scope'
   | 'self-authored'
-  | 'no-capability';
+  | 'no-capability'
+  | 'collaborator-inactive'
+  | 'goal-terminal';
 
 export interface DeliveryTarget {
   adapterId: string;

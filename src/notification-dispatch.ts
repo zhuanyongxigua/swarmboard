@@ -6,6 +6,7 @@
 // their own intents, and the core never assumes delivery happened.
 import type { Entry } from './store.js';
 import type { Store } from './store.js';
+import type { CollaboratorStore } from './collaborators.js';
 import { NotificationAdapterStore } from './notification-adapter-store.js';
 import { resolveNotificationTargets, type DeliveryResolution } from './notification-adapters.js';
 
@@ -19,7 +20,7 @@ export interface NotificationDispatcher {
   adapters(): ReturnType<NotificationAdapterStore['list']>;
 }
 
-export function createNotificationDispatcher(board: Store): NotificationDispatcher {
+export function createNotificationDispatcher(board: Store, collaborators?: CollaboratorStore): NotificationDispatcher {
   const store = new NotificationAdapterStore(board.db);
   return {
     adapters: () => store.list(),
@@ -34,7 +35,28 @@ export function createNotificationDispatcher(board: Store): NotificationDispatch
     },
     dispatch(entry: Entry): DeliveryResolution {
       const resolution = resolveNotificationTargets(entry, store.list());
+      // Re-check admission and goal state at delivery time: a channel may have
+      // been registered while the collaborator was active and revoked since, and
+      // a finished goal must not wake anyone.
+      const admitted = (memberId: string): boolean => {
+        if (!collaborators) return true;
+        try {
+          const record = collaborators.get(memberId);
+          return record.enabled && !record.revokedAt;
+        } catch { return false; }
+      };
       for (const target of resolution.targets) {
+        if (!admitted(target.memberId)) {
+          resolution.skipped.push({ adapterId: target.adapterId, memberId: target.memberId, reason: 'collaborator-inactive' });
+          continue;
+        }
+        if (entry.taskId !== undefined) {
+          const task = (() => { try { return board.readTask(entry.taskId!); } catch { return undefined; } })();
+          if (!task || ['done', 'canceled'].includes(task.status)) {
+            resolution.skipped.push({ adapterId: target.adapterId, memberId: target.memberId, reason: 'goal-terminal' });
+            continue;
+          }
+        }
         // Idempotent per (entry, channel, member): a re-scan cannot duplicate it.
         if (!store.claimDispatch(entry.id, target.adapterId, target.memberId)) continue;
         const pending = store.pendingIntent(target.adapterId, target.memberId);
