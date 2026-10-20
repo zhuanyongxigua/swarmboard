@@ -35,8 +35,9 @@ export function CollaborationOverview({ snapshot }: { snapshot: OverviewSnapshot
   // No fixed text prefix: the state stays machine-readable and visually muted
   // so a stale/expired record is never presented as current.
   const viewState = current ? 'current' : expired ? 'expired' : snapshot?.status ?? 'missing';
+  const freshness = current ? undefined : record ? t('协作概览已过期') : t('协作情况未知');
 
-  return <section className="collaboration-overview" aria-label={t('协作概览')} data-overview-state={viewState}>
+  return <section className="collaboration-overview" aria-label={t('协作概览')} aria-description={freshness} title={freshness} data-overview-state={viewState}>
     <p className="overview-line">{record?.parts.length ? <>
       {record.parts.map((part, index) => <span key={index}>{index ? ' ' : ''}{part.kind === 'text'
         ? part.text : <strong className="overview-fact">{facts.has(part.factId) ? valueOf(facts.get(part.factId)!) : t('未知')}</strong>}</span>)}

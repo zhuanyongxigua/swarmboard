@@ -42,6 +42,7 @@ describe('collaboration overview', () => {
     const html = render(value); expect(html).toContain('Start with the source');
     expect(html).not.toContain('上次概览'); expect(html).not.toContain('Previous overview');
     expect(html).toContain(`data-overview-state="${status}"`);
+    expect(html).toContain('title="协作概览已过期"');
     expect(html).toContain('>3<'); expect(html).not.toContain('>9<');
     expect(html.includes('role="alert"')).toBe(status === 'unavailable');
   });
@@ -65,6 +66,7 @@ describe('collaboration overview', () => {
       expect(html).not.toContain('上次概览'); expect(html).not.toContain('Previous overview');
     }
     expect(render(snapshot())).toContain('data-overview-state="current"');
+    expect(render(snapshot())).not.toContain('title="协作概览已过期"');
   });
   it('has no fallback organization template or personal sample when no overview exists', () => {
     const value = snapshot(); value.status = 'missing'; value.record = null; value.facts.available = false;
