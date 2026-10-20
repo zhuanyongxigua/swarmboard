@@ -9,7 +9,7 @@
 
 When several agents work at once and development machines are limited, it is easy to lose track of who is doing what, which environments can be shared, and which findings others can reuse.
 
-Swarmboard keeps tasks, resources, and collaboration records in one place. Describe goals and register resources through chat. Connected agents work in their existing sessions, claim tasks, declare resource usage, discuss overlapping work, and report results.
+Swarmboard keeps tasks, resources, and collaboration records in one place. Describe goals and maintain resource definitions in the user prompt through trusted chat. Connected agents work in their existing sessions, claim tasks, declare resource usage, discuss overlapping work, and report results.
 
 Its shared-worker instructions use a **gather → claim → act → verify → merge** loop: agents read shared context, choose work, coordinate with peers, verify results, and record outcomes. This is an independent implementation inspired by Agensh, without an upstream kernel dependency.
 
@@ -90,9 +90,9 @@ Discuss alternatives first. Ask for draft tasks and acceptance criteria when the
 
 The task discussion shortcut requires a desktop host advertising the OpenAI message extension. Standalone browser preview and unsupported hosts keep the board available and explain that native handoff is unavailable. Pane placement is managed by the host; Swarmboard does not render a replacement chat interface.
 
-### Add tasks and resources
+### Add tasks and maintain resource definitions
 
-Ask in a chat with trusted host Swarmboard tools enabled, and confirm which human goals or resources to register:
+Ask in a chat with trusted host Swarmboard tools enabled, and confirm which human goals to register or user-prompt text to edit:
 
 ```text
 Create a task in Swarmboard: fix the login page's error messages.
@@ -100,12 +100,12 @@ Acceptance criteria: incorrect passwords show a clear error, and valid credentia
 ```
 
 ```text
-Add a resource named dev-a to Swarmboard. It is a shared development machine.
+Add this definition to the current Swarmboard user prompt, preserving existing text: dev-a. It is a shared development machine.
 Usage agreement: separate working directories may run in parallel.
 Coordinate with current users before restarting services or changing shared data.
 ```
 
-The trusted host calls the existing plugin tools and writes the result to the same board. The panel has no manual task creation button, dialog or shortcut. Saved tasks remain editable and draggable, with their discussion shortcut intact. Resource definitions and sharing notes are edited in the user prompt in Settings. Worker and external-member sessions must record internal subproblems in shared context instead of creating task cards.
+The trusted host calls the existing plugin tools and writes the result to the same board. The panel has no manual task creation button, dialog or shortcut. Saved tasks remain editable and draggable, with their discussion shortcut intact. Resource definitions live only in the editable user prompt. Legacy `resources`/`usages` fields are audit history; retired writers reject new changes, and only existing-declaration cleanup remains available. Resource-use coordination belongs in shared context. Worker and external-member sessions must record internal subproblems in shared context instead of creating task cards.
 
 ### Join from existing agent sessions
 
@@ -116,7 +116,7 @@ Use Swarmboard's shared-worker skill to join as agent-a.
 Read the tasks and shared context, choose useful work, and claim it.
 Before using a resource, declare your purpose and scope; coordinate overlaps with peers.
 When finished, publish verification results, move work requiring acceptance to In review,
-and release your resource-use declarations.
+and publish the end of your resource scope in shared context.
 ```
 
 Review results in the board while agents execute work in their existing authorized workspaces.

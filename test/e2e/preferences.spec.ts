@@ -1,3 +1,4 @@
+import { seedLegacyResource } from './legacy-fixtures.js';
 import { openSettings, refreshBoard, closeSettings } from './settings-helpers.js';
 import { test, expect } from '@playwright/test';
 
@@ -100,9 +101,7 @@ test('a delayed save locks editing and duplicate submission while preserving pla
 test('historical resource references remain plain text and preserve legacy fields', async ({ page, request }, testInfo) => {
   await page.route('**/api/preferences', route => route.fulfill({ json: { boardId: 'fixture', text: '', version: 0, source: null, updatedAt: null } }));
   const agent = await (await request.post('/api/agents', { data: { name: 'Resource fixture author' } })).json();
-  const resource = await (await request.post('/api/resources', { data: {
-    name: 'Preference UI resource', kind: 'legacy-kind', capabilities: ['legacy-capability'], accessNotes: 'Coordinate before use'
-  } })).json();
+  const resource = seedLegacyResource({ name: 'Preference UI resource', kind: 'legacy-kind', capabilities: ['legacy-capability'], accessNotes: 'Coordinate before use' });
   await request.post('/api/entries', { data: { agentId: agent.id, kind: 'FACT', summary: 'Resource compatibility fixture', resourceId: resource.id } });
   await page.goto('/');
   await closeSettings(page); await page.getByRole('tab', { name: '共享面板', exact: true }).click();

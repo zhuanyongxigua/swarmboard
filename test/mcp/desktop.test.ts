@@ -245,9 +245,12 @@ describe('portable desktop plugin', () => {
     await call(client, 'agent_register', { agentId: 'portable-b', name: 'Portable B' });
     const task = await call<Task>(client, 'task_create', { title: 'Portable acceptance', acceptanceCriteria: 'Survives process restart' });
     await call(client, 'task_claim', { id: task.id, agentId: 'portable-a', expectedVersion: 1 });
-    const resource = await call<Resource>(client, 'resource_create', { name: 'Synthetic machine', kind: 'machine' });
-    const usage = await call<Usage>(client, 'resource_use', { resourceId: resource.id, agentId: 'portable-a', purpose: 'compile', scope: 'isolated checkout', sharing: 'read-only access welcome' });
-    await call(client, 'resource_use', { resourceId: resource.id, agentId: 'portable-b', purpose: 'inspect logs' });
+    // Pre-existing rows remain auditable; new public legacy writers are retired.
+    const archiveStore = new Store(database);
+    const resource = archiveStore.createResource({ name: 'Synthetic machine', kind: 'machine' });
+    const usage = archiveStore.declareUsage({ resourceId: resource.id, agentId: 'portable-a', purpose: 'historical compile', scope: 'isolated checkout', sharing: 'read-only access welcome' });
+    archiveStore.declareUsage({ resourceId: resource.id, agentId: 'portable-b', purpose: 'historical logs' });
+    archiveStore.close();
     await call(client, 'context_publish', { agentId: 'portable-a', kind: 'MESSAGE', summary: 'Concurrent read access agreed', recipientId: 'portable-b', resourceId: resource.id });
     await call(client, 'resource_release', { id: usage.id, agentId: 'portable-a', expectedVersion: 1 });
     await call(client, 'task_release', { id: task.id, agentId: 'portable-a', expectedVersion: 2 });

@@ -68,9 +68,9 @@ async function capture(locale) {
       ['demo-ui', copy("Agent · 界面修复")],
     ];
     for (const [agentId, name] of agents) await call('agent_register', { agentId, name });
-    const machine = await call('resource_create', { name: 'dev-a', description: copy("共享开发环境 · 不同页面可并行验证"), accessNotes: copy("独立账号与工作目录；重启服务前先协商。") });
-    await call('resource_create', { name: 'dev-b', description: copy("备用开发环境 · 适合构建与独立验证"), accessNotes: copy("开始前声明使用范围，结束后释放声明。") });
-    await call('resource_create', { name: copy("回归数据集"), description: copy("登录与文件功能的示例测试数据"), accessNotes: copy("可并行读取；变更共用数据前通知其他使用者。") });
+    const machine = store.createResource({ name: 'dev-a', description: copy("共享开发环境 · 不同页面可并行验证"), accessNotes: copy("独立账号与工作目录；重启服务前先协商。") });
+    store.createResource({ name: 'dev-b', description: copy("备用开发环境 · 适合构建与独立验证"), accessNotes: copy("开始前声明使用范围，结束后释放声明。") });
+    store.createResource({ name: copy("回归数据集"), description: copy("登录与文件功能的示例测试数据"), accessNotes: copy("可并行读取；变更共用数据前通知其他使用者。") });
     const search = await call('task_create', { title: copy("补全搜索结果的空状态"), description: copy("没有匹配结果时，给出清晰提示和下一步操作。"), acceptanceCriteria: copy("空列表和搜索无结果两种情况均有提示。") });
     await call('task_claim', { id: search.id, agentId: 'demo-ui', expectedVersion: 1 });
     await call('task_create', { title: copy("为文件上传增加失败重试"), description: copy("保留失败文件，让用户可以直接重试。"), acceptanceCriteria: copy("重试成功后不会产生重复文件。") });
@@ -93,8 +93,8 @@ async function capture(locale) {
     const done = await call('task_create', { title: copy("整理回归结果与复现步骤"), description: copy("汇总检查记录，让后续处理可以直接复现问题。"), acceptanceCriteria: copy("每项记录包含操作步骤与预期结果。") });
     await call('task_claim', { id: done.id, agentId: 'demo-ui', expectedVersion: 1 });
     await call('task_update', { id: done.id, agentId: 'demo-ui', expectedVersion: 2, status: 'done' });
-    await call('resource_use', { resourceId: machine.id, agentId: 'demo-login', taskId: login.id, purpose: copy("验证登录与权限提示"), scope: copy("独立浏览器会话 / 示例账号 A"), sharing: copy("可并行；不重启服务，不修改共用配置。") });
-    await call('resource_use', { resourceId: machine.id, agentId: 'demo-files', taskId: files.id, purpose: copy("验证文件预览与下载"), scope: copy("独立浏览器会话 / 示例账号 B"), sharing: copy("可与登录回归同时进行；数据变更前先沟通。") });
+    store.declareUsage({ resourceId: machine.id, agentId: 'demo-login', taskId: login.id, purpose: copy("验证登录与权限提示"), scope: copy("独立浏览器会话 / 示例账号 A"), sharing: copy("可并行；不重启服务，不修改共用配置。") });
+    store.declareUsage({ resourceId: machine.id, agentId: 'demo-files', taskId: files.id, purpose: copy("验证文件预览与下载"), scope: copy("独立浏览器会话 / 示例账号 B"), sharing: copy("可与登录回归同时进行；数据变更前先沟通。") });
     // These records illustrate the workflow; they are not statements by actual model sessions.
     const detail = copy("文档截图示例数据；不对应实际模型执行、测试结果或代码提交。");
     await call('context_publish', { agentId: 'demo-ui', kind: 'PATCH_SUMMARY', taskId: done.id, summary: copy("回归记录已整理，操作步骤与预期结果放在一起。"), detail });

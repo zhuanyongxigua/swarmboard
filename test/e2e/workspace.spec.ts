@@ -1,3 +1,4 @@
+import { seedLegacyResource } from './legacy-fixtures.js';
 import { openSettings, refreshBoard, closeSettings } from './settings-helpers.js';
 // Validate visible workflows against the real service; no fixture data substitutes for persistence.
 import {test,expect,type APIRequestContext} from '@playwright/test';
@@ -47,7 +48,7 @@ test('three display columns preserve all persisted states and require an explici
  await page.reload();await expect(page.locator(`[data-status="in_progress"] [data-task-id="${ids.todo}"]`)).toBeVisible();
 });
 test('legacy resource records stay historical without a settings management entry',async({page,request})=>{
- const response=await request.post('/api/resources',{data:{name:'Browser legacy resource',kind:'machine',capabilities:['Linux']}});expect(response.ok()).toBe(true);const legacy=await response.json();
+ const legacy=seedLegacyResource({name:'Browser legacy resource',kind:'machine',capabilities:['Linux']});
  await page.goto('/');await openSettings(page);
  await expect(page.getByRole('button',{name:'查看资源 Browser legacy resource',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'编辑资源 Browser legacy resource',exact:true})).toHaveCount(0);
@@ -75,7 +76,7 @@ test('task editing, resource prompts, shared coordination, XSS and reload',async
  const seeded=await request.post('/api/tasks',{data:{title:'Browser task',description:'<img src=x onerror="window.injected=true">',acceptanceCriteria:'Real browser check'}});expect(seeded.ok()).toBe(true);
  const creates:string[]=[];page.on('request',req=>{if(req.method()==='POST'&&new URL(req.url()).pathname==='/api/tasks')creates.push(req.url());});
  await page.goto('/');await expect(page.getByRole('tab')).toHaveText(['任务管理','共享面板']);await expect(page.getByRole('button',{name:/新建任务|创建任务/})).toHaveCount(0);await expect(page.getByRole('dialog')).toHaveCount(0);await expect(page.getByRole('button',{name:'查看任务 Browser task',exact:true})).toBeVisible();await page.getByRole('button',{name:'查看任务 Browser task',exact:true}).click();await page.getByLabel('标题',{exact:true}).fill('Edited browser task');await page.getByRole('dialog').getByRole('combobox').selectOption('in_review');await page.getByRole('button',{name:'保存修改'}).click();await expect(page.locator('[data-status="pending"]').getByRole('button',{name:'查看任务 Edited browser task',exact:true})).toBeVisible();const editedBoard=await(await request.get('/api/board')).json();expect(editedBoard.tasks.find((t:{title:string})=>t.title==='Edited browser task')).toMatchObject({status:'in_review',version:2});await page.screenshot({path:testInfo.outputPath('redesign-tasks.png'),fullPage:true});expect(await page.evaluate(()=>Boolean((window as unknown as {injected?:boolean}).injected))).toBe(false);expect(creates).toEqual([]);
- const created = await request.post('/api/resources',{data:{name:'Browser Alpha',accessNotes:'Coordinate before restart',description:'Shared compute'}});expect(created.ok()).toBe(true);
+ seedLegacyResource({name:'Browser Alpha',accessNotes:'Coordinate before restart',description:'Shared compute'});
  await refreshBoard(page); await openSettings(page);
  await expect(page.locator('.legacy-resources, .resource-detail')).toHaveCount(0);
  const prompt='Browser Alpha: Shared compute. Coordinate before restart.';
