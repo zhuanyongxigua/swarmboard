@@ -59,6 +59,8 @@
 - 投递前先落**持久意图** `DeliveryIntent{adapterId, memberId, sequence, entryIds, createdAt}`。
 - `sequence` 由**调用方**分配，必须按 `(adapterId, memberId)` 严格递增；同序号不同 `entryIds` 会被拒绝，不会覆盖既有证据。
 - 消费粒度是**整条意图**：一批只被部分消费时，必须为未消费的条目**新建一条新序号意图**继续推进，而不是让整批永远停在 unknown。
+- **跨序号围栏**：`recordIntent()` 只接受"已结算序号 + 1"。只要上一条还是 `pending`/`unknown`，新意图会被拒绝（`nextSequence()` 也会停在同一值），因此无法悄悄越过未核实的投递。
+- 部分消费的正确路径：先由可信操作者 `recordAbandoned()` 把该序号**显式结算为弃用**（`state:'abandoned'`，**永不等于 delivered**），再为剩余条目建新意图。`unsettled()` 只返回仍未结算（`pending`/`unknown`）的投递。
 - `reconcileDelivery(intent, receipt)`：只有收到**同序号且 consumed** 的回执才算 `delivered`；无回执为 `pending`；回执未消费、早于或晚于意图一律 `unknown`。
 - `unknown` **禁止自动重放**，必须由调用方与适配器核对后处置——与执行侧的 `UncertainDelivery` 同一原则。
 - 分页重复用 `dedupeEntries` 按 `id` 保序去重，重复投递不会变成多个模型回合。

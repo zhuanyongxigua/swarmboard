@@ -7,6 +7,7 @@
 // harness.
 import type { DatabaseSync } from 'node:sqlite';
 import {
+  isSettled,
   reconcileDelivery,
   validateRegistration,
   type AdapterReceipt,
@@ -61,9 +62,26 @@ export class NotificationAdapterStore {
       }
       return prior;
     }
+    const expected = this.nextSequence(intent.adapterId, intent.memberId);
+    if (intent.sequence !== expected) {
+      throw new Error(`Notification delivery sequence ${intent.sequence} is not the next settled sequence ${expected}; resolve the earlier delivery first`);
+    }
     this.db.prepare('INSERT INTO notification_deliveries(adapterId, memberId, sequence, intent, receipt) VALUES(?,?,?,?,NULL)')
       .run(intent.adapterId, intent.memberId, intent.sequence, JSON.stringify(intent));
     return intent;
+  }
+
+  /**
+   * Settle an intent as abandoned after a trusted operator reconciled it. This
+   * unblocks the sequence fence without pretending the delivery succeeded.
+   */
+  recordAbandoned(adapterId: string, memberId: string, sequence: number, note: string): void {
+    const row = this.db.prepare('SELECT intent FROM notification_deliveries WHERE adapterId=? AND memberId=? AND sequence=?')
+      .get(adapterId, memberId, sequence) as unknown as { intent: string } | undefined;
+    if (!row) throw new Error('Notification abandonment without a recorded intent');
+    const receipt: AdapterReceipt & { note?: string } = { sequence, consumed: false, abandoned: true, note };
+    this.db.prepare('UPDATE notification_deliveries SET receipt=? WHERE adapterId=? AND memberId=? AND sequence=?')
+      .run(JSON.stringify(receipt), adapterId, memberId, sequence);
   }
 
   /** Record what the adapter confirmed. A receipt never advances another sequence. */
@@ -75,11 +93,27 @@ export class NotificationAdapterStore {
       .run(JSON.stringify(receipt), adapterId, memberId, receipt.sequence);
   }
 
-  /** Next strictly-increasing sequence number to assign for one channel member. */
+  /**
+   * Next sequence number for one channel member: the highest settled sequence
+   * plus one. An unsettled (pending/unknown) sequence keeps this value fixed so
+   * a caller cannot quietly advance past an unresolved delivery.
+   */
   nextSequence(adapterId: string, memberId: string): number {
-    const row = this.db.prepare('SELECT MAX(sequence) AS value FROM notification_deliveries WHERE adapterId=? AND memberId=?')
-      .get(adapterId, memberId) as unknown as { value: number | null } | undefined;
-    return (row?.value ?? 0) + 1;
+    return this.settledSequence(adapterId, memberId) + 1;
+  }
+
+  /** Highest delivery sequence that can no longer change (delivered or abandoned). */
+  settledSequence(adapterId: string, memberId: string): number {
+    const rows = this.db.prepare('SELECT sequence, intent, receipt FROM notification_deliveries WHERE adapterId=? AND memberId=? ORDER BY sequence')
+      .all(adapterId, memberId) as unknown as { sequence: number; intent: string; receipt: string | null }[];
+    let settled = 0;
+    for (const row of rows) {
+      const state = reconcileDelivery(JSON.parse(row.intent) as DeliveryIntent, row.receipt === null ? null : JSON.parse(row.receipt) as AdapterReceipt);
+      // Ordering is strict: a gap above an unsettled sequence is not settled.
+      if (row.sequence !== settled + 1 || !isSettled(state)) break;
+      settled = row.sequence;
+    }
+    return settled;
   }
 
   /** Latest intent for one channel member, and how it reconciles with its receipt. */
@@ -106,7 +140,9 @@ export class NotificationAdapterStore {
       const intent = JSON.parse(row.intent) as DeliveryIntent;
       const receipt = row.receipt === null ? null : JSON.parse(row.receipt) as AdapterReceipt;
       const state = reconcileDelivery(intent, receipt);
-      if (state.state !== 'delivered') all.push({ intent, state });
+      // Settled sequences (delivered or explicitly abandoned) need no action;
+      // pending and unknown ones must stay visible for reconciliation.
+      if (!isSettled(state)) all.push({ intent, state });
     }
     return all;
   }

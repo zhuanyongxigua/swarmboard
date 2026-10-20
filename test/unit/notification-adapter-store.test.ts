@@ -53,16 +53,45 @@ describe('durable notification channel state', () => {
 
   it('keeps an unconsumed or absent receipt as unknown and never lets it count as delivered', () => {
     const store = new NotificationAdapterStore(new DatabaseSync(':memory:'));
-    store.recordIntent(intent(2));
+    store.recordIntent(intent(1));
     expect(store.unsettled()).toHaveLength(1);
-    store.recordReceipt('synthetic-alpha', 'member-1', { sequence: 2, consumed: false });
+    store.recordReceipt('synthetic-alpha', 'member-1', { sequence: 1, consumed: false });
     const pending = store.reconcile('synthetic-alpha', 'member-1');
-    expect(pending.state).toEqual({ state: 'unknown', sequence: 2, reason: 'unconfirmed' });
+    expect(pending.state).toEqual({ state: 'unknown', sequence: 1, reason: 'unconfirmed' });
     // Still surfaced after restart-equivalent state, and still not delivered.
     expect(store.unsettled()).toHaveLength(1);
-    store.recordReceipt('synthetic-alpha', 'member-1', { sequence: 2, consumed: true });
-    expect(store.reconcile('synthetic-alpha', 'member-1').state).toEqual({ state: 'delivered', sequence: 2 });
+    store.recordReceipt('synthetic-alpha', 'member-1', { sequence: 1, consumed: true });
+    expect(store.reconcile('synthetic-alpha', 'member-1').state).toEqual({ state: 'delivered', sequence: 1 });
     expect(store.unsettled()).toHaveLength(0);
+  });
+
+  it('refuses to advance past an unsettled sequence (cross-sequence fence)', () => {
+    const store = new NotificationAdapterStore(new DatabaseSync(':memory:'));
+    store.recordIntent(intent(1));
+    // Sequence 1 is pending: the next intent must not jump over it.
+    expect(store.nextSequence('synthetic-alpha', 'member-1')).toBe(1);
+    expect(() => store.recordIntent(intent(2))).toThrow(/not the next settled sequence/);
+    // An unknown (unconsumed) receipt keeps the fence closed too.
+    store.recordReceipt('synthetic-alpha', 'member-1', { sequence: 1, consumed: false });
+    expect(store.nextSequence('synthetic-alpha', 'member-1')).toBe(1);
+    expect(() => store.recordIntent(intent(2))).toThrow(/not the next settled sequence/);
+    // Only a delivered receipt opens it.
+    store.recordReceipt('synthetic-alpha', 'member-1', { sequence: 1, consumed: true });
+    expect(store.nextSequence('synthetic-alpha', 'member-1')).toBe(2);
+    expect(store.recordIntent(intent(2)).sequence).toBe(2);
+  });
+
+  it('lets a reconciled abandonment settle a sequence without counting as delivered', () => {
+    const store = new NotificationAdapterStore(new DatabaseSync(':memory:'));
+    store.recordIntent(intent(1));
+    store.recordReceipt('synthetic-alpha', 'member-1', { sequence: 1, consumed: false });
+    store.recordAbandoned('synthetic-alpha', 'member-1', 1, 'partial consumption reconciled by operator');
+    expect(store.reconcile('synthetic-alpha', 'member-1').state).toEqual({ state: 'abandoned', sequence: 1 });
+    expect(store.nextSequence('synthetic-alpha', 'member-1')).toBe(2);
+    expect(store.recordIntent(intent(2, [7])).sequence).toBe(2);
+    // Abandonment never reports delivered, and the remainder still needs its own intent.
+    expect(store.unsettled().map(item => item.intent.sequence)).toEqual([2]);
+    expect(() => store.recordAbandoned('synthetic-alpha', 'member-1', 9, 'missing')).toThrow(/without a recorded intent/);
   });
 
   it('refuses a receipt that has no recorded intent', () => {
@@ -77,14 +106,14 @@ describe('durable notification channel state', () => {
       const first = new DatabaseSync(path);
       const store = new NotificationAdapterStore(first);
       store.save(adapter());
-      store.recordIntent(intent(3));
-      store.recordReceipt('synthetic-alpha', 'member-1', { sequence: 3, consumed: false });
+      store.recordIntent(intent(1));
+      store.recordReceipt('synthetic-alpha', 'member-1', { sequence: 1, consumed: false });
       first.close();
 
       const second = new DatabaseSync(path);
       const reopened = new NotificationAdapterStore(second);
       const unsettled = reopened.unsettled('synthetic-alpha');
-      expect(unsettled.map(item => [item.intent.sequence, item.state.state])).toEqual([[3, 'unknown']]);
+      expect(unsettled.map(item => [item.intent.sequence, item.state.state])).toEqual([[1, 'unknown']]);
       second.close();
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });

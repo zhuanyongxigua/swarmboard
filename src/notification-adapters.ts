@@ -268,13 +268,20 @@ export interface DeliveryIntent {
 
 export interface AdapterReceipt {
   sequence: number;
+  /** The adapter confirmed it consumed this intent. */
   consumed: boolean;
+  /**
+   * Set only when a trusted operator gave up on this intent after reconciling
+   * it. An abandoned sequence is settled but never counts as delivered.
+   */
+  abandoned?: boolean;
 }
 
 export type DeliveryState =
   | { state: 'delivered'; sequence: number }
   | { state: 'pending'; sequence: number }
-  | { state: 'unknown'; sequence: number; reason: 'unconfirmed' | 'stale-receipt' };
+  | { state: 'unknown'; sequence: number; reason: 'unconfirmed' | 'stale-receipt' }
+  | { state: 'abandoned'; sequence: number };
 
 /**
  * Reconcile a recorded intent with what the adapter actually confirmed.
@@ -288,6 +295,14 @@ export function reconcileDelivery(intent: DeliveryIntent, receipt: AdapterReceip
   if (!Number.isSafeInteger(receipt.sequence)) return { state: 'unknown', sequence: intent.sequence, reason: 'unconfirmed' };
   if (receipt.sequence < intent.sequence) return { state: 'unknown', sequence: intent.sequence, reason: 'stale-receipt' };
   if (receipt.sequence > intent.sequence) return { state: 'unknown', sequence: intent.sequence, reason: 'unconfirmed' };
+  // An abandoned sequence is settled for ordering purposes but is never a
+  // successful delivery: the caller must still re-queue its entries explicitly.
+  if (receipt.abandoned === true) return { state: 'abandoned', sequence: intent.sequence };
   if (!receipt.consumed) return { state: 'unknown', sequence: intent.sequence, reason: 'unconfirmed' };
   return { state: 'delivered', sequence: intent.sequence };
+}
+
+/** A settled sequence is one that can no longer change: delivered or abandoned. */
+export function isSettled(state: DeliveryState | null): boolean {
+  return state !== null && (state.state === 'delivered' || state.state === 'abandoned');
 }
