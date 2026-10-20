@@ -10,6 +10,25 @@ afterEach(async () => { await client.close(); await server.close(); });
 const tool = (name: string, args: Record<string, unknown> = {}) => client.callTool({ name, arguments: args });
 const data = (result: Awaited<ReturnType<typeof tool>>) => result.structuredContent as Record<string, any>;
 describe('native automation MCP contract', () => {
+  it('reads the current resource protocol without changing a saved paused schedule', async () => {
+    const prepared = server.store.prepareAutomation({ action: 'enable', expectedVersion: 0 });
+    const active = server.store.confirmAutomation({ expectedVersion: prepared.version, requestId: prepared.requestId, automationId: 'retained-native', status: 'ACTIVE', model: 'host-default', reasoningEffort: 'high', projectId: null });
+    const pause = server.store.prepareAutomation({ action: 'pause', expectedVersion: active.version });
+    server.store.confirmAutomation({ expectedVersion: pause.version, requestId: pause.requestId, automationId: 'retained-native', status: 'PAUSED', model: 'host-default', reasoningEffort: 'high', projectId: null });
+    const before = server.store.readAutomation();
+    const current = data(await tool('automation_read'));
+    expect(current).toMatchObject(before);
+    expect(current.workerPrompt).toContain('user_prompt_read');
+    expect(current.workerPrompt).toContain('preferences_read');
+    expect(current.workerPrompt).toContain('context_publish');
+    expect(current.workerPrompt).not.toContain('resource_use');
+    expect(current.workerPrompt).not.toContain('resource_release');
+    expect(current.workerPrompt).toContain('Historical resources/usages');
+    expect(current.workerPrompt).toContain('workerPrompt');
+    expect(server.store.readAutomation()).toEqual(before);
+    expect(data(await tool('automation_ensure')).setupPrompt).toBeNull();
+    expect(server.store.readAutomation()).toEqual(before);
+  });
   it('ensures the default global schedule with no user configuration and accepts an explicit null project', async () => {
     const first = data(await tool('automation_ensure')); expect(first.config).toMatchObject({ state: 'pending', desiredEnabled: true, workspacePath: '' }); expect(first.setupPrompt).toContain('projectId=null');
     expect(data(await tool('automation_ensure')).setupPrompt).toBeNull();

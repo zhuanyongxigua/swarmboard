@@ -5,7 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import { AppError, Store, schemas, rejectLegacyResourceWrite } from './store.js';
-import { automationSchemas, buildSetupPrompt } from './automation.js';
+import { automationSchemas, buildSetupPrompt, buildWorkerPrompt } from './automation.js';
 import { workerSchemas, poolSchemas, type WorkerStore } from './worker-store.js';
 import { collaboratorSchemas, type Collaborator, type CollaboratorStore } from './collaborators.js';
 import { pipelineSchema, type PipelineEvents } from './pipeline-events.js';
@@ -89,7 +89,7 @@ export function createMcpServer(store: Store, widgetPath: string, runtime?: Even
   }
   const operations = [
     ['automation_ensure','Read compatibility schedule intent. Event-runtime installations never create native timer conversations.',automationSchemas.ensure,(input:unknown)=>runtime ? {config:store.readAutomation(),setupPrompt:null} : store.ensureAutomation(input),false],
-    ['automation_read','Read native auto-claim setup intent and the last host status reported by its setup conversation. This service does not independently inspect native automations.',z.object({}).strict(),()=>store.readAutomation(),true],
+    ['automation_read','Read native auto-claim setup intent, the last host status and the current workerPrompt. Reading never updates or resumes a saved native schedule. This service does not independently inspect native automations.',z.object({}).strict(),()=>{const config=store.readAutomation();return {...config,workerPrompt:buildWorkerPrompt(config.workspacePath,config.boardId)};},true],
     ['automation_prepare','Prepare an explicitly authorized native standalone auto-claim schedule or pause. Returns a setupPrompt to send to a NEW native conversation; does not start any agent or mark the schedule active.',automationSchemas.prepare,(input:unknown)=>{const config=store.prepareAutomation(input);return {config,setupPrompt:buildSetupPrompt(config)};},false],
     ['automation_reconcile','Record an authoritative read-only native schedule lookup for a pending recovery request. Found records stay inactive until the built-in ensure flow finishes setup; authoritative absence permits a later setup.',automationSchemas.reconcile,(input:unknown)=>store.reconcileAutomation(input),false],
     ['automation_claim','Atomically claim one todo task only while the confirmed native automation is active at the expected configuration version. Records the caller-reported native thread binding; use this for scheduled workers instead of task_claim.',automationSchemas.claim,(input:unknown)=>{if(runtime?.hasWorkers())throw new AppError('EVENT_WORKERS_ACTIVE','Event workers handle this board; legacy cron may not claim tasks',409);return store.claimAutomationTask(input);},false],
