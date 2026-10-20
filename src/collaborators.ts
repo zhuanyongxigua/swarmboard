@@ -39,10 +39,9 @@ export const collaboratorSchemas = {
 export function readCollaboratorSnapshot(path: string): Collaborator[] {
   const db = new DatabaseSync(path, { readOnly: true });
   try {
+    db.exec('PRAGMA busy_timeout=5000;');
+    if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='external_collaborators'").get()) return [];
     return db.prepare('SELECT data FROM external_collaborators ORDER BY id').all().map(row => JSON.parse(String(row.data)) as Collaborator);
-  } catch (error) {
-    if (error instanceof Error && /no such table/i.test(error.message)) return [];
-    throw error;
   } finally { db.close(); }
 }
 export class CollaboratorStore {
