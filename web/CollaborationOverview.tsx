@@ -32,10 +32,12 @@ export function CollaborationOverview({ snapshot }: { snapshot: OverviewSnapshot
   const current = snapshot?.status === 'current' && snapshot.facts.available && !!record && !expired;
   const facts = new Map((current ? snapshot.facts.items : record?.factSnapshot ?? []).map(item => [item.id, item]));
   const unavailable = snapshot?.status === 'unavailable';
+  // No fixed text prefix: the state stays machine-readable and visually muted
+  // so a stale/expired record is never presented as current.
+  const viewState = current ? 'current' : expired ? 'expired' : snapshot?.status ?? 'missing';
 
-  return <section className="collaboration-overview" aria-label={t('协作概览')}>
+  return <section className="collaboration-overview" aria-label={t('协作概览')} data-overview-state={viewState}>
     <p className="overview-line">{record?.parts.length ? <>
-      {!current ? <span className="overview-history">{t('上次概览：')} </span> : null}
       {record.parts.map((part, index) => <span key={index}>{index ? ' ' : ''}{part.kind === 'text'
         ? part.text : <strong className="overview-fact">{facts.has(part.factId) ? valueOf(facts.get(part.factId)!) : t('未知')}</strong>}</span>)}
     </> : t('协作情况未知')}</p>

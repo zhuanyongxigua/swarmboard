@@ -40,18 +40,31 @@ describe('collaboration overview', () => {
   for (const status of ['stale', 'unavailable'] as const) it(`marks the whole report as previous with its own values when ${status}`,  () => {
     const value = snapshot(); value.status = status; value.facts.items[0]!.value = 9;
     const html = render(value); expect(html).toContain('Start with the source');
-    expect(html).toContain('上次概览'); expect(html).toContain('>3<'); expect(html).not.toContain('>9<');
+    expect(html).not.toContain('上次概览'); expect(html).not.toContain('Previous overview');
+    expect(html).toContain(`data-overview-state="${status}"`);
+    expect(html).toContain('>3<'); expect(html).not.toContain('>9<');
     expect(html.includes('role="alert"')).toBe(status === 'unavailable');
   });
   it('marks expired claims as previous before the next transport read without hiding useful context', () => {
     const value = snapshot(); value.record!.expiresAt = new Date(Date.now() - 1).toISOString();
-    expect(render(value)).toContain('Start with the source'); expect(render(value)).toContain('上次概览');
-    expect(render(value)).toContain('>3<'); expect(render(value)).not.toContain('正常工作回合');
+    const html = render(value); expect(html).toContain('Start with the source');
+    expect(html).not.toContain('上次概览'); expect(html).toContain('data-overview-state="expired"');
+    expect(html).toContain('>3<'); expect(html).not.toContain('正常工作回合');
   });
   it('does not reconstruct missing legacy historical values from current facts', () => {
     const value = snapshot(); value.status = 'stale'; delete value.record!.factSnapshot;
-    const html = render(value); expect(html).toContain('上次概览'); expect(html).toContain('Start with the source');
+    const html = render(value); expect(html).not.toContain('上次概览'); expect(html).toContain('data-overview-state="stale"');
+    expect(html).toContain('Start with the source');
     expect(html.match(/未知/g)).toHaveLength(2); expect(html).not.toContain('>3<');
+  });
+  it('never renders the removed fixed previous-overview prefix in any freshness state', () => {
+    const value = snapshot();
+    for (const status of ['current', 'stale', 'unavailable', 'missing'] as const) {
+      value.status = status;
+      const html = render(value);
+      expect(html).not.toContain('上次概览'); expect(html).not.toContain('Previous overview');
+    }
+    expect(render(snapshot())).toContain('data-overview-state="current"');
   });
   it('has no fallback organization template or personal sample when no overview exists', () => {
     const value = snapshot(); value.status = 'missing'; value.record = null; value.facts.available = false;

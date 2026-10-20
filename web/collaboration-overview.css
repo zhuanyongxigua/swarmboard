@@ -1,5 +1,8 @@
 .collaboration-overview { flex: 1 1 300px; min-width: 0; overflow-wrap: anywhere; }
 .overview-line { margin: 0; line-height: 1.6; white-space: pre-wrap; }
 .overview-fact { color: var(--text); font-variant-numeric: tabular-nums; }
-.overview-history { opacity: .75; }
+
+.collaboration-overview[data-overview-state="stale"] .overview-line,
+.collaboration-overview[data-overview-state="expired"] .overview-line,
+.collaboration-overview[data-overview-state="unavailable"] .overview-line { opacity: .75; }
 .overview-error { margin: 4px 0 0; }
