@@ -2,8 +2,8 @@
 import {test,expect} from '@playwright/test';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StreamableHTTPClientTransport} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-test('embedded app initializes and routes UI actions through host to real MCP service',async({page,request})=>{
- const client=new Client({name:'simulated-apps-host',version:'1.0.0'});await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:4318/mcp')));const calls:string[]=[];const methods:string[]=[];
+test('embedded app initializes and routes UI actions through host to real MCP service',async({page,request},testInfo)=>{
+ const client=new Client({name:'simulated-apps-host',version:'1.0.0'});await client.connect(new StreamableHTTPClientTransport(new URL('/mcp',testInfo.project.use.baseURL)));const calls:string[]=[];const methods:string[]=[];
  await page.exposeFunction('hostCallTool',async(params:{name:string;arguments?:Record<string,unknown>})=>{calls.push(params.name);return client.callTool(params);});
  await page.exposeFunction('hostRecord',(method:string)=>methods.push(method));
  let forbiddenApiCalls=0;
