@@ -100,6 +100,17 @@ export class NotificationAdapterStore {
       .run(JSON.stringify(receipt), adapterId, memberId, receipt.sequence);
   }
 
+  /** Include settled evidence when resolving a member receipt retry; never guess an adapter. */
+  deliveriesForSequence(memberId: string, sequence: number): { intent: DeliveryIntent; state: DeliveryState }[] {
+    const rows = this.db.prepare('SELECT intent, receipt FROM notification_deliveries WHERE memberId=? AND sequence=? ORDER BY adapterId')
+      .all(memberId, sequence) as unknown as DeliveryRow[];
+    return rows.map(row => {
+      const intent = JSON.parse(row.intent) as DeliveryIntent;
+      const receipt = row.receipt === null ? null : JSON.parse(row.receipt) as AdapterReceipt;
+      return { intent, state: reconcileDelivery(intent, receipt) };
+    });
+  }
+
   /**
    * Next sequence number for one channel member: the highest settled sequence
    * plus one. An unsettled (pending/unknown) sequence keeps this value fixed so

@@ -101,4 +101,49 @@ describe('notification service identity and scope', () => {
     expect(() => f.service.pending(f.me.id, 0, 0)).toThrow(/Invalid limit/);
     expect(() => f.service.receipt(f.me.id, 0, true)).toThrow(/Invalid delivery sequence/);
   });
+
+  it('repeats an exact consumed receipt after response loss without rewriting evidence', () => {
+    const f = fixture();
+    const channels = new NotificationAdapterStore(f.board.db);
+    channels.recordIntent({ adapterId: 'channel', memberId: f.me.id, sequence: 1, entryIds: [10], createdAt: new Date(0).toISOString() });
+    channels.appendEntries('channel', f.me.id, 1, [11]);
+    const first = f.service.receipt(f.me.id, 1, true, [10, 11]);
+    const before = f.board.db.prepare('SELECT intent, receipt FROM notification_deliveries').all();
+    // A new service instance models a client reconnect after a committed response was lost.
+    const reconnected = new NotificationService(f.board, f.collaborators);
+    expect(reconnected.receipt(f.me.id, 1, true, [11, 10])).toEqual(first);
+    expect(f.board.db.prepare('SELECT intent, receipt FROM notification_deliveries').all()).toEqual(before);
+    expect(() => reconnected.receipt(f.me.id, 1, true, [10])).toThrow(/contents changed/);
+    expect(() => reconnected.receipt(f.me.id, 1, true)).toThrow(/must echo/);
+    expect(() => reconnected.receipt(f.me.id, 1, false)).toThrow(/already confirmed consumed/);
+    expect(f.board.db.prepare('SELECT intent, receipt FROM notification_deliveries').all()).toEqual(before);
+    expect(channels.nextSequence('channel', f.me.id)).toBe(2);
+  });
+
+  it('never treats missing, foreign, abandoned or revoked deliveries as consumed retries', () => {
+    const f = fixture();
+    const channels = new NotificationAdapterStore(f.board.db);
+    const intent = { adapterId: 'channel', memberId: f.me.id, sequence: 1, entryIds: [10], createdAt: new Date(0).toISOString() };
+    channels.recordIntent(intent);
+    expect(() => f.service.receipt(f.other.id, 1, true, [10])).toThrow(/No unsettled delivery/);
+    expect(() => f.service.receipt(f.me.id, 2, true, [10])).toThrow(/No unsettled delivery/);
+    channels.recordAbandoned('channel', f.me.id, 1, 'operator reconciliation');
+    expect(() => f.service.receipt(f.me.id, 1, true, [10])).toThrow(/No unsettled delivery/);
+    channels.recordIntent({ ...intent, sequence: 2 });
+    f.service.receipt(f.me.id, 2, true, [10]);
+    f.collaborators.configure({ id: f.me.id, expectedVersion: f.me.version, name: 'me', harness: 'anything', sessionRef: f.me.sessionRef, taskIds: [f.taskA], enabled: false }, f.board);
+    expect(() => f.service.receipt(f.me.id, 2, true, [10])).toThrow(/admitted collaborator identity/);
+  });
+
+  it('refuses an ambiguous sequence shared by two adapters even when their echoes match', () => {
+    const f = fixture();
+    const channels = new NotificationAdapterStore(f.board.db);
+    const intent = { adapterId: 'first', memberId: f.me.id, sequence: 1, entryIds: [10], createdAt: new Date(0).toISOString() };
+    channels.recordIntent(intent);
+    f.service.receipt(f.me.id, 1, true, [10]);
+    channels.recordIntent({ ...intent, adapterId: 'second' });
+    const before = f.board.db.prepare('SELECT intent, receipt FROM notification_deliveries ORDER BY adapterId').all();
+    expect(() => f.service.receipt(f.me.id, 1, true, [10])).toThrow(/ambiguous across adapters/);
+    expect(f.board.db.prepare('SELECT intent, receipt FROM notification_deliveries ORDER BY adapterId').all()).toEqual(before);
+  });
 });
