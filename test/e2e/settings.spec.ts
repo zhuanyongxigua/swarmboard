@@ -2,6 +2,37 @@
 // model execution and the user's real collaboration database remain outside this fixture.
 import { test, expect } from '@playwright/test';
 
+for (const surface of [
+  { name: 'desktop', width: 1100, height: 800, hasTouch: false },
+  { name: 'touch desktop', width: 1100, height: 800, hasTouch: true },
+  { name: 'touch mobile', width: 390, height: 844, hasTouch: true },
+]) {
+  test(`settings button stays circular on ${surface.name}`, async ({ browser, baseURL }) => {
+    const context = await browser.newContext({ viewport: { width: surface.width, height: surface.height }, hasTouch: surface.hasTouch });
+    try {
+      const page = await context.newPage();
+      await page.goto(baseURL!);
+      const button = page.getByRole('button', { name: '设置', exact: true });
+      await expect(button).toBeVisible();
+      expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(surface.hasTouch);
+      const box = await button.boundingBox();
+      expect(box).not.toBeNull();
+      expect(Math.abs(box!.width - box!.height)).toBeLessThan(1);
+      expect(box!.width).toBeGreaterThanOrEqual(surface.hasTouch ? 44 : 34);
+      await expect(button).toHaveCSS('border-radius', '50%');
+      const gear = await button.locator('svg path').evaluate(element => {
+        const bounds = (element as SVGGraphicsElement).getBBox();
+        return { width: bounds.width, height: bounds.height, x: bounds.x, y: bounds.y };
+      });
+      expect(Math.abs(gear.width - gear.height)).toBeLessThan(0.1);
+      expect(gear.x + gear.width / 2).toBeCloseTo(12);
+      expect(gear.y + gear.height / 2).toBeCloseTo(12);
+      await button.click();
+      await expect(page.getByRole('dialog', { name: '设置', exact: true })).toBeVisible();
+    } finally { await context.close(); }
+  });
+}
+
 test('settings replaces connection controls and the environment tab; prompts save independently and resources stay readable', async ({ page }, info) => {
   const resource = { id: 'legacy', name: 'Legacy resource', description: 'Original description', kind: 'machine', capabilities: ['build'], accessNotes: 'Coordinate first', version: 3 };
   await page.route('**/api/board', route => route.fulfill({ json: { tasks: [], resources: [resource], agents: [], usages: [], entries: [], cursor: 0 } }));
