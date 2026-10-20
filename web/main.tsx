@@ -445,7 +445,7 @@ function Workspace() {
           onClick={() => changeTab(item.id)}>{item.title}</button>)}
       </nav>
       <button className="settings-button" type="button" aria-label={t('设置')} onClick={() => setSettingsOpen(true)}>
-        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m9 3-1 3-3 1 1 3-2 2 2 2-1 3 3 1 1 3h6l1-3 3-1-1-3 2-2-2-2 1-3-3-1-1-3Z"/><circle cx="12" cy="12" r="3"/></svg>
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" aria-hidden="true"><path d="M10.186 4.723 10.514 2.617 13.486 2.617 13.814 4.723 15.863 5.571 17.584 4.314 19.686 6.416 18.429 8.137 19.277 10.186 21.383 10.514 21.383 13.486 19.277 13.814 18.429 15.863 19.686 17.584 17.584 19.686 15.863 18.429 13.814 19.277 13.486 21.383 10.514 21.383 10.186 19.277 8.137 18.429 6.416 19.686 4.314 17.584 5.571 15.863 4.723 13.814 2.617 13.486 2.617 10.514 4.723 10.186 5.571 8.137 4.314 6.416 6.416 4.314 8.137 5.571Z"/><circle cx="12" cy="12" r="3"/></svg>
       </button>
     </header>
     {eventRuntime ? <div className="automation-notice" role="status">
