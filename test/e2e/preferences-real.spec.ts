@@ -1,3 +1,4 @@
+import { seedLegacyResource } from './legacy-fixtures.js';
 import { openResources } from './settings-helpers.js';
 // Connect the actual editor to HTTP/SQLite, including a new server process on
 // the same synthetic database; no route mocks, model sessions or live board.
@@ -41,7 +42,7 @@ test('real preferences editor persists across server processes, preserves confli
   const directory = mkdtempSync(join(tmpdir(), 'preferences-real-'));
   let running = await start(join(directory, 'board.sqlite'));
   try {
-    const resource = await (await request.post(`${running.url}/api/resources`, { data: { name: 'Synthetic retained resource', kind: 'legacy', accessNotes: 'Synthetic coordination note' } })).json();
+    const resource = seedLegacyResource({ name: 'Synthetic retained resource', kind: 'legacy', accessNotes: 'Synthetic coordination note' }, join(directory, 'board.sqlite'));
     await page.goto(running.url);
     await openResources(page);
     await expect(page.getByRole('button', { name: '查看资源 Synthetic retained resource', exact: true })).toBeVisible();

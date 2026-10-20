@@ -202,7 +202,7 @@ describe('native automation configuration and claiming', () => {
     try {
       const config = store.prepareAutomation({ action: 'enable', expectedVersion: 0, workspacePath: tmpdir() }); const setup = buildSetupPrompt(config); const worker = buildWorkerPrompt(config.workspacePath, config.boardId);
       expect(setup.length).toBeLessThan(15000); expect(setup).toContain('automation_update'); expect(setup).toContain('never create a duplicate'); expect(setup).toContain('projectKind=local, hostId=local'); expect(setup).toContain('do not hardcode or guess');
-      expect(worker).toContain('automation_claim, never ordinary task_claim'); expect(worker).toContain('state=active'); expect(worker).toContain('not a lock'); expect(worker).toContain('resource_release'); expect(worker).toContain('task_release status=blocked');
+      expect(worker).toContain('automation_claim, never ordinary task_claim'); expect(worker).toContain('state=active'); expect(worker).toContain('not a lock'); expect(worker).toContain('context_publish'); expect(worker).not.toContain('resource_use'); expect(worker).not.toContain('resource_release'); expect(worker).toContain('task_release status=blocked');
     } finally { store.close(); }
   });
 });

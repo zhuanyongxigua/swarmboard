@@ -19,7 +19,7 @@
 - `SWARMBOARD_COLLABORATOR_ID`：接入时返回的协作者 id；未知 id 会让子进程以诊断退出。
 - 该子进程**不运行事件 runtime**（等价 `SWARMBOARD_DISABLE_RUNTIME`）。
 
-工具面与池成员的协作面一致：`board_read`/`board_open`/`task_list`/`task_read`（范围内有界分页）、`context_read`/`context_search`/`context_publish`（FACT/FAIL/CLAIM/PATCH_SUMMARY/MESSAGE）、`task_claim`/`task_release`/`task_update`（参与者身份）、`resource_use`/`resource_usage_update`/`resource_release`、`agent_heartbeat`。管理工具（任务/资源定义、组织控制、worker 注册、授权配置、`collaborator_configure` 自身、peer_request、pipeline_watch、execution_grants_read）不注册。写入强制绑定身份：伪造或省略 `agentId` 返回 `BOUND_IDENTITY`。
+工具面与池成员的协作面一致：`board_read`/`board_open`/`task_list`/`task_read`（范围内有界分页）、`context_read`/`context_search`/`context_publish`（FACT/FAIL/CLAIM/PATCH_SUMMARY/MESSAGE）、`task_claim`/`task_release`/`task_update`（参与者身份）、`resource_release`（仅旧占用清理；`resource_use`/`resource_usage_update` 保留兼容名但拒绝新写）、`agent_heartbeat`。管理工具（任务/资源定义、组织控制、worker 注册、授权配置、`collaborator_configure` 自身、peer_request、pipeline_watch、execution_grants_read）不注册。写入强制绑定身份：伪造或省略 `agentId` 返回 `BOUND_IDENTITY`。
 
 ## 更新与唤醒的诚实边界
 
@@ -67,3 +67,5 @@ DSH 当前不经由会话后端驱动（[harness 适配](harness-adapters.md)中
 ## 测试边界
 
 `test/integration/collaborators.test.ts` 用真实 SQLite 与官方 MCP 客户端验证：版本化接入/校验/终态撤销、与池成员分离计数、工具面与身份绑定、范围内读写、直接协作（CLAIM/FACT/FAIL/MESSAGE、加入参与）、游标更新无重复、撤销与终态目标停止及清理豁免、重启持久化。`test/mcp/desktop.test.ts` 在真实打包子进程中验证同一角色（含范围拒绝、附加更新、撤销围栏）。这些是隔离确定性证据：不证明任何真实外部 harness 已连接、会唤醒或其模型行为；真实连接须另行验收并记录于 [verification.md](verification.md)。
+
+当前资源定义由 `user_prompt_read` 提供，资源范围、共享与结束通过 `context_publish` 协商；`board_read.resources/usages` 仅作历史审计，不回填已编辑或清空的用户提示词。见[提示词与历史兼容契约](board-prompt-settings.md#当前资源来源与历史兼容)。
