@@ -49,16 +49,16 @@ describe('registerStatusFact', () => {
     expect(stored.memberId).toBe('member-a');
     expect(stored.observedAt).toBe('2026-10-20T03:00:00.000Z');
     expect(stored.expiresAt).toBe('2026-10-20T03:15:00.000Z');
-    expect((stored as Record<string, unknown>).ttlSeconds).toBeUndefined();
+    expect('ttlSeconds' in stored).toBe(false);
   });
   it('upserts one row per member identity (harness is updatable metadata) and reopens durably', () => {
     const path = `${process.env.TMPDIR ?? '/tmp'}/overview-status-facts-${Date.now()}.sqlite`;
     const fileStore = new Store(path);
     registerStatusFact(fileStore, input(), 'member-a', NOW);
-    registerStatusFact(fileStore, input({ classification: 'unknown', activity: undefined, modelId: null }), 'member-a', NOW + 1000);
+    registerStatusFact(fileStore, input({ classification: 'unknown', activity: undefined, modelId: null }), 'member-a', NOW + 6000);
     registerStatusFact(fileStore, input({ harness: 'dsh' }), 'member-b', NOW);
     // same identity under a different harness label replaces its row instead of adding one
-    registerStatusFact(fileStore, input({ harness: 'dsh' }), 'member-a', NOW + 2000);
+    registerStatusFact(fileStore, input({ harness: 'dsh' }), 'member-a', NOW + 12000);
     expect(fileStore.readOverviewStatusFacts()).toHaveLength(2);
     expect(fileStore.readOverviewStatusFacts().find(f => f.memberId === 'member-a')).toMatchObject({ harness: 'dsh', classification: 'fact' });
     fileStore.close();
@@ -92,10 +92,29 @@ describe('registerStatusFact', () => {
     expect(JSON.parse(JSON.stringify(summary.groups)).__proto__).toBeDefined();
     expect(summary.groups['__proto__']!.models).toEqual([{ modelId: 'GLM-5.3', count: 1, executing: 1 }]);
   });
+  it('rejects re-registration inside the per-identity cooldown', () => {
+    registerStatusFact(store, input(), 'member-a', NOW);
+    expect(() => registerStatusFact(store, input(), 'member-a', NOW + 1000)).toThrow(/Wait a few seconds/);
+    registerStatusFact(store, input(), 'member-a', NOW + 6000);
+    expect(store.readOverviewStatusFacts()).toHaveLength(1);
+  });
+  it('distinct labels that sanitize alike get distinct factId group keys', () => {
+    expect(statusGroupKey('zcode cli')).not.toBe(statusGroupKey('zcode-cli'));
+    expect(statusGroupKey('zcode/cli')).not.toBe(statusGroupKey('zcode cli'));
+    expect(statusGroupKey('plain_zcode')).toBe('plain_zcode');
+  });
+  it('fingerprint reacts to evidence changes alone', () => {
+    const a = aggregateStatusFacts([executing('a')], NOW).fingerprint;
+    const b = aggregateStatusFacts([executing('a', { executionEvidence: { kind: 'trusted-observer', at: '2026-10-20T02:59:40.000Z' } })], NOW).fingerprint;
+    expect(a).not.toBe(b);
+  });
+  it('accepts the v2 emitter evidence field name (record, not source)', () => {
+    expect(statusFactInputSchema.parse(input({ evidence: { record: 'my-status-fact-v2.json', sha256: 'a'.repeat(64) } })).evidence?.record).toBe('my-status-fact-v2.json');
+  });
   it('duplicate identity across harness labels counts once after identity upsert', () => {
     registerStatusFact(store, input({ harness: 'alpha-harness' }), 'same-member', NOW);
-    registerStatusFact(store, input({ harness: 'beta-harness' }), 'same-member', NOW + 1000);
-    const summary = aggregateStatusFacts(store.readOverviewStatusFacts(), NOW + 1000);
+    registerStatusFact(store, input({ harness: 'beta-harness' }), 'same-member', NOW + 6000);
+    const summary = aggregateStatusFacts(store.readOverviewStatusFacts(), NOW + 6000);
     expect(summary.registered).toBe(1);
     expect(summary.executing <= 1).toBe(true);
     expect(Object.keys(summary.groups)).toEqual(['beta-harness']);
@@ -151,13 +170,12 @@ describe('overview facts integration', () => {
       executing('a', { harness: 'zcode cli/2' }),
       executing('b', { harness: 'zcode cli/2', classification: 'unknown', activity: undefined, modelId: null }),
     ]), NOW);
-    const group = 'external.harness.zcode-cli-2';
+    const group = `external.harness.${statusGroupKey('zcode cli/2')}`;
     expect(facts.items.find(f => f.id === 'external.running')?.value).toBe(1);
     expect(facts.items.find(f => f.id === `${group}.members`)?.value).toBe(2);
     expect(facts.items.find(f => f.id === `${group}.executing`)?.value).toBe(1);
     expect(facts.items.find(f => f.id === `${group}.unknown`)?.value).toBe(1);
     expect(facts.items.find(f => f.id === `${group}.model.GLM-5.3`)?.value).toBe(1);
-    expect(statusGroupKey('zcode cli/2')).toBe('zcode-cli-2');
   });
   it('composes organization.total from native and admission evidence', () => {
     expect(overviewFacts(source(), NOW).items.find(f => f.id === 'organization.total')?.value).toBe(2);

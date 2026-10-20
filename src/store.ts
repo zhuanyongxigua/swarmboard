@@ -258,6 +258,10 @@ export class Store {
     const rows = this.db.prepare('SELECT data FROM overview_status_facts ORDER BY member_id').all() as { data: string }[];
     return rows.map(row => JSON.parse(row.data) as StoredStatusFact);
   }
+  readOverviewStatusFact(memberId: string): StoredStatusFact | null {
+    const row = this.db.prepare('SELECT data FROM overview_status_facts WHERE member_id=?').get(memberId) as { data: string } | undefined;
+    return row ? JSON.parse(row.data) as StoredStatusFact : null;
+  }
   saveOverviewStatusFact(fact: StoredStatusFact): void {
     this.db.prepare('INSERT INTO overview_status_facts VALUES(?,?) ON CONFLICT(member_id) DO UPDATE SET data=excluded.data').run(fact.memberId, JSON.stringify(fact));
   }

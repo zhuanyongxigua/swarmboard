@@ -25,7 +25,7 @@ export const statusFactInputSchema = z.object({
   modelId: z.string().min(1).max(160).nullable(),
   reasoningLevel: z.string().min(1).max(64).nullable().optional(),
   executionEvidence: z.object({ kind: shortText(64), at: z.string().datetime(), ref: shortText(160).optional() }).strict().optional(),
-  evidence: z.object({ source: shortText(200), sha256: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict().optional(),
+  evidence: z.object({ record: shortText(200), sha256: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict().optional(),
   asOf: z.string().datetime(),
   ttlSeconds: z.number().int().min(1).max(900),
 }).strict().superRefine((value, ctx) => {
@@ -42,7 +42,7 @@ export interface StoredStatusFact {
   activity?: 'executing' | 'turn-settled' | 'failed';
   modelId: string | null; reasoningLevel?: string | null;
   executionEvidence?: { kind: string; at: string; ref?: string };
-  evidence?: { source: string; sha256?: string };
+  evidence?: { record: string; sha256?: string };
   asOf: string; observedAt: string; expiresAt: string;
 }
 
@@ -97,14 +97,18 @@ export function aggregateStatusFacts(rows: StoredStatusFact[], now: number): Sta
       if (!group.models.includes(model)) group.models.push(model);
     } else group.modelsUnknown++;
   }
-  const canonical = rows.map(row => [row.memberId, row.harness, row.classification, row.activity ?? null, row.modelId, row.observedAt, row.expiresAt]).sort();
+  const canonical = rows.map(row => [row.memberId, row.harness, row.classification, row.activity ?? null, row.modelId, row.asOf, row.executionEvidence ? [row.executionEvidence.kind, row.executionEvidence.at] : null, row.evidence ? row.evidence.record : null, row.observedAt, row.expiresAt]).sort();
   return { groups: Object.fromEntries(groups) as Record<string, StatusFactsGroup>, registered: rows.length, executing,
     fingerprint: createHash('sha256').update(JSON.stringify(canonical)).digest('hex') };
 }
 
-/** factId-safe group key: groups are data-driven, never a vendor list. */
+/** factId-safe group key: groups are data-driven, never a vendor list. Lossy
+ * sanitization is made injective in practice by appending a digest of the raw
+ * label, so distinct labels can never collide on the same factId prefix. */
 export function statusGroupKey(harness: string): string {
-  return harness.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'group';
+  const sanitized = harness.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'group';
+  if (sanitized === harness && harness.length <= 40) return sanitized;
+  return `${sanitized}-${createHash('sha256').update(harness).digest('hex').slice(0, 8)}`;
 }
 
 export function registerStatusFact(store: Store, input: unknown, memberId: string, now = Date.now()): StoredStatusFact {
@@ -123,6 +127,14 @@ export function registerStatusFact(store: Store, input: unknown, memberId: strin
       throw new AppError('STATUS_FACT_EVIDENCE_OUT_OF_WINDOW', 'execution evidence must fall inside the requested freshness window', 400);
     if (evidenceAt < asOfAt)
       throw new AppError('STATUS_FACT_EVIDENCE_PREDATES_AS_OF', 'execution evidence cannot predate the claimed fact time', 400);
+  }
+  // Per-identity write cooldown: registrations describe current state, so a
+  // tighter refresh than a few seconds is noise, not new evidence.
+  const previous = store.readOverviewStatusFact(memberId);
+  if (previous) {
+    const lastAt = Date.parse(previous.observedAt);
+    if (Number.isFinite(lastAt) && now - lastAt < 5_000)
+      throw new AppError('STATUS_FACT_RATE_LIMITED', 'Wait a few seconds before re-registering this seat', 429);
   }
   const stored: StoredStatusFact = { memberId, ...data,
     observedAt: new Date(now).toISOString(), expiresAt: new Date(now + data.ttlSeconds * 1000).toISOString() };
