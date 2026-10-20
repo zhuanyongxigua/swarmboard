@@ -121,6 +121,15 @@ export function createMcpServer(store: Store, widgetPath: string, runtime?: Even
     ['resource_usage_update','Amend your active usage declaration with the operation, impact scope and sharing conditions agreed with peers. Temporary exclusivity requires a specific scope, reason and end condition; recording it does not enforce mutual exclusion. Release your declaration when finished.',schemas.usageUpdate.extend({id:z.string().min(1)}),(input:unknown)=>{const {id,...patch}=input as {id:string};return store.updateUsage(id,patch);},false],
     ['resource_release','Release your own resource-use declaration. Does not stop OS processes or affect other agents.',schemas.release.extend({id:z.string().min(1)}),(input:unknown)=>{const {id,...release}=input as {id:string};return store.releaseUsage(id,release);},false],
   ] as const;
+  // Bound-identity injection is only valid for tools whose strict schema
+  // declares `agentId`. Self-registration tools (e.g. overview status facts)
+  // bind the identity server-side from options.workerId inside their handler;
+  // injecting an undeclared field makes every bound seat fail validation.
+  const acceptsBoundAgentId = (schema: unknown): boolean => {
+    const shape = typeof schema === 'object' && schema !== null && 'shape' in schema
+      ? (schema as { shape?: Record<string, unknown> }).shape : undefined;
+    return shape !== undefined && Object.prototype.hasOwnProperty.call(shape, 'agentId');
+  };
   for (const [name,description,schema,operation,readOnly] of operations) {
     if (bounded && ['preferences_write', 'user_prompt_write', 'task_create', 'resource_create', 'resource_update', 'automation_ensure', 'automation_prepare', 'automation_confirm', 'automation_reconcile', 'automation_setup_failed', 'automation_claim'].includes(name)) continue;
     server.registerTool(name,{description,inputSchema:schema,annotations:{readOnlyHint:readOnly,destructiveHint:false,idempotentHint:readOnly,openWorldHint:false}},async (input: unknown)=>{
@@ -140,7 +149,7 @@ export function createMcpServer(store: Store, widgetPath: string, runtime?: Even
           if (typeof taskId === 'string' && admitted && !admitted.taskIds.includes(taskId)) throw new AppError('UNBOUND_GOAL', 'This goal is outside your admitted scope', 403);
           const pool = options.peers?.pool();
           if (typeof taskId === 'string' && pool?.taskIds.length && !pool.taskIds.includes(taskId)) throw new AppError('UNBOUND_GOAL', 'This goal is outside the organization subscription', 403);
-          input = { ...bound, agentId: options.workerId };
+          input = acceptsBoundAgentId(schema) ? { ...bound, agentId: options.workerId } : bound;
         }
         return success(operation(input));
       }catch(error){return fail(error);}

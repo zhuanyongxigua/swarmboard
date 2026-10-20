@@ -52,7 +52,8 @@ test('keeps an expired overview honestly marked as previous without requesting a
   const overview = page.getByRole('region', { name: '协作概览', exact: true });
   await expect(overview).toContainText('We are comparing alternatives');
   await page.clock.fastForward(2500);
-  await expect(overview).toContainText('上次概览');
+  await expect(overview).toHaveAttribute('data-overview-state', 'expired');
+  await expect(overview).not.toContainText('上次概览');
   await expect(overview).toContainText('We are comparing alternatives');
   await expect(overview.locator('strong')).toHaveText(['3', '未知']);
   await expect(overview).not.toContainText('正常工作回合');
@@ -66,7 +67,8 @@ test('preserves previous verified values on fact changes and reports unreadable 
   await expect(overview).toContainText('We are comparing alternatives');
   value.status = 'stale'; value.reason = 'facts-changed'; value.facts.revision = 'new-facts'; value.facts.items[0]!.value = 9;
   await refreshBoard(page);
-  await expect(overview).toContainText('上次概览');
+  await expect(overview).toHaveAttribute('data-overview-state', 'stale');
+  await expect(overview).not.toContainText('上次概览');
   await expect(overview).toContainText('We are comparing alternatives');
   await expect(overview.locator('strong')).toHaveText(['3', '未知']);
   await expect(overview).not.toContainText('9');
@@ -100,7 +102,8 @@ test('does not invent historical values on a stale first load or reuse another b
   value.facts.items[0]!.value = 9; delete value.record!.factSnapshot;
   await page.route('**/api/overview', route => route.fulfill({ json: value }));
   await page.goto('/'); const overview = page.getByRole('region', { name: '协作概览', exact: true });
-  await expect(overview).toContainText('上次概览');
+  await expect(overview).toHaveAttribute('data-overview-state', 'stale');
+  await expect(overview).not.toContainText('上次概览');
   await expect(overview).toContainText('We are comparing alternatives');
   await expect(overview.locator('strong')).toHaveText(['未知', '未知']);
   value = makeOverview(); await refreshBoard(page);
@@ -120,10 +123,13 @@ test('shows current AI wording after a new revision and keeps real runtime error
   await expect(page.getByRole('alert').filter({ hasText: 'Synthetic runtime connection failed' })).toBeVisible();
   value.status = 'stale'; value.reason = 'PREFERENCES_CHANGED';
   await refreshBoard(page);
-  await expect(overview).toContainText('上次概览');
+  await expect(overview).toHaveAttribute('data-overview-state', 'stale');
+  await expect(overview).not.toContainText('上次概览');
   value = makeOverview(); value.record!.version++; value.record!.parts = [{ kind: 'text', text: 'Reviewing the next contribution' }, { kind: 'fact', factId: 'bound' }];
   await refreshBoard(page);
-  await expect(overview).toContainText('Reviewing the next contribution'); await expect(overview).not.toContainText('上次概览');
+  await expect(overview).toContainText('Reviewing the next contribution');
+  await expect(overview).toHaveAttribute('data-overview-state', 'current');
+  await expect(overview).not.toContainText('上次概览');
   value.record = null; value.status = 'missing';
   await refreshBoard(page);
   await expect(overview).toContainText('协作情况未知');

@@ -41,7 +41,7 @@ const english: Record<string, string> = {
   "提示词响应无效，请重新读取。": "Invalid prompt response. Please reload.",
   "提示词已被更新，草稿已保留。请核对最新保存值。": "The prompt changed. Your draft is preserved. Review the latest saved value.",
   '协作概览': 'Collaboration overview', '未知': 'Unknown',
-  '上次概览：': 'Previous overview:', '协作情况未知': 'Collaboration status unknown',
+  '协作情况未知': 'Collaboration status unknown', '协作概览已过期': 'Overview is stale', '协作概览不是最新': 'Overview is not current',
   '协作概览暂不可核实': 'Collaboration overview cannot currently be verified',
   '完成进度': 'Completion progress', '进度依据': 'Progress evidence', '待评估': 'Not estimated',
   '正常推进': 'Progressing', '等待中': 'Waiting', '尚无可靠估算': 'No reliable estimate',
