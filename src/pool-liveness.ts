@@ -1,5 +1,8 @@
-// Recover idle organizations with bounded durable messages to existing peers.
-// This is an execution safeguard, not a planner or a per-task model timer.
+// Recover idle organizations with durable messages to existing peers.
+// Reminders repeat while unfinished goals remain and the organization is active:
+// they are a heartbeat for a stranded board, not a planner, a per-task model
+// timer, or a failure verdict. Nothing here inspects how long a single turn has
+// been running; only organization idleness between turns is observed.
 import { randomUUID } from 'node:crypto';
 import type { Entry, Store } from './store.js';
 import type { Pool, WorkerStore } from './worker-store.js';
@@ -8,11 +11,16 @@ export interface Liveness {
   fingerprint: string;
   attempts: number;
   idleSince: number | null;
+  // 'attention' is only ever read from records written by older builds; the
+  // current watchdog never writes it, so a legacy value cannot silence recovery.
   state: 'inactive' | 'watching' | 'nudged' | 'attention';
   pending: Omit<Entry, 'id' | 'createdAt'> | null;
 }
 export class PoolLiveness {
-  constructor(private board: Store, private workers: WorkerStore, private idleMs: number) {}
+  constructor(private board: Store, private workers: WorkerStore, private idleMs: number,
+    /** Called with each published recovery reminder so registered notification
+     *  channels can enqueue a durable intent. Never used to start work. */
+    private onSystemEntry?: (entry: Entry) => void) {}
   private tasks(pool: Pool) { return this.board.taskStates().filter(t => !pool.taskIds.length || pool.taskIds.includes(t.id)); }
   sync(pool: Pool | null, now: number, queuedOrBusy: boolean, awaitingGoalIds: string[] = []) {
     if (!pool) return;
@@ -30,24 +38,23 @@ export class PoolLiveness {
     const healthy = peers.filter(w => w.enabled && w.status === 'idle');
     const eligible = tasks.some(t => ['todo','in_progress'].includes(t.status)) && pool.enabled && pool.state === 'active' && healthy.length > 0;
     if (!eligible || queuedOrBusy) {
-      this.workers.saveLiveness({ ...value, idleSince: null, state: value.state === 'attention' ? 'attention' : 'inactive' }); return;
+      this.workers.saveLiveness({ ...value, idleSince: null, state: 'inactive' }); return;
     }
-    if (!value.pending && value.state !== 'attention') {
+    if (!value.pending) {
       if (value.idleSince === null) value = { ...value, idleSince: now, state: 'watching' };
       else if (now - value.idleSince >= this.idleMs) {
-        const attention = value.attempts >= 2;
         // Rotate recovery over dispatchable members only; a protected peer
-        // must not consume a nudge it can never act on.
-        const recipientId = attention ? undefined : healthy[value.attempts % healthy.length]!.id;
-        value = { ...value, attempts: value.attempts + (attention ? 0 : 1), idleSince: null, state: attention ? 'attention' : 'nudged', pending: {
-          agentId: 'runtime-' + pool.id, kind: attention ? 'OBSERVED' : 'MESSAGE',
-          summary: attention ? 'IDLE_ATTENTION: goals remain idle after two recovery attempts' : 'IDLE_RECOVERY: inspect stranded human goals and continue useful work',
-          detail: JSON.stringify({ signalId: randomUUID(), unfinishedGoalCount: tasks.filter(t => ['todo', 'in_progress'].includes(t.status)).length,
+        // must not consume a nudge it can never act on. There is no attempt
+        // budget: the counter only rotates recipients and reports activity.
+        const recipientId = healthy[value.attempts % healthy.length]!.id;
+        value = { ...value, attempts: value.attempts + 1, idleSince: null, state: 'nudged', pending: {
+          agentId: 'runtime-' + pool.id, kind: 'MESSAGE',
+          summary: 'IDLE_RECOVERY: inspect stranded human goals and continue useful work',
+          detail: JSON.stringify({ kind: 'IDLE_RECOVERY', signalId: randomUUID(), unfinishedGoalCount: tasks.filter(t => ['todo', 'in_progress'].includes(t.status)).length,
             goalIds: tasks.filter(t => ['todo', 'in_progress'].includes(t.status)).slice(0, 20).map(t => t.id),
             goalIdsHasMore: tasks.filter(t => ['todo', 'in_progress'].includes(t.status)).length > 20,
             discovery: 'Use task_list pages to discover current goals; these IDs are only a bounded sample. This reminder assigns no goal or order.',
-            instruction: attention ? 'Human attention needed. No further automatic idle nudges until a goal revision or explicit pool resume. Task states remain unchanged.'
-              : 'INTERNAL_ONLY. Read current goals and shared evidence. Choose useful authorized work with existing peers. If truly waiting on a missing prerequisite or acceptance, publish the concrete blocker and use blocked/in_review as an active participant. Do not merely acknowledge this message, poll, invent success, launch external harnesses or create tasks. Do not reply to the runtime identity.' }),
+            instruction: 'INTERNAL_ONLY. Read current goals and shared evidence. Choose useful authorized work with existing peers. If truly waiting on a missing prerequisite or acceptance, publish the concrete blocker and use blocked/in_review as an active participant. Do not merely acknowledge this message, poll, invent success, launch external harnesses or create tasks. Do not reply to the runtime identity. While unfinished goals remain and the organization stays active this reminder repeats after each idle interval; it is not a stop signal and assigns no goal or order. Task states remain unchanged.' }),
           ...(recipientId ? { recipientId } : {}),
         } };
         // Persist first, publish once, then confirm: either crash window is
@@ -57,7 +64,8 @@ export class PoolLiveness {
     }
     if (value.pending) {
       if (!this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(value.pending.agentId)) this.board.registerAgent({ agentId: value.pending.agentId, name: 'Swarmboard runtime' });
-      this.board.publishSystemEntryOnce(value.pending);
+      const published = this.board.publishSystemEntryOnce(value.pending);
+      this.onSystemEntry?.(published);
       value = { ...value, pending: null };
     }
     this.workers.saveLiveness(value);
@@ -70,11 +78,11 @@ export class PoolLiveness {
     const watchdog = this.workers.liveness();
     const state = !pool ? (running ? 'running' : attention ? 'attention' : 'idle')
       : ['stopped', 'stopping', 'completed', 'error'].includes(pool.state) ? pool.state
-      : running ? 'running' : attention || watchdog?.state === 'attention' ? 'attention'
+      : running ? 'running' : attention ? 'attention'
       : ['waiting','ready'].includes(pool.state) ? pool.state : 'idle';
     return { members: peers.length, draining: peers.filter(w => w.retirement?.state === 'draining').length, running, idle, state, executionMode: 'internal-only' as const,
       watchdog: { state: watchdog?.state ?? 'inactive', attempts: watchdog?.attempts ?? 0,
-        nextWakeAt: pool?.enabled && watchdog?.idleSince !== null && watchdog?.idleSince !== undefined && watchdog.state !== 'attention' ? new Date(watchdog.idleSince + this.idleMs).toISOString() : null },
+        nextWakeAt: pool?.enabled && watchdog?.idleSince !== null && watchdog?.idleSince !== undefined ? new Date(watchdog.idleSince + this.idleMs).toISOString() : null },
     };
   }
 }

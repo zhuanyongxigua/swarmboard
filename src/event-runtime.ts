@@ -10,6 +10,7 @@ import { resolveHarness } from './harness/registry.js';
 import { workerPrompt } from './worker-prompt.js';
 import { WorkerPool } from './worker-pool.js';
 import { PoolLiveness } from './pool-liveness.js';
+import { createNotificationDispatcher } from './notification-dispatch.js';
 import { PipelineEvents, type PipelineReader } from './pipeline-events.js';
 import { ExecutionGrants } from './execution-grants.js';
 import { CollaboratorStore } from './collaborators.js';
@@ -34,6 +35,7 @@ export class EventRuntime {
   readonly grants: ExecutionGrants;
   readonly collaborators: CollaboratorStore;
   private liveness: PoolLiveness;
+  private notificationDispatcher: ReturnType<typeof createNotificationDispatcher>;
   private scanning?: Promise<void>;
   private token = randomUUID();
   private watcher?: FSWatcher;
@@ -61,7 +63,11 @@ export class EventRuntime {
     this.pool = new WorkerPool(this.workers, board, options.databasePath);
     this.grants = new ExecutionGrants(board, this.workers);
     this.collaborators = new CollaboratorStore(this.statePath);
-    this.liveness = new PoolLiveness(board, this.workers, options.idleMs ?? 10 * 60 * 1000);
+    // Reminders are also offered to registered notification channels as durable
+    // intents; the core never delivers or starts anything itself.
+    this.notificationDispatcher = createNotificationDispatcher(board, this.collaborators);
+    this.liveness = new PoolLiveness(board, this.workers, options.idleMs ?? 5 * 60 * 1000,
+      entry => { this.notificationDispatcher.dispatch(entry); });
     this.ci = new PipelineEvents(board, this.workers, options.pipelineReader, options.now, () => !this.closed && this.workers.owns(this.token));
   }
   start() {
@@ -136,6 +142,11 @@ export class EventRuntime {
   // their scoped record for the collaborator MCP role.
   configureCollaborator(input: unknown) {
     const { collaborator } = this.collaborators.configure(input, this.board);
+    // Revocation/disable cancels queued notifications instead of leaving them to
+    // be delivered (or confirmed) after the identity lost its admission.
+    if (!collaborator.enabled || collaborator.revokedAt) {
+      this.notificationDispatcher.cancelMember(collaborator.id, collaborator.revokedAt ? 'collaborator-revoked' : 'collaborator-disabled');
+    }
     // The sidecar commit and the board registration are separate stores. If an
     // earlier attempt committed the record but failed before registering, any
     // later successful configure — including a same-id retry after a restart —
@@ -222,7 +233,17 @@ export class EventRuntime {
     try { await this.scanning; } finally { this.scanning = undefined; }
   }
   private async scanOnce() {
-    if (this.closed || !this.hasWorkers() || !this.workers.acquire(this.token, process.pid)) return;
+    // Ownership belongs to the live owner even on a board with no native
+    // workers: registered external channels still need their events dispatched.
+    if (this.closed || !this.workers.acquire(this.token, process.pid)) return;
+    if (!this.hasWorkers()) {
+      try {
+        this.notificationDispatcher.dispatchPending();
+      } catch {
+        this.lastError = 'Unable to dispatch notifications; next scan will retry';
+      }
+      return;
+    }
     clearTimeout(this.batchWake); this.nextBatchWakeAt = null;
     await this.ci.poll(this.options.now?.() ?? Date.now());
     if (this.closed || !this.workers.owns(this.token)) return;
@@ -237,6 +258,9 @@ export class EventRuntime {
     const dispatchable = new Set(pool?.memberIds.filter(id => { const member = this.workers.get(id); return member.enabled && member.status === 'idle'; }) ?? []);
     const pending = busy || !!pool?.memberIds.some(id => { if (!dispatchable.has(id)) return false; const batch = this.batch(this.workers.get(id)); return batch.events.length > 0 || batch.hasMore; });
     this.liveness.sync(pool, this.options.now?.() ?? Date.now(), pending, this.ci.list().filter(w => w.state === 'watching').map(w => w.taskId));
+    // Ordinary task/shared events reach registered channels through the same
+    // dispatcher as reminders. No channels registered means no extra work.
+    this.notificationDispatcher.dispatchPending();
     for (const worker of this.workers.list()) {
       // Retired history and unlisted preparations are not delivery targets.
       if (worker.poolId && (!pool || !pool.memberIds.includes(worker.id))) {

@@ -98,7 +98,7 @@ SWARMBOARD_FAULT_ROUNDS=30 npx vitest run test/integration/process-recovery.test
 
 ## 内部协作空闲恢复
 
-`idle-recovery.test.ts` 使用隔离 SQLite、可控时钟和会话替身，检查十分钟边界、单个既有 peer 轮换提醒、两次预算、重启保留、普通消息不重置预算、目标修订重置、忙碌／停止／审批／未知执行／blocked／in_review／完成时不盲目唤醒，以及 4001 条无关历史跨页积压时先读完队列再计空闲。`process-recovery.test.ts` 在信号持久化后、看板追加前与追加后两个真实进程边界实际 SIGKILL，核对重启后仅一条信号和一次消费，原成员和 threadId 不变。它们不证明真实模型能自行解决所有阻塞。
+`idle-recovery.test.ts` 使用隔离 SQLite、可控时钟和会话替身，检查默认五分钟边界、单个既有 peer 轮换提醒、无次数预算的持续提醒、重启保留、普通消息不重置计数、目标修订重置、忙碌／停止／审批／未知执行／blocked／in_review／完成时不盲目唤醒，以及 4001 条无关历史跨页积压时先读完队列再计空闲。`process-recovery.test.ts` 在信号持久化后、看板追加前与追加后两个真实进程边界实际 SIGKILL，核对重启后仅一条信号和一次消费，原成员和 threadId 不变。它们不证明真实模型能自行解决所有阻塞。
 
 浏览器回归分别检查成员数／执行数、真实空闲状态、下次检查时间、耗尽后的可见提醒及版本化重新检查。内部模型执行策略通过每轮固定提示和 skill 交付，不将行为约定描述为对恶意拥有 Shell 的客户端的强制隔离。
 
