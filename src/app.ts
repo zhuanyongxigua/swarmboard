@@ -54,7 +54,7 @@ export function createApp(options: AppOptions = {}) {
   });
   app.get('/api/board',(_req,res)=>res.json(store.board()));
   app.get('/api/preferences',(_req,res)=>res.json(store.readPreferences()));
-  const overviewSource = () => options.runtime ? { ...options.runtime.status(), ownerEpoch: options.runtime.workers?.ownerEpoch() } : undefined;
+  const overviewSource = () => options.runtime ? { ...options.runtime.status(), ownerEpoch: options.runtime.workers?.ownerEpoch(), statusFacts: store.readOverviewStatusFacts() } : undefined;
   app.get('/api/overview',(_req,res)=>res.json(readOverview(store, overviewSource())));
   const route = (method:'post'|'patch',path:string,operation:(req:Request)=>unknown)=>app[method](path,(req,res,next)=>{try{res.json(operation(req));}catch(error){next(error);}});
   route('patch','/api/preferences',req=>{const value=store.writePreferences(req.body);options.runtime?.notify();return value;});

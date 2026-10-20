@@ -5,6 +5,7 @@ import { dirname } from 'node:path';
 import { z } from 'zod';
 import { automationSchemas, buildSetupPrompt, canonicalWorkspace, defaultAutomationConfig, type AutomationConfig } from './automation.js';
 import type { OverviewRecord } from './overview.js';
+import type { StoredStatusFact } from './overview-status-facts.js';
 
 export class AppError extends Error {
   constructor(public code: string, message: string, public status = 400) { super(message); }
@@ -80,7 +81,7 @@ export class Store {
       // Separate desktop MCP processes must inspect and apply migrations under the same write lock.
       this.transaction(() => {
         const version = Number((this.db.prepare('PRAGMA user_version').get() as {user_version: number}).user_version);
-        if (version > 9) throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500);
+        if (version > 10) throw new AppError('SCHEMA_TOO_NEW', 'Database schema is newer than this server', 500);
         // Standalone review candidates reused v6; only the declared release sequence may upgrade.
         if (version >= 6) {
           const features = ['board_preferences', 'task_progress', 'resource_admission_fences', 'board_overview'];
@@ -132,6 +133,7 @@ export class Store {
           PRAGMA user_version=8;
         `);
         if (version < 9) this.db.exec('CREATE TABLE board_overview(id INTEGER PRIMARY KEY CHECK(id=1),data TEXT NOT NULL); PRAGMA user_version=9;');
+        if (version < 10) this.db.exec('CREATE TABLE overview_status_facts(member_id TEXT PRIMARY KEY,data TEXT NOT NULL); PRAGMA user_version=10;');
       });
     } catch (error) { this.db.close(); throw error; }
   }
@@ -247,6 +249,21 @@ export class Store {
       this.db.prepare('INSERT INTO board_overview VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(JSON.stringify(next));
       return next;
     });
+  }
+  // Self-registered seat status facts. One row per member identity: the
+  // harness label is updatable metadata inside the envelope, so a re-registered
+  // member replaces its row and duplicate identities can never count twice.
+  // Expired rows are kept so stale groups surface as last-recorded, not zero.
+  readOverviewStatusFacts(): StoredStatusFact[] {
+    const rows = this.db.prepare('SELECT data FROM overview_status_facts ORDER BY member_id').all() as { data: string }[];
+    return rows.map(row => JSON.parse(row.data) as StoredStatusFact);
+  }
+  readOverviewStatusFact(memberId: string): StoredStatusFact | null {
+    const row = this.db.prepare('SELECT data FROM overview_status_facts WHERE member_id=?').get(memberId) as { data: string } | undefined;
+    return row ? JSON.parse(row.data) as StoredStatusFact : null;
+  }
+  saveOverviewStatusFact(fact: StoredStatusFact): void {
+    this.db.prepare('INSERT INTO overview_status_facts VALUES(?,?) ON CONFLICT(member_id) DO UPDATE SET data=excluded.data').run(fact.memberId, JSON.stringify(fact));
   }
   // Trusted human-host boundary only: do not expose this mutator to bound agents.
   // Source records declared provenance; it is never an authorization credential.

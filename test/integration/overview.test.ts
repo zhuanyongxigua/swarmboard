@@ -31,7 +31,8 @@ it('deduplicates sessions without counting admissions or unknown turns as execut
   expect(value('native.members')).toBe(2); expect(value('native.running')).toBe(1);
   expect(value('native.uncertain')).toBe(1); expect(value('external.admitted')).toBe(2);
   expect(value('external.sessions')).toBe(1); expect(value('external.running')).toBeNull();
-  expect(value('organization.total')).toBeNull(); expect(value('native.model')).toBeNull();
+  // Membership (native bindings + admitted collaborators) is evidence-based; execution and model identity stay unknown without registrations.
+  expect(value('organization.total')).toBe(4); expect(value('native.model')).toBeNull();
   expect(JSON.stringify(facts)).not.toContain('same');
   const dead = source(); dead.owner = null;
   expect(overviewFacts(dead).items.find(f => f.id === 'native.running')?.value).toBeNull();
@@ -116,17 +117,17 @@ it('captures only selected verified values once, including unknown, and leaves l
   expect(read.status).toBe('stale');
   expect(read.record).not.toHaveProperty('factSnapshot');
   expect(read.record?.parts).toEqual(first.record?.parts);
-  expect(s.db.prepare('PRAGMA user_version').get()!.user_version).toBe(9);
+  expect(s.db.prepare('PRAGMA user_version').get()!.user_version).toBe(10);
 });
 
 it('appends schema nine to a real schema eight database without changing prior rows', () => {
   const dir = mkdtempSync(join(tmpdir(), 'overview-upgrade-')); cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, 'board.sqlite'), s = open(path);
   const task = s.createTask({ title: 'Retained' });
-  s.db.exec('DROP TABLE board_overview; PRAGMA user_version=8;');
+  s.db.exec('DROP TABLE board_overview; DROP TABLE overview_status_facts; PRAGMA user_version=8;');
   const upgraded = open(path);
   expect(upgraded.readTask(task.id)).toEqual(task);
-  expect(upgraded.db.prepare('PRAGMA user_version').get()!.user_version).toBe(9);
+  expect(upgraded.db.prepare('PRAGMA user_version').get()!.user_version).toBe(10);
   expect(readOverview(upgraded, source()).status).toBe('missing');
 });
 
@@ -144,7 +145,7 @@ it('rolls back the new migration when its target conflicts without mutating lega
   const dir = mkdtempSync(join(tmpdir(), 'overview-rollback-')); cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, 'board.sqlite'), s = open(path);
   const task = s.createTask({ title: 'Retained rollback goal' });
-  s.db.exec('DROP TABLE board_overview; CREATE VIEW board_overview AS SELECT id FROM tasks; PRAGMA user_version=8;');
+  s.db.exec('DROP TABLE board_overview; DROP TABLE overview_status_facts; CREATE VIEW board_overview AS SELECT id FROM tasks; PRAGMA user_version=8;');
   expect(() => new Store(path)).toThrow(/already exists/);
   expect(s.db.prepare('PRAGMA user_version').get()!.user_version).toBe(8);
   expect(s.readTask(task.id)).toEqual(task);

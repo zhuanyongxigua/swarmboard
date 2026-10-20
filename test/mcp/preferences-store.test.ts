@@ -57,13 +57,13 @@ describe('board preferences persistence', () => {
     const task = store.createTask({ title: 'Synthetic goal' });
     store.declareUsage({ agentId: agent.id, taskId: task.id, resourceId: resource.id, purpose: 'Compatibility check' });
     const before = store.board(); const boardId = store.readAutomation().boardId;
-    store.db.exec('DROP TRIGGER usage_admission_insert; DROP TRIGGER usage_admission_update; DROP TABLE resource_admission_fences; DROP TABLE task_progress; DROP TABLE board_overview; DROP TABLE board_preferences; PRAGMA user_version=5;'); store.close();
+    store.db.exec('DROP TRIGGER usage_admission_insert; DROP TRIGGER usage_admission_update; DROP TABLE resource_admission_fences; DROP TABLE task_progress; DROP TABLE board_overview; DROP TABLE overview_status_facts; DROP TABLE board_preferences; PRAGMA user_version=5;'); store.close();
     const reopened = open(path);
     expect(reopened.board().resources).toEqual(before.resources);
     expect(reopened.board().usages).toEqual(before.usages);
     expect(reopened.board().entries).toEqual(before.entries);
     expect(reopened.readPreferences()).toMatchObject({ boardId, text: '', version: 0 });
-    expect(reopened.db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+    expect(reopened.db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 10 });
   });
 
   it('rejects invalid input and untrusted actor fields without state or history changes', () => {
