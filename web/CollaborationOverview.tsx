@@ -31,15 +31,18 @@ export function CollaborationOverview({ snapshot }: { snapshot: OverviewSnapshot
   // Only a parseable, actually elapsed expiry makes a record expired; a
   // missing record must stay missing/unavailable and a malformed date must not
   // be relabelled as expired.
-  const expired = !!record && Number.isFinite(expires) && expires <= Math.max(now, Date.now());
-  const current = snapshot?.status === 'current' && snapshot.facts.available && !!record && !expired;
+  const validExpiry = Number.isFinite(expires);
+  const expired = !!record && validExpiry && expires <= Math.max(now, Date.now());
+  // An unparseable/missing expiry must never promote a record to current: it is
+  // not evidence that the snapshot is fresh, even when the transport says so.
+  const current = snapshot?.status === 'current' && snapshot.facts.available && !!record && validExpiry && !expired;
   const facts = new Map((current ? snapshot.facts.items : record?.factSnapshot ?? []).map(item => [item.id, item]));
   const unavailable = snapshot?.status === 'unavailable';
   // No fixed text prefix: the state stays machine-readable and visually muted
   // so a stale/expired record is never presented as current.
   const viewState = current ? 'current'
     : !record ? (unavailable ? 'unavailable' : 'missing')
-    : expired ? 'expired' : snapshot?.status ?? 'missing';
+    : expired ? 'expired' : snapshot?.status === 'current' ? 'stale' : snapshot?.status ?? 'missing';
   const freshness = current ? undefined
     : !record ? t('协作情况未知')
     : expired ? t('协作概览已过期')

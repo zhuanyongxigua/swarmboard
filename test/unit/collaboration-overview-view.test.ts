@@ -82,6 +82,22 @@ describe('collaboration overview', () => {
     expect(html).toContain('title="协作概览不是最新"');
     expect(html).not.toContain('title="协作概览已过期"');
   });
+  it('never promotes a current snapshot with an invalid expiry to current', () => {
+    const value = snapshot(); value.status = 'current'; value.facts.available = true;
+    value.facts.items[0]!.value = 9; value.record!.expiresAt = 'not-a-date';
+    const html = render(value);
+    expect(html).toContain('data-overview-state="stale"');
+    expect(html).not.toContain('data-overview-state="current"');
+    expect(html).toContain('>3<'); expect(html).not.toContain('>9<');
+    expect(html).toContain('title="协作概览不是最新"');
+    expect(html).not.toContain('title="协作概览已过期"');
+  });
+  it('renders a null snapshot conservatively without a fixed prefix', () => {
+    const html = render(null);
+    expect(html).toContain('data-overview-state="missing"');
+    expect(html).toContain('协作情况未知');
+    expect(html).not.toContain('上次概览'); expect(html).not.toContain('Previous overview');
+  });
   it('does not reconstruct missing legacy historical values from current facts', () => {
     const value = snapshot(); value.status = 'stale'; delete value.record!.factSnapshot;
     const html = render(value); expect(html).not.toContain('上次概览'); expect(html).toContain('data-overview-state="stale"');
