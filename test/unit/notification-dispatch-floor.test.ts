@@ -59,6 +59,21 @@ describe('per-channel dispatch floor', () => {
     expect(unsettled[0]!.intent.sequence).toBe(seq + 1);
   });
 
+  it('cancels a queued delivery once its goal reaches a terminal state', () => {
+    const f = fixture();
+    f.register();
+    // A task-scoped actionable event becomes a queued delivery...
+    f.board.publishEntry({ kind: 'MESSAGE', agentId: 'peer', summary: 'work', detail: '', recipientId: f.me.id, taskId: f.goal.id });
+    f.dispatcher.dispatchPending();
+    expect(f.channels.unsettled()).toHaveLength(1);
+    // ...and finishing the goal cancels it instead of waking anyone later.
+    f.board.updateTask(f.goal.id, { expectedVersion: f.board.readTask(f.goal.id).version, status: 'done' });
+    f.dispatcher.dispatchPending();
+    expect(f.channels.unsettled()).toHaveLength(0);
+    expect(f.channels.pendingIntent('synthetic', f.me.id)).toBeNull();
+    expect(f.channels.reconcile('synthetic', f.me.id).state).toEqual({ state: 'abandoned', sequence: 1 });
+  });
+
   it('releases the claim when the intent cannot be recorded, then delivers after reconciliation', () => {
     const f = fixture();
     f.register();

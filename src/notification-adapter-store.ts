@@ -140,6 +140,24 @@ export class NotificationAdapterStore {
     return rows.length;
   }
 
+  /** Task ids for the entries of a delivery (null when an entry has no task). */
+  entryTaskIds(entryIds: readonly number[]): (string | null)[] {
+    try {
+      const statement = this.db.prepare('SELECT taskId FROM entries WHERE id=?');
+      return entryIds.map(id => (statement.get(id) as unknown as { taskId?: string | null } | undefined)?.taskId ?? null);
+    } catch { return []; }
+  }
+
+  /** Cancel one delivery sequence without marking it delivered. */
+  cancelSequence(adapterId: string, memberId: string, sequence: number, note: string): void {
+    const row = this.db.prepare('SELECT receipt FROM notification_deliveries WHERE adapterId=? AND memberId=? AND sequence=?')
+      .get(adapterId, memberId, sequence) as unknown as { receipt: string | null } | undefined;
+    if (!row || row.receipt !== null) return;
+    const receipt: AdapterReceipt & { note?: string } = { sequence, consumed: false, abandoned: true, note };
+    this.db.prepare('UPDATE notification_deliveries SET receipt=? WHERE adapterId=? AND memberId=? AND sequence=?')
+      .run(JSON.stringify(receipt), adapterId, memberId, sequence);
+  }
+
   /** Drop a claim so a failed dispatch can be retried instead of wedging it. */
   releaseDispatch(entryId: number, adapterId: string, memberId: string): void {
     this.db.prepare('DELETE FROM notification_dispatched WHERE entryId=? AND adapterId=? AND memberId=?').run(entryId, adapterId, memberId);

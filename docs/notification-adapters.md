@@ -65,6 +65,9 @@
 
 ## 撤销与清理
 
+- **目标终态即取消排队**：扫描时会检查未结算投递的条目所归属的任务；若某条投递的**全部**条目都属于 `done`/`canceled` 的任务，该投递被结算为 `abandoned`（`goal-terminal`），不再唤醒任何人。混合了仍在进行目标的批次不会被整体取消（那是投递粒度，拆分需要 per-entry 状态，属后续设计）。
+
+
 - **撤销/停用即取消排队**：运行时通过 host 路径 `configureCollaborator` 把身份置为 disabled 或 revoked 时，会将该成员所有**未结算**投递结算为 `abandoned`（附 `collaborator-revoked`/`collaborator-disabled` 备注）。之后既不会再投递，也无法再被 `notification_receipt` 确认；重新准入的身份从下一个序号开始。
 - 旧的全局水位表 `notification_dispatch_progress` 在发布前即被 per-adapter `notification_adapter_floor` 取代，打开数据库时会 `DROP IF EXISTS` 清理，不留无人读取的残表。
 

@@ -84,6 +84,25 @@ export function createNotificationDispatcher(board: Store, collaborators?: Colla
     }
   };
 
+  /** Cancel queued deliveries whose entries all belong to a finished goal. */
+  const cancelTerminalDeliveries = (): number => {
+    let cancelled = 0;
+    for (const item of store.unsettled()) {
+      const tasks = store.entryTaskIds(item.intent.entryIds);
+      if (!tasks.length || tasks.some(taskId => taskId === null)) continue;
+      const terminal = tasks.every(taskId => {
+        try {
+          const task = board.readTask(taskId!);
+          return ['done', 'canceled'].includes(task.status);
+        } catch { return true; }
+      });
+      if (!terminal) continue;
+      store.cancelSequence(item.intent.adapterId, item.intent.memberId, item.intent.sequence, 'goal-terminal');
+      cancelled += 1;
+    }
+    return cancelled;
+  };
+
   const applyTargets = (
     entry: Entry,
     resolution: DeliveryResolution,
@@ -116,6 +135,8 @@ export function createNotificationDispatcher(board: Store, collaborators?: Colla
     dispatchPending(limit = 200): number {
       const adapters = store.list();
       if (!adapters.length) return 0;
+      // A goal that reached a terminal state must not wake anyone afterwards.
+      cancelTerminalDeliveries();
       let scanned = 0;
       for (const adapter of adapters) {
         // Each channel has its own floor, so a newly registered member starts at
