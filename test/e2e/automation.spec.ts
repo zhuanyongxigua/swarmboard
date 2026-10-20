@@ -1,4 +1,4 @@
-import { openResources, refreshBoard, closeSettings } from './settings-helpers.js';
+import { openSettings, refreshBoard, closeSettings } from './settings-helpers.js';
 // Verify built-in auto-claim initialization with isolated HTTP MCP databases, never real host schedules.
 import { test, expect, type Page } from '@playwright/test';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -148,7 +148,7 @@ for (const mode of ['unsupported', 'mobile'] as const) {
       expect(host.calls.every(call => ['board_read', 'automation_read', 'runtime_read'].includes(call.name))).toBe(true);
       expect(host.messages).toEqual([]);
       expect(await host.tool<AutomationConfig>('automation_read')).toMatchObject({ state: 'off', desiredEnabled: true, actualStatus: null, version: 0 });
-      await openResources(host.frame);
+      await openSettings(host.frame);
       await expect(host.frame.getByLabel('用户提示词内容', { exact: true })).toBeEnabled();
       await assertCompactHeader(host.frame);
     } finally { await host.close(); }

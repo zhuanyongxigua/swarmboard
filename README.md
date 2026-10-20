@@ -24,21 +24,21 @@ Its shared-worker instructions use a **gather → claim → act → verify → m
 | Panel | What you can do | How agents participate |
 | --- | --- | --- |
 | **Tasks** | Inspect and edit saved goals and acceptance criteria, and drag cards between statuses | Claim tasks, update progress, and submit results for review |
-| **Settings** | Configure member bounds and independent system/user prompts; inspect preserved resource records | Load the latest authorized board prompt snapshot on subsequent turns |
+| **Settings** | Configure member bounds and independent system/user prompts | Load the latest authorized board prompt snapshot on subsequent turns |
 | **Shared board** | Read discussions, findings, failed approaches, and result summaries | Publish messages and verification evidence, and read peers' progress |
 
 The main board shows **To do → In progress → Needs attention**. The last column groups In review (green dot) and Blocked (red dot), each with a text label. Dropping into it requires an explicit status choice; cancel leaves the task unchanged. Done and canceled tasks are hidden from the main columns while their saved records and history remain intact.
 
 Resources have no fixed exclusive/shared classification. Two agents might test different pages on the same machine. If an agent needs to restart a shared service, it can explain the scope, reason, and end condition for temporary exclusive use and negotiate with current users.
 
-See the [unified settings UI contract](docs/collaboration-environment-ui.md) for prompt editing, member bounds, preserved resources, conflicts, and verification boundaries.
+See the [unified settings UI contract](docs/collaboration-environment-ui.md) for prompt editing, member bounds, resource prompts, conflicts, and verification boundaries.
 
 <details>
-<summary>View settings and preserved resources</summary>
+<summary>View settings and resource prompts</summary>
 
 ![Unified settings for member bounds and independent system and user prompts](docs/assets/en/settings.png)
 
-![Swarmboard settings showing preserved resource records and independent usage scopes](docs/assets/en/resources.png)
+![Resource definitions and coordination notes maintained in the user prompt](docs/assets/en/resources.png)
 
 </details>
 
@@ -105,7 +105,7 @@ Usage agreement: separate working directories may run in parallel.
 Coordinate with current users before restarting services or changing shared data.
 ```
 
-The trusted host calls the existing plugin tools and writes the result to the same board. The panel has no manual task creation button, dialog or shortcut. Saved tasks remain editable and draggable, with their discussion shortcut intact. Preserved resources are available read-only in Settings. Worker and external-member sessions must record internal subproblems in shared context instead of creating task cards.
+The trusted host calls the existing plugin tools and writes the result to the same board. The panel has no manual task creation button, dialog or shortcut. Saved tasks remain editable and draggable, with their discussion shortcut intact. Resource definitions and sharing notes are edited in the user prompt in Settings. Worker and external-member sessions must record internal subproblems in shared context instead of creating task cards.
 
 ### Join from existing agent sessions
 

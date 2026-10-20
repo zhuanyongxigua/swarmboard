@@ -9,11 +9,6 @@ export async function closeSettings(surface: Surface) {
   const dialog = surface.getByRole('dialog', { name: /^(设置|Settings)$/ });
   if (await dialog.isVisible()) await dialog.getByRole('button', { name: /^(关闭设置|Close settings)$/ }).click();
 }
-export async function openResources(surface: Surface) {
-  await openSettings(surface);
-  const details = surface.locator('.legacy-resources');
-  if (!await details.evaluate(element => (element as HTMLDetailsElement).open)) await details.locator('summary').click();
-}
 export async function refreshBoard(surface: Surface) {
   const opened = !await surface.getByRole('dialog', { name: /^(设置|Settings)$/ }).isVisible();
   await openSettings(surface); await surface.getByRole('button', { name: /^(重新读取设置|Reload settings)$/ }).click();

@@ -1,4 +1,4 @@
-import { openResources, closeSettings } from './settings-helpers.js';
+import { openSettings, closeSettings } from './settings-helpers.js';
 // Verify localized documentation previews use the real board and never translate stored user content.
 import { test, expect } from '@playwright/test';
 
@@ -20,7 +20,7 @@ test('English preview supports real editing while Chinese remains the default', 
   await page.getByRole('combobox', { name: 'Status', exact: true }).selectOption('in_review');
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect(page.locator('[data-status="pending"]').getByRole('button', { name: `View task ${title}`, exact: true })).toBeVisible();
-  await openResources(page);
+  await openSettings(page);
   await expect(page.getByLabel('User prompt text', { exact: true })).toBeVisible();
   await closeSettings(page); await page.getByRole('tab', { name: 'Shared board', exact: true }).click();
   await expect(page.getByText('Read-only', { exact: true })).toBeVisible();

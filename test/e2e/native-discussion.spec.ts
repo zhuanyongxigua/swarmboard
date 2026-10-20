@@ -1,4 +1,4 @@
-import { openResources, refreshBoard, closeSettings } from './settings-helpers.js';
+import { openSettings, refreshBoard, closeSettings } from './settings-helpers.js';
 // Exercise the public native-draft contract in a simulated host; this cannot prove real Desktop placement or controls.
 import { test, expect, type Page } from '@playwright/test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -81,7 +81,7 @@ test('discussion appends a native draft only after a click and leaves persisted 
   try {
     await expect(host.frame.getByRole('tab')).toHaveText(['任务管理', '共享面板']);
     await refreshBoard(host.frame);
-    await openResources(host.frame);
+    await openSettings(host.frame);
     await closeSettings(host.frame); await host.frame.getByRole('tab', { name: '共享面板', exact: true }).click();
     await expect(host.frame.getByRole('textbox')).toHaveCount(0);
     await closeSettings(host.frame); await host.frame.getByRole('tab', { name: '任务管理', exact: true }).click();
@@ -121,7 +121,7 @@ test('a host without the native draft extension keeps the board usable without o
     await expect(host.frame.getByRole('button', { name: '讨论此任务', exact: true })).toBeDisabled();
     await expect(host.frame.getByText('当前宿主不支持原生对话草稿追加，请在支持此功能的 ChatGPT 桌面端打开。', { exact: false })).toBeVisible();
     await host.frame.getByRole('button', { name: '关闭编辑窗口', exact: true }).click();
-    await openResources(host.frame);
+    await openSettings(host.frame);
     await expect(host.frame.getByRole('button', { name: '设置', exact: true })).toBeEnabled();
     await closeSettings(host.frame); await host.frame.getByRole('tab', { name: '共享面板', exact: true }).click();
     await expect(host.frame.getByRole('textbox')).toHaveCount(0);
@@ -142,7 +142,7 @@ test('mobile host cannot append a draft even when it advertises native messaging
     await expect(host.frame.getByText('移动端暂不支持追加原生对话草稿，请在 ChatGPT 桌面端打开。', { exact: false })).toBeVisible();
     await host.frame.getByRole('button', { name: '关闭编辑窗口', exact: true }).click();
     await refreshBoard(host.frame);
-    await openResources(host.frame);
+    await openSettings(host.frame);
     expect(await host.messages()).toEqual([]);
     expect(await host.submitted()).toEqual([]);
     await expect(page.getByLabel('Simulated native composer')).toHaveValue(originalDraft);

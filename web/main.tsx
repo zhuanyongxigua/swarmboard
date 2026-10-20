@@ -30,11 +30,11 @@ type Usage = {
   sharing: string; taskId?: string; active: boolean;
 };
 type Board = { tasks: Task[]; resources: Resource[]; agents: Agent[]; usages: Usage[]; entries: Entry[]; cursor: number };
-type Editor = { type: 'task'; item: Task } | { type: 'resource'; item?: Resource };
+type Editor = { type: 'task'; item: Task };
 type UiOperation = 'board_read' | 'runtime_read' | 'overview_read' | 'automation_read'
   | 'pool_capacity' | 'pool_configure' | 'pool_control' | 'pool_reduce'
   | 'user_prompt_read' | 'user_prompt_write' | 'preferences_read' | 'preferences_write'
-  | 'task_update' | 'resource_create' | 'resource_update';
+  | 'task_update';
 type Tab = 'tasks' | 'shared';
 type RuntimeStatus = { mode: 'events'; ciWatches?: { id: string; pipelineId: number; sha: string; state: string; error: string }[]; pool?: { id?: string; size: number; minSize?: number; maxSize?: number; workspacePath?: string; taskIds?: string[]; enabled: boolean; version: number; state: string; error: string } | null; activity?: { members: number; running: number; idle: number; draining?: number; state: string; executionMode: string; watchdog: { state: string; attempts: number; nextWakeAt: string | null } }; workers: { id: string; name: string; poolId?: string; enabled: boolean; status: string; error: string }[]; error: string };
 
@@ -93,8 +93,6 @@ async function operation<T>(name: UiOperation, args: Record<string, unknown> = {
   if (name === 'preferences_write') { url = '/api/preferences'; method = 'PATCH'; body = args; }
   if (name === 'pool_reduce') { url = '/api/pool/reduce'; method = 'POST'; body = args; }
   if (name === 'task_update') { url = `/api/tasks/${encodeURIComponent(String(id))}`; method = 'PATCH'; body = patch; }
-  if (name === 'resource_create') { url = '/api/resources'; method = 'POST'; body = args; }
-  if (name === 'resource_update') { url = `/api/resources/${encodeURIComponent(String(id))}`; method = 'PATCH'; body = patch; }
   const response = await fetch(url, {
     method, headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
@@ -211,7 +209,6 @@ function Workspace() {
     } finally { poolOperation.current = false; setPoolBusy(false); }
   }
   const automationBusy = useRef(false);
-  const [expandedResource, setExpandedResource] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
   const [pendingMove, setPendingMove] = useState<Task | null>(null);
   const [announcement, setAnnouncement] = useState('');
@@ -397,11 +394,6 @@ function Workspace() {
     const task = board?.tasks.find(task => task.id === taskId);
     if (task) { setTab('tasks'); setEditor({ type: 'task', item: task }); }
   }
-  function openResource(resourceId: string) {
-    if (!board?.resources.some(resource => resource.id === resourceId)) return;
-    setSettingsOpen(true); setExpandedResource(resourceId);
-    requestAnimationFrame(() => document.getElementById(`resource-${resourceId}`)?.focus());
-  }
   async function moveTask(task: Task, status: string) {
     if (task.status === status || moving.current) return;
     moving.current = true; setMovingId(task.id); setError('');
@@ -427,11 +419,9 @@ function Workspace() {
   async function reloadEditor(): Promise<boolean> {
     const data = await refresh(true);
     if (!data || !editor?.item) return false;
-    const latest = editor.type === 'task'
-      ? data.tasks.find(item => item.id === editor.item?.id)
-      : data.resources.find(item => item.id === editor.item?.id);
+    const latest = data.tasks.find(item => item.id === editor.item.id);
     if (!latest) return false;
-    setEditor(editor.type === 'task' ? { type: 'task', item: latest as Task } : { type: 'resource', item: latest as Resource });
+    setEditor({ type: 'task', item: latest });
     return true;
   }
 
@@ -479,8 +469,8 @@ function Workspace() {
         <span className="subtle">{t("只读")}</span>
       </div>}
       {error && <div className="error" role="alert"><span>{error}</span><button type="button" onClick={() => void refresh()}>{t("重试")}</button></div>}
-      {loading ? <Empty title={t("正在读取协作空间")} text={t("获取任务、资源与最新共享记录…")} loading />
-        : !board ? <Empty title={t("协作空间暂未连接")} text={t("恢复连接后可查看已有任务、资源与共享记录。")} />
+      {loading ? <Empty title={t("正在读取协作空间")} text={t("获取任务与最新共享记录…")} loading />
+        : !board ? <Empty title={t("协作空间暂未连接")} text={t("恢复连接后可查看已有任务与共享记录。")} />
           : tab === 'tasks' ? <TaskBoard board={board} usages={usages} name={name} stale={stale}
             movingId={movingId} open={task => setEditor({ type: 'task', item: task })}
             dragStart={(event, task) => {
@@ -490,21 +480,16 @@ function Workspace() {
               event.dataTransfer.effectAllowed = 'move';
             }} dragEnd={() => { dragged.current = null; }}
             dragOver={event => { if (dragged.current) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} drop={drop} />
-             : <SharedFeed board={board} name={name} openTask={openTask} openResource={openResource} />}
+             : <SharedFeed board={board} name={name} openTask={openTask} />}
     </main>
     {settingsOpen && <SettingsDialog pool={eventRuntime?.pool ?? null} saveCapacity={saveCapacity} refresh={refreshSettings} close={() => setSettingsOpen(false)}>
       <PreferencesEditor read={readPreferences} write={savePreferences} refreshKey={settingsRefresh + (board?.cursor ?? 0)} kind="system" />
       <PreferencesEditor read={readUserPrompt} write={saveUserPrompt} refreshKey={settingsRefresh + (board?.cursor ?? 0)} kind="user" />
-      <details className="legacy-resources" open={expandedResource !== null}><summary>{t('原资源记录')}</summary>
-        <p className="subtle">{t('原资源与使用声明原样保留，只读查看；不会自动转为用户提示词。')}</p>
-        {board ? <ResourcePool board={board} usages={usages} name={name} stale={stale} expanded={expandedResource}
-          toggle={id => setExpandedResource(current => current === id ? null : id)} /> : null}
-      </details>
     </SettingsDialog>}
     <div className="sr-only" aria-live="polite">{announcement}</div>
     {pendingMove && <PendingMoveDialog task={pendingMove} close={() => setPendingMove(null)}
       choose={status => { setPendingMove(null); void moveTask(pendingMove, status); }} />}
-    {editor && <EditorDialog key={`${editor.type}-${editor.type === 'task' ? editor.item.id : editor.item?.id ?? 'new-resource'}-${editor.item?.version ?? 0}`}
+    {editor && <EditorDialog key={`${editor.item.id}-${editor.item.version}`}
       editor={editor} name={name} usages={usages} resources={board?.resources ?? []}
       close={() => setEditor(null)} saved={() => { setEditor(null); setAnnouncement(t("修改已保存。")); void refresh(true); }}
       failed={() => refresh(true)} reload={reloadEditor}
@@ -580,43 +565,8 @@ function PendingMoveDialog({ task, close, choose }: {
   </dialog>;
 }
 
-function ResourcePool({ board, usages, name, stale, expanded, toggle }: {
-  board: Board; usages: Usage[]; name: (id: string) => string; stale: (id: string) => boolean;
-  expanded: string | null; toggle: (id: string) => void;
-}) {
-  if (!board.resources.length) return <Empty title={t("暂无资源")} text={t("添加资源名称、说明与使用约定，供 Agents 协商使用。")} />;
-  return <div className="resources">
-    <div className="resource-grid table-heading" aria-hidden="true"><span>{t("名称与说明")}</span><span>{t("使用声明")}</span><span>{t("使用约定")}</span></div>
-    {board.resources.map(resource => {
-      const declarations = usages.filter(usage => usage.resourceId === resource.id);
-      const isExpanded = expanded === resource.id;
-      return <section className="resource-item" key={resource.id}>
-        <button className="resource-grid resource-row" type="button" id={`resource-${resource.id}`}
-          aria-label={`${t('查看资源')} ${resource.name}`} aria-expanded={isExpanded} aria-controls={`usage-${resource.id}`}
-          onClick={() => toggle(resource.id)}>
-          <span><span className="resource-name">{resource.name}</span><span className="resource-description">{resource.description || t("暂无说明")}</span></span>
-          <span className="usage-summary">{declarations.length
-            ? declarations.map(usage => <span key={usage.id}>{name(usage.agentId)} · {usage.purpose}</span>)
-            : t("暂无活跃使用声明")}</span>
-          <span className="subtle resource-agreement">{resource.accessNotes || t("暂无使用约定")}</span>
-        </button>
-        {isExpanded && <div className="resource-detail" id={`usage-${resource.id}`}>
-          <div className="resource-detail-heading"><p className="subtle">{t("使用声明供协作参考，不代表独占或机器实际空闲。")}</p>
-            <span className="subtle">{t("只读")}</span></div>
-          <p className="subtle">ID: {resource.id} · v{resource.version} · <span>{resource.kind}</span> · {resource.capabilities.join(', ')}</p>
-          {declarations.length ? declarations.map(usage => <div className="usage-line" key={usage.id}>
-            <div>{name(usage.agentId)}{stale(usage.agentId) && <p className="stale">{t("最近未报告 · 使用待核实")}</p>}</div>
-            <div><p>{usage.purpose}</p><p><span>{t("范围：")}</span><RichText value={usage.scope || t("未说明")} /></p>
-              <p><span>{t("共享约定：")}</span><RichText value={usage.sharing || t("未说明")} /></p></div>
-          </div>) : <p className="subtle">{t("尚无 Agent 声明使用这项资源，实际使用情况仍需核实。")}</p>}
-        </div>}
-      </section>;
-    })}
-  </div>;
-}
-
-function SharedFeed({ board, name, openTask, openResource }: {
-  board: Board; name: (id: string) => string; openTask: (id: string) => void; openResource: (id: string) => void;
+function SharedFeed({ board, name, openTask }: {
+  board: Board; name: (id: string) => string; openTask: (id: string) => void;
 }) {
   if (!board.entries.length) return <Empty title={t("暂无共享记录")} text={t("Agents 发布工作声明、发现或消息后，会显示在这里。")} />;
   return <div className="shared-feed" aria-label={t("Agent 交互记录")}>
@@ -627,8 +577,8 @@ function SharedFeed({ board, name, openTask, openResource }: {
         <div className="entry-references">
           {entry.taskId && <button type="button" className="reference-button" onClick={() => openTask(entry.taskId!)}>
             {t("任务 ·")} {board.tasks.find(task => task.id === entry.taskId)?.title ?? shortId(entry.taskId)}</button>}
-          {entry.resourceId && <button type="button" className="reference-button" onClick={() => openResource(entry.resourceId!)}>
-            {t("资源 ·")} {board.resources.find(resource => resource.id === entry.resourceId)?.name ?? shortId(entry.resourceId)}</button>}
+          {entry.resourceId && <span className="subtle">
+            {t("历史资源 ·")} {board.resources.find(resource => resource.id === entry.resourceId)?.name ?? shortId(entry.resourceId)}</span>}
           {entry.recipientId && <span className="subtle">{t("发送给 ·")} {name(entry.recipientId)}</span>}
         </div>
         {entry.detail && <details className="entry-details"><summary>{t("展开详情")}</summary><pre>{entry.detail}</pre></details>}
@@ -654,11 +604,8 @@ function EditorDialog({ editor, name, usages, resources, close, saved, failed, r
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [conflict, setConflict] = useState(false);
-  const isTask = editor.type === 'task';
-  const item = editor.item;
-  const task = isTask ? editor.item : undefined;
-  const resource = editor.type === 'resource' ? editor.item : undefined;
-  const title = isTask ? t("任务详情") : item ? t("编辑资源") : t("添加资源");
+  const task = editor.item;
+  const title = t("任务详情");
   const related = task ? [...new Set(usages.filter(usage => usage.taskId === task.id).map(usage => usage.resourceId))]
     .map(id => resources.find(resource => resource.id === id)?.name ?? id) : [];
 
@@ -675,14 +622,8 @@ function EditorDialog({ editor, name, usages, resources, close, saved, failed, r
     const value = (key: string) => String(data.get(key) ?? '').trim();
     setSaving(true); setError('');
     try {
-      if (editor.type === 'task') {
-        await operation('task_update', { id: editor.item.id, expectedVersion: editor.item.version,
-          title: value('title'), description: value('description'), acceptanceCriteria: value('acceptanceCriteria'), status: value('status') });
-      } else {
-        const args: Record<string, unknown> = { name: value('name'), description: value('description'), accessNotes: value('accessNotes') };
-        if (editor.item) { args.id = editor.item.id; args.expectedVersion = editor.item.version; }
-        await operation(editor.item ? 'resource_update' : 'resource_create', args);
-      }
+      await operation('task_update', { id: task.id, expectedVersion: task.version,
+        title: value('title'), description: value('description'), acceptanceCriteria: value('acceptanceCriteria'), status: value('status') });
       saved();
     } catch (error) {
       const isConflict = error instanceof OperationError && error.code === 'VERSION_CONFLICT';
@@ -703,7 +644,7 @@ function EditorDialog({ editor, name, usages, resources, close, saved, failed, r
       <div className="dialog-header"><h2 id="editor-title">{title}</h2>
         <button type="button" className="close-button" aria-label={t("关闭编辑窗口")} disabled={saving} onClick={close}>×</button></div>
       <div className="form-body">
-        {isTask ? <>
+        <>
           {task && <div className="task-discussion">
             <div className="task-discussion-action"><span className="subtle">{t("已保存版本 v")}{task.version}</span>
               <button type="button" className="secondary" aria-describedby="task-native-help"
@@ -720,18 +661,13 @@ function EditorDialog({ editor, name, usages, resources, close, saved, failed, r
           </div>}
           <label>{t("任务说明")}<textarea name="description" rows={3} maxLength={20000} defaultValue={task?.description} /></label>
           <label>{t("验收条件")}<textarea name="acceptanceCriteria" rows={3} maxLength={20000} defaultValue={task?.acceptanceCriteria} /></label>
-          {task && <div className="field-info"><span>{t("资源")}</span><span>{related.length ? related.join(locale === 'en' ? ', ' : '、') : t("暂无活跃资源声明")}</span></div>}
-        </> : <>
-          <label>{t("资源名称")}<input ref={first} name="name" required maxLength={500} defaultValue={resource?.name} /></label>
-          <label>{t("资源说明")}<textarea name="description" rows={3} maxLength={20000} defaultValue={resource?.description} /></label>
-          <label>{t("使用约定")}<textarea name="accessNotes" rows={3} maxLength={20000} defaultValue={resource?.accessNotes} /></label>
-          <p className="form-note">{t("说明访问和共享条件，请勿填写密码、密钥或订阅凭据。")}</p>
-        </>}
+          {task && <div className="field-info"><span>{t("历史资源")}</span><span>{related.length ? related.join(locale === 'en' ? ', ' : '、') : t("暂无活跃资源声明")}</span></div>}
+        </>
         {error && <div className="error dialog-error" role="alert"><span>{error}</span>
           {conflict && <button type="button" disabled={saving} onClick={() => void reloadLatest()}>{t("载入最新内容")}</button>}</div>}
       </div>
       <div className="dialog-actions"><button type="button" className="secondary" onClick={close} disabled={saving}>{t("取消")}</button>
-        <button type="submit" className="primary" disabled={saving || conflict}>{saving ? t("正在保存…") : isTask || item ? t("保存修改") : t("添加资源")}</button></div>
+        <button type="submit" className="primary" disabled={saving || conflict}>{saving ? t("正在保存…") : t("保存修改")}</button></div>
     </form>
   </dialog>;
 }

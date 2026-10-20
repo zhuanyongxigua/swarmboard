@@ -1,4 +1,4 @@
-import { openResources } from './settings-helpers.js';
+import { openSettings } from './settings-helpers.js';
 // Connect the actual editor to HTTP/SQLite, including a new server process on
 // the same synthetic database; no route mocks, model sessions or live board.
 import { test, expect } from '@playwright/test';
@@ -43,8 +43,8 @@ test('real preferences editor persists across server processes, preserves confli
   try {
     const resource = await (await request.post(`${running.url}/api/resources`, { data: { name: 'Synthetic retained resource', kind: 'legacy', accessNotes: 'Synthetic coordination note' } })).json();
     await page.goto(running.url);
-    await openResources(page);
-    await expect(page.getByRole('button', { name: '查看资源 Synthetic retained resource', exact: true })).toBeVisible();
+    await openSettings(page);
+    await expect(page.getByRole('button', { name: '查看资源 Synthetic retained resource', exact: true })).toHaveCount(0);
     await expect(page.getByLabel('系统提示词内容', { exact: true })).toHaveValue('');
     await page.getByLabel('系统提示词内容', { exact: true }).fill('Synthetic saved expectation');
     await page.getByLabel('系统提示词 · 内容来源', { exact: true }).selectOption('main-chat-relay');
@@ -59,7 +59,7 @@ test('real preferences editor persists across server processes, preserves confli
     running = await start(join(directory, 'board.sqlite'));
     expect(running.child.pid).not.toBe(firstPid);
     await page.goto(running.url);
-    await openResources(page);
+    await openSettings(page);
     await expect(page.getByLabel('系统提示词内容', { exact: true })).toHaveValue('Synthetic saved expectation');
     expect(await (await request.get(`${running.url}/api/preferences`)).json()).toEqual(saved);
     const board = await (await request.get(`${running.url}/api/board`)).json();
@@ -84,7 +84,7 @@ test('real preferences editor persists across server processes, preserves confli
     await page.goto('about:blank'); await stop(running.child);
     running = await start(join(directory, 'board.sqlite'));
     await page.goto(`${running.url}/?lang=en`);
-    await openResources(page);
+    await openSettings(page);
     await expect(page.getByLabel('System prompt text', { exact: true })).toHaveValue('');
     expect(await (await request.get(`${running.url}/api/preferences`)).json()).toEqual(cleared);
     await expect(page.getByRole('button', { name: 'Clear system prompt', exact: true })).toBeDisabled();
