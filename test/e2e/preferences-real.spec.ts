@@ -1,3 +1,4 @@
+import { openResources } from './settings-helpers.js';
 // Connect the actual editor to HTTP/SQLite, including a new server process on
 // the same synthetic database; no route mocks, model sessions or live board.
 import { test, expect } from '@playwright/test';
@@ -42,13 +43,13 @@ test('real preferences editor persists across server processes, preserves confli
   try {
     const resource = await (await request.post(`${running.url}/api/resources`, { data: { name: 'Synthetic retained resource', kind: 'legacy', accessNotes: 'Synthetic coordination note' } })).json();
     await page.goto(running.url);
-    await page.getByRole('tab', { name: '协作环境', exact: true }).click();
+    await openResources(page);
     await expect(page.getByRole('button', { name: '查看资源 Synthetic retained resource', exact: true })).toBeVisible();
-    await expect(page.getByLabel('偏好内容', { exact: true })).toHaveValue('');
-    await page.getByLabel('偏好内容', { exact: true }).fill('Synthetic saved expectation');
-    await page.getByLabel('内容来源', { exact: true }).selectOption('main-chat-relay');
-    await page.getByRole('button', { name: '保存偏好', exact: true }).click();
-    await expect(page.getByLabel('当前保存的偏好')).toContainText('v1');
+    await expect(page.getByLabel('系统提示词内容', { exact: true })).toHaveValue('');
+    await page.getByLabel('系统提示词内容', { exact: true }).fill('Synthetic saved expectation');
+    await page.getByLabel('系统提示词 · 内容来源', { exact: true }).selectOption('main-chat-relay');
+    await page.getByRole('button', { name: '保存系统提示词', exact: true }).click();
+    await expect(page.getByLabel('当前保存的系统提示词')).toContainText('v1');
     const saved = await (await request.get(`${running.url}/api/preferences`)).json();
     expect(saved).toMatchObject({ text: 'Synthetic saved expectation', version: 1, source: 'main-chat-relay' });
 
@@ -58,35 +59,35 @@ test('real preferences editor persists across server processes, preserves confli
     running = await start(join(directory, 'board.sqlite'));
     expect(running.child.pid).not.toBe(firstPid);
     await page.goto(running.url);
-    await page.getByRole('tab', { name: '协作环境', exact: true }).click();
-    await expect(page.getByLabel('偏好内容', { exact: true })).toHaveValue('Synthetic saved expectation');
+    await openResources(page);
+    await expect(page.getByLabel('系统提示词内容', { exact: true })).toHaveValue('Synthetic saved expectation');
     expect(await (await request.get(`${running.url}/api/preferences`)).json()).toEqual(saved);
     const board = await (await request.get(`${running.url}/api/board`)).json();
     expect(board.resources.find((item: { id: string }) => item.id === resource.id)).toMatchObject({ id: resource.id, kind: 'legacy', accessNotes: 'Synthetic coordination note' });
 
-    await page.getByLabel('偏好内容', { exact: true }).fill('Synthetic retained draft');
+    await page.getByLabel('系统提示词内容', { exact: true }).fill('Synthetic retained draft');
     expect((await request.patch(`${running.url}/api/preferences`, { data: { text: 'Synthetic concurrent value', source: 'human-input', expectedVersion: 1 } })).ok()).toBe(true);
-    await page.getByRole('button', { name: '保存偏好', exact: true }).click();
+    await page.getByRole('button', { name: '保存系统提示词', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('草稿已保留');
-    await expect(page.getByLabel('偏好内容', { exact: true })).toHaveValue('Synthetic retained draft');
-    await expect(page.getByLabel('当前保存的偏好')).toContainText('Synthetic concurrent value');
-    await expect(page.getByRole('button', { name: '保存偏好', exact: true })).toBeDisabled();
+    await expect(page.getByLabel('系统提示词内容', { exact: true })).toHaveValue('Synthetic retained draft');
+    await expect(page.getByLabel('当前保存的系统提示词')).toContainText('Synthetic concurrent value');
+    await expect(page.getByRole('button', { name: '保存系统提示词', exact: true })).toBeDisabled();
     await page.getByRole('button', { name: '按当前版本继续编辑', exact: true }).click();
-    await page.getByRole('button', { name: '保存偏好', exact: true }).click();
-    await expect(page.getByLabel('当前保存的偏好')).toContainText('v3');
-    await page.getByRole('button', { name: '清除已保存偏好', exact: true }).click();
-    await expect(page.getByLabel('偏好内容', { exact: true })).toHaveValue('');
-    await expect(page.getByLabel('当前保存的偏好')).toContainText('v4');
+    await page.getByRole('button', { name: '保存系统提示词', exact: true }).click();
+    await expect(page.getByLabel('当前保存的系统提示词')).toContainText('v3');
+    await page.getByRole('button', { name: '清空系统提示词', exact: true }).click();
+    await expect(page.getByLabel('系统提示词内容', { exact: true })).toHaveValue('');
+    await expect(page.getByLabel('当前保存的系统提示词')).toContainText('v4');
     const cleared = await (await request.get(`${running.url}/api/preferences`)).json();
     expect(cleared).toMatchObject({ text: '', version: 4 });
 
     await page.goto('about:blank'); await stop(running.child);
     running = await start(join(directory, 'board.sqlite'));
     await page.goto(`${running.url}/?lang=en`);
-    await page.getByRole('tab', { name: 'Collaboration environment', exact: true }).click();
-    await expect(page.getByLabel('Preference text', { exact: true })).toHaveValue('');
+    await openResources(page);
+    await expect(page.getByLabel('System prompt text', { exact: true })).toHaveValue('');
     expect(await (await request.get(`${running.url}/api/preferences`)).json()).toEqual(cleared);
-    await expect(page.getByRole('button', { name: 'Clear saved preferences', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Clear system prompt', exact: true })).toBeDisabled();
     await page.screenshot({ path: testInfo.outputPath('preferences-real-empty.png'), fullPage: true });
   } finally { await page.goto('about:blank'); await stop(running.child); rmSync(directory, { recursive: true, force: true }); }
 });

@@ -1,3 +1,4 @@
+import { SettingsDialog } from './settings-dialog.js';
 import { locale, t } from './i18n.js';
 import type { AutomationConfig } from '../src/automation.js';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -30,7 +31,7 @@ type Usage = {
 };
 type Board = { tasks: Task[]; resources: Resource[]; agents: Agent[]; usages: Usage[]; entries: Entry[]; cursor: number };
 type Editor = { type: 'task'; item?: Task } | { type: 'resource'; item?: Resource };
-type Tab = 'tasks' | 'resources' | 'shared';
+type Tab = 'tasks' | 'shared';
 type RuntimeStatus = { mode: 'events'; ciWatches?: { id: string; pipelineId: number; sha: string; state: string; error: string }[]; pool?: { id?: string; size: number; minSize?: number; maxSize?: number; workspacePath?: string; taskIds?: string[]; enabled: boolean; version: number; state: string; error: string } | null; activity?: { members: number; running: number; idle: number; draining?: number; state: string; executionMode: string; watchdog: { state: string; attempts: number; nextWakeAt: string | null } }; workers: { id: string; name: string; poolId?: string; enabled: boolean; status: string; error: string }[]; error: string };
 
 
@@ -44,7 +45,6 @@ const entryKinds: Record<string, string> = {
 };
 const tabs: { id: Tab; title: string }[] = [
   { id: 'tasks', title: t("任务管理") },
-  { id: 'resources', title: t("协作环境") },
   { id: 'shared', title: t("共享面板") },
 ];
 let bridge: App | null = null;
@@ -79,8 +79,11 @@ async function operation<T>(name: string, args: Record<string, unknown> = {}): P
   let body: Record<string, unknown> | undefined;
   const { id, ...patch } = args;
   if (name === 'runtime_read') url = '/api/runtime';
+  if (name === 'pool_capacity') { url = '/api/pool/capacity'; method = 'POST'; body = args; }
   if (name === 'pool_configure') { url = '/api/pool/configure'; method = 'POST'; body = args; }
   if (name === 'pool_control') { url = '/api/pool/control'; method = 'POST'; body = args; }
+  if (name === 'user_prompt_read') url = '/api/user-prompt';
+  if (name === 'user_prompt_write') { url = '/api/user-prompt'; method = 'PATCH'; body = args; }
   if (name === 'preferences_read') url = '/api/preferences';
   if (name === 'overview_read') url = '/api/overview';
   if (name === 'preferences_write') { url = '/api/preferences'; method = 'PATCH'; body = args; }
@@ -97,6 +100,8 @@ async function operation<T>(name: string, args: Record<string, unknown> = {}): P
   if (!response.ok) throw operationError(data.error);
   return data as T;
 }
+function readUserPrompt() { return operation<Preferences>('user_prompt_read'); }
+function writeUserPrompt(input: PreferenceWrite) { return operation<Preferences>('user_prompt_write', input); }
 function readPreferences() { return operation<Preferences>('preferences_read'); }
 function writePreferences(input: PreferenceWrite) { return operation<Preferences>('preferences_write', input); }
 function RichText({ value }: { value: string }) {
@@ -117,9 +122,8 @@ function Workspace() {
   const [tab, setTab] = useState<Tab>('tasks');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [connected, setConnected] = useState(false);
-  const [updated, setUpdated] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsRefresh, setSettingsRefresh] = useState(0);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [automation, setAutomation] = useState<AutomationConfig | null>(null);
   const [automationError, setAutomationError] = useState('');
@@ -250,22 +254,21 @@ function Workspace() {
     } finally { automationBusy.current = false; }
   }, [readAutomation]);
 
-  const refresh = useCallback(async (quiet = false): Promise<Board | null> => {
-    if (!quiet) setRefreshing(true);
+  const refresh = useCallback(async (_quiet = false): Promise<Board | null> => {
     try {
       const data = await operation<Board>('board_read');
       void readAutomation();
       void readRuntimeAndOverview().catch(() => { if (mounted.current) setOverview({ status: 'unavailable', reason: 'runtime-unavailable', record: null,
         facts: { revision: '', observedAt: new Date().toISOString(), available: false, items: [] } }); });
       if (mounted.current) {
-        setBoard(data); setError(''); setUpdated(new Date().toISOString());
+        setBoard(data); setError('');
       }
       return data;
     } catch (error) {
       if (mounted.current) setError(message(error));
       return null;
     } finally {
-      if (mounted.current) { setLoading(false); setRefreshing(false); }
+      if (mounted.current) { setLoading(false); }
     }
   }, [readAutomation, readRuntimeAndOverview]);
 
@@ -283,7 +286,7 @@ function Workspace() {
             try {
               const data = unpack(result) as Board;
               if (data?.tasks && data?.resources && active) {
-                setBoard(data); setLoading(false); setUpdated(new Date().toISOString());
+                setBoard(data); setLoading(false);
               }
             } catch (error) { if (active) setError(message(error)); }
           };
@@ -293,7 +296,7 @@ function Workspace() {
           await app.connect();
           if (!active) return;
           bridge = app;
-          setConnected(true);
+
           setNativeUnavailable(nativeConversationUnavailableReason(app.getHostCapabilities(), app.getHostContext()?.platform));
         }
         await refresh();
@@ -321,7 +324,17 @@ function Workspace() {
   const usages = board?.usages.filter(usage => usage.active) ?? [];
   const autoUnavailable = Boolean(automation?.desiredEnabled && nativeUnavailable);
   const autoError = automationError || (automation?.state === 'error' ? automation.lastError : '');
-  async function manualRefresh() { await refresh(); await ensureAutomation(true); }
+  async function refreshSettings() { const cursor = board?.cursor; const latest = await refresh(); await ensureAutomation(true); await readRuntimeAndOverview(); if (!latest || latest.cursor === cursor) setSettingsRefresh(value => value + 1); }
+  async function saveCapacity(minSize: number, maxSize: number, expectedVersion: number) {
+    const pool = eventRuntime?.pool;
+    if (!pool?.workspacePath || poolOperation.current) throw new Error(t('正在更新成员，请稍候。'));
+    poolOperation.current = true; setPoolBusy(true);
+    try {
+      await operation('pool_capacity', { minSize, maxSize, expectedVersion });
+      await readRuntimeAndOverview();
+    } catch (failure) { await readRuntimeAndOverview().catch(() => {}); throw failure; }
+    finally { poolOperation.current = false; setPoolBusy(false); }
+  }
 
 
   async function discuss(task: Task) {
@@ -347,8 +360,8 @@ function Workspace() {
   function tabKey(event: React.KeyboardEvent, index: number) {
     if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? 2
-      : (index + (event.key === 'ArrowRight' ? 1 : 2)) % tabs.length;
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+      : (index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length;
     changeTab(tabs[next].id);
     document.getElementById(`tab-${tabs[next].id}`)?.focus();
   }
@@ -358,7 +371,7 @@ function Workspace() {
   }
   function openResource(resourceId: string) {
     if (!board?.resources.some(resource => resource.id === resourceId)) return;
-    setTab('resources'); setExpandedResource(resourceId);
+    setSettingsOpen(true); setExpandedResource(resourceId);
     requestAnimationFrame(() => document.getElementById(`resource-${resourceId}`)?.focus());
   }
   async function moveTask(task: Task, status: string) {
@@ -403,11 +416,9 @@ function Workspace() {
           tabIndex={tab === item.id ? 0 : -1} onKeyDown={event => tabKey(event, index)}
           onClick={() => changeTab(item.id)}>{item.title}</button>)}
       </nav>
-      <span className="connection" title={updated ? `${t('上次同步')} ${time(updated, true)}` : t("等待连接")}>
-        {error ? t("同步需检查") : connected ? t("已连接") : t("本地空间")}
-      </span>
-      <button className="refresh-button" type="button" aria-label={t("刷新面板")}
-        disabled={refreshing} onClick={() => void manualRefresh()}>↻</button>
+      <button className="settings-button" type="button" aria-label={t('设置')} onClick={() => setSettingsOpen(true)}>
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m9 3-1 3-3 1 1 3-2 2 2 2-1 3 3 1 1 3h6l1-3 3-1-1-3 2-2-2-2 1-3-3-1-1-3Z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
     </header>
     {eventRuntime ? <div className="automation-notice" role="status">
       {eventRuntime.pool ? <div className="pool-controls"><CollaborationOverview snapshot={overview} />
@@ -437,10 +448,9 @@ function Workspace() {
     <main id={`panel-${tab}`} className={tab === 'tasks' ? 'task-panel' : undefined} role="tabpanel" aria-labelledby={`tab-${tab}`}>
       <div className="panel-toolbar">
         <span className="subtle">{tab === 'tasks' ? `${board?.tasks.length ?? 0} ${t('个任务')}`
-          : tab === 'resources' ? `${board?.resources.length ?? 0} ${t('项资源')}` : t("Agent 交互记录")}</span>
+          : t("Agent 交互记录")}</span>
         {tab === 'tasks' ? <button className="primary" type="button" onClick={() => setEditor({ type: 'task' })}>{t("新建任务")}</button>
-          : tab === 'resources' ? <button className="primary" type="button" onClick={() => setEditor({ type: 'resource' })}>{t("添加资源")}</button>
-            : <span className="subtle">{t("只读")}</span>}
+          : <span className="subtle">{t("只读")}</span>}
       </div>
       {error && <div className="error" role="alert"><span>{error}</span><button type="button" onClick={() => void refresh()}>{t("重试")}</button></div>}
       {loading ? <Empty title={t("正在读取协作空间")} text={t("获取任务、资源与最新共享记录…")} loading />
@@ -454,15 +464,17 @@ function Workspace() {
               event.dataTransfer.effectAllowed = 'move';
             }} dragEnd={() => { dragged.current = null; }}
             dragOver={event => { if (dragged.current) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} drop={drop} />
-            : tab === 'resources' ? <div className="collaboration-environment"><section aria-labelledby="available-resources-heading">
-              <h2 id="available-resources-heading" className="environment-heading">{t('可用资源')}</h2>
-              <ResourcePool board={board} usages={usages} name={name} stale={stale}
-              expanded={expandedResource} toggle={id => setExpandedResource(current => current === id ? null : id)}
-              edit={resource => setEditor({ type: 'resource', item: resource })} /></section>
-              <PreferencesEditor read={readPreferences} write={savePreferences} refreshKey={board.cursor} />
-            </div>
-              : <SharedFeed board={board} name={name} openTask={openTask} openResource={openResource} />}
+             : <SharedFeed board={board} name={name} openTask={openTask} openResource={openResource} />}
     </main>
+    {settingsOpen && <SettingsDialog pool={eventRuntime?.pool ?? null} saveCapacity={saveCapacity} refresh={refreshSettings} close={() => setSettingsOpen(false)}>
+      <PreferencesEditor read={readPreferences} write={savePreferences} refreshKey={settingsRefresh + (board?.cursor ?? 0)} kind="system" />
+      <PreferencesEditor read={readUserPrompt} write={writeUserPrompt} refreshKey={settingsRefresh + (board?.cursor ?? 0)} kind="user" />
+      <details className="legacy-resources" open={expandedResource !== null}><summary>{t('原资源记录')}</summary>
+        <p className="subtle">{t('原资源与使用声明原样保留，只读查看；不会自动转为用户提示词。')}</p>
+        {board ? <ResourcePool board={board} usages={usages} name={name} stale={stale} expanded={expandedResource}
+          toggle={id => setExpandedResource(current => current === id ? null : id)} /> : null}
+      </details>
+    </SettingsDialog>}
     <div className="sr-only" aria-live="polite">{announcement}</div>
     {pendingMove && <PendingMoveDialog task={pendingMove} close={() => setPendingMove(null)}
       choose={status => { setPendingMove(null); void moveTask(pendingMove, status); }} />}
@@ -542,9 +554,9 @@ function PendingMoveDialog({ task, close, choose }: {
   </dialog>;
 }
 
-function ResourcePool({ board, usages, name, stale, expanded, toggle, edit }: {
+function ResourcePool({ board, usages, name, stale, expanded, toggle }: {
   board: Board; usages: Usage[]; name: (id: string) => string; stale: (id: string) => boolean;
-  expanded: string | null; toggle: (id: string) => void; edit: (resource: Resource) => void;
+  expanded: string | null; toggle: (id: string) => void;
 }) {
   if (!board.resources.length) return <Empty title={t("暂无资源")} text={t("添加资源名称、说明与使用约定，供 Agents 协商使用。")} />;
   return <div className="resources">
@@ -564,7 +576,8 @@ function ResourcePool({ board, usages, name, stale, expanded, toggle, edit }: {
         </button>
         {isExpanded && <div className="resource-detail" id={`usage-${resource.id}`}>
           <div className="resource-detail-heading"><p className="subtle">{t("使用声明供协作参考，不代表独占或机器实际空闲。")}</p>
-            <button className="secondary" type="button" aria-label={`${t('编辑资源')} ${resource.name}`} onClick={() => edit(resource)}>{t("编辑资源")}</button></div>
+            <span className="subtle">{t("只读")}</span></div>
+          <p className="subtle">ID: {resource.id} · v{resource.version} · <span>{resource.kind}</span> · {resource.capabilities.join(', ')}</p>
           {declarations.length ? declarations.map(usage => <div className="usage-line" key={usage.id}>
             <div>{name(usage.agentId)}{stale(usage.agentId) && <p className="stale">{t("最近未报告 · 使用待核实")}</p>}</div>
             <div><p>{usage.purpose}</p><p><span>{t("范围：")}</span><RichText value={usage.scope || t("未说明")} /></p>

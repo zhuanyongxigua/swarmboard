@@ -1,3 +1,4 @@
+import { refreshBoard } from './settings-helpers.js';
 // Exercise variable AI presentation, factual provenance and local expiry without model calls.
 import { expect, test } from '@playwright/test';
 import type { OverviewSnapshot } from '../../web/CollaborationOverview.js';
@@ -29,12 +30,12 @@ test('renders a compact AI-selected line without fixed metadata and preserves sa
   await expect(overview).not.toContainText('Actual external model');
   await expect(overview).not.toContainText('仅内部协作');
   await expect(overview.locator('details, small')).toHaveCount(0);
-  for (const text of ['AI 说明', '概览依据', '汇报来源', '更新时间', '有效至', '采用的个人偏好版本', 'Synthetic runtime binding', 'synthetic-peer', 'Bound native sessions']) await expect(overview).not.toContainText(text);
+  for (const text of ['AI 说明', '概览依据', '汇报来源', '更新时间', '有效至', '采用的系统提示词版本', 'Synthetic runtime binding', 'synthetic-peer', 'Bound native sessions']) await expect(overview).not.toContainText(text);
   const line = overview.locator('.overview-line');
   const box = await line.boundingBox(); expect(box!.height).toBeLessThan(40);
   value = makeOverview(); value.record!.version++;
   value.record!.parts = [{ kind: 'fact', factId: 'model' }, { kind: 'text', text: '<img src=x onerror="window.injected=true">Different presentation' }];
-  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  await refreshBoard(page);
   await expect(overview).toContainText('Different presentation');
   await expect(overview).not.toContainText('We are comparing alternatives');
   await expect(overview.locator('img')).toHaveCount(0);
@@ -64,14 +65,14 @@ test('preserves previous verified values on fact changes and reports unreadable 
   await page.goto('/'); const overview = page.getByRole('region', { name: '协作概览', exact: true });
   await expect(overview).toContainText('We are comparing alternatives');
   value.status = 'stale'; value.reason = 'facts-changed'; value.facts.revision = 'new-facts'; value.facts.items[0]!.value = 9;
-  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  await refreshBoard(page);
   await expect(overview).toContainText('上次概览');
   await expect(overview).toContainText('We are comparing alternatives');
   await expect(overview.locator('strong')).toHaveText(['3', '未知']);
   await expect(overview).not.toContainText('9');
   await page.unroute('**/api/overview');
   await page.route('**/api/overview', route => route.fulfill({ status: 503, json: { error: { message: 'Synthetic unavailable' } } }));
-  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  await refreshBoard(page);
   await expect(page.getByRole('alert').filter({ hasText: '协作概览暂不可核实' })).toBeVisible();
   await expect(overview.locator('.overview-fact')).toHaveCount(0);
 });
@@ -102,10 +103,10 @@ test('does not invent historical values on a stale first load or reuse another b
   await expect(overview).toContainText('上次概览');
   await expect(overview).toContainText('We are comparing alternatives');
   await expect(overview.locator('strong')).toHaveText(['未知', '未知']);
-  value = makeOverview(); await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  value = makeOverview(); await refreshBoard(page);
   await expect(overview.locator('strong')).toHaveText(['3', '未知']);
   value.record!.boardId = 'other-board'; delete value.record!.factSnapshot; value.status = 'stale'; value.facts.revision = 'other-facts';
-  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  await refreshBoard(page);
   await expect(overview.locator('strong')).toHaveText(['未知', '未知']);
 });
 
@@ -118,13 +119,13 @@ test('shows current AI wording after a new revision and keeps real runtime error
   await expect(overview).toContainText('We are comparing alternatives');
   await expect(page.getByRole('alert').filter({ hasText: 'Synthetic runtime connection failed' })).toBeVisible();
   value.status = 'stale'; value.reason = 'PREFERENCES_CHANGED';
-  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  await refreshBoard(page);
   await expect(overview).toContainText('上次概览');
   value = makeOverview(); value.record!.version++; value.record!.parts = [{ kind: 'text', text: 'Reviewing the next contribution' }, { kind: 'fact', factId: 'bound' }];
-  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  await refreshBoard(page);
   await expect(overview).toContainText('Reviewing the next contribution'); await expect(overview).not.toContainText('上次概览');
   value.record = null; value.status = 'missing';
-  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  await refreshBoard(page);
   await expect(overview).toContainText('协作情况未知');
   await expect(page.getByRole('alert').filter({ hasText: 'Synthetic runtime connection failed' })).toBeVisible();
 });

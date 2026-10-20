@@ -1,10 +1,11 @@
+import { openResources, closeSettings } from './settings-helpers.js';
 // Verify localized documentation previews use the real board and never translate stored user content.
 import { test, expect } from '@playwright/test';
 
 test('English preview supports real editing while Chinese remains the default', async ({ page, request }) => {
   await page.goto('/?lang=en');
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
-  await expect(page.getByRole('tab')).toHaveText(['Tasks', 'Collaboration environment', 'Shared board']);
+  await expect(page.getByRole('tab')).toHaveText(['Tasks', 'Shared board']);
   await expect(page.getByRole('heading', { name: 'To do', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Discuss a plan', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'New task', exact: true }).click();
@@ -18,9 +19,9 @@ test('English preview supports real editing while Chinese remains the default', 
   await page.getByRole('combobox', { name: 'Status', exact: true }).selectOption('in_review');
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect(page.locator('[data-status="pending"]').getByRole('button', { name: `View task ${title}`, exact: true })).toBeVisible();
-  await page.getByRole('tab', { name: 'Collaboration environment', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Add resource', exact: true })).toBeVisible();
-  await page.getByRole('tab', { name: 'Shared board', exact: true }).click();
+  await openResources(page);
+  await expect(page.getByLabel('User prompt text', { exact: true })).toBeVisible();
+  await closeSettings(page); await page.getByRole('tab', { name: 'Shared board', exact: true }).click();
   await expect(page.getByText('Read-only', { exact: true })).toBeVisible();
   await expect(page.getByRole('textbox')).toHaveCount(0);
   const before = await (await request.get('/api/board')).json();
@@ -28,7 +29,7 @@ test('English preview supports real editing while Chinese remains the default', 
   for (const url of ['/?lang=zh-CN', '/', '/?lang=unknown']) {
     await page.goto(url);
     await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
-    await expect(page.getByRole('tab')).toHaveText(['任务管理', '协作环境', '共享面板']);
+    await expect(page.getByRole('tab')).toHaveText(['任务管理', '共享面板']);
     await expect(page.getByRole('button', { name: `查看任务 ${title}`, exact: true })).toBeVisible();
   }
   expect(await (await request.get('/api/board')).json()).toEqual(before);

@@ -1,3 +1,4 @@
+import { refreshBoard } from './settings-helpers.js';
 // Verify capacity controls against synthetic runtime responses, without dispatching a worker.
 import { test, expect, type Page } from '@playwright/test';
 
@@ -61,7 +62,7 @@ test('keeps a busy member in the actual count while retirement is pending, inclu
   await expectActualCount(page, 2, 2);
   await expect(page.getByRole('status')).toContainText('1 个正在退出');
   state.activity.members = 1; state.activity.running = 0; state.activity.draining = 0;
-  await page.getByRole('button', { name: '刷新面板' }).click();
+  await refreshBoard(page);
   await expectActualCount(page, 1, 0);
   await expect(page.getByRole('status')).not.toContainText('个正在退出');
   expect(calls).toBe(1);
@@ -82,12 +83,12 @@ for (const copy of [
   await control.focus();
   await expect(page.getByRole('tooltip')).toHaveText(copy.hint);
   state.pool.size = 2; state.activity.members = 2; state.pool.enabled = false;
-  await page.getByRole('button', { name: copy.lang === 'en' ? 'Refresh board' : '刷新面板' }).click();
+  await refreshBoard(page);
   await expect(page.getByRole('button', { name: /^(停止协作|恢复协作|Stop collaboration|Resume collaboration)$/ })).toHaveCount(0);
   await expect(page.getByRole('button', { name: copy.lang === 'en' ? 'Add member' : '增加成员', exact: true })).toBeVisible();
   await expect(button).toBeDisabled();
   await expect(button).toHaveAccessibleDescription(copy.paused);
-  await page.getByRole('button', { name: copy.lang === 'en' ? 'Refresh board' : '刷新面板' }).focus();
+  await page.getByRole('button', { name: /^(设置|Settings)$/ }).focus();
   await page.keyboard.press('Tab');
   await expect(control).toBeFocused();
   await expect(page.getByRole('tooltip')).toHaveText(copy.paused);
@@ -174,7 +175,7 @@ test('the browser retires through real HTTP and SQLite and retains the original 
     await expect.poll(() => runtime.workers.pool()!.size).toBe(2);
     // Run only capacity preparation, not event dispatch or a native session.
     new WorkerPool(runtime.workers, store, dbPath).ensureMembers(runtime.workers.pool()!);
-    await page.getByRole('button', { name: '刷新面板' }).click();
+    await refreshBoard(page);
     await expectActualCount(page, 2, 0);
     expect(runtime.workers.pool()!.memberIds).toEqual(expect.arrayContaining(ids));
     expect(runtime.workers.list()).toHaveLength(2); expect(sessionAttempts).toBe(0);

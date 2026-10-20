@@ -1,3 +1,4 @@
+import { refreshBoard } from './settings-helpers.js';
 // Verify visible event-worker status and actionable failures without starting a model.
 import { test, expect } from '@playwright/test';
 test('shows registered event sessions and their blocker while retaining three board tabs', async ({ page }) => {
@@ -5,7 +6,7 @@ test('shows registered event sessions and their blocker while retaining three bo
   await page.goto('/');
   await expect(page.getByRole('region', { name: '协作概览', exact: true })).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('Inspect the bound session before retrying');
-  await expect(page.getByRole('tab')).toHaveText(['任务管理', '协作环境', '共享面板']);
+  await expect(page.getByRole('tab')).toHaveText(['任务管理', '共享面板']);
 });
 
 for (const language of ['zh-CN', 'en']) test(`backend stop and resume preserve the board without visible lifecycle controls (${language})`, async ({ page }) => {
@@ -26,18 +27,18 @@ for (const language of ['zh-CN', 'en']) test(`backend stop and resume preserve t
   await expect(add).toBeEnabled(); await expect(reduce).toBeEnabled();
   // Maintenance remains an authenticated API operation rather than a permanent UI stop action.
   await page.evaluate(async () => { const r = await fetch('/api/pool/control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expectedVersion: 1, enabled: false }) }); if (!r.ok) throw Error('Synthetic stop failed'); });
-  await page.getByRole('button', { name: language === 'en' ? 'Refresh board' : '刷新面板', exact: true }).click();
+  await refreshBoard(page);
   await expect(lifecycleControls).toHaveCount(0);
   await expect(add).toBeDisabled(); await expect(reduce).toBeDisabled();
   expect(pool.state).toBe('stopping');
   await page.evaluate(async () => { const r = await fetch('/api/pool/control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expectedVersion: 2, enabled: true }) }); if (!r.ok) throw Error('Synthetic resume failed'); });
-  await page.getByRole('button', { name: language === 'en' ? 'Refresh board' : '刷新面板', exact: true }).click();
+  await refreshBoard(page);
   await expect(lifecycleControls).toHaveCount(0);
   await expect(add).toBeEnabled(); await expect(reduce).toBeEnabled();
   expect(pool.state).toBe('ready');
   expect(commands).toEqual([{ expectedVersion: 1, enabled: false }, { expectedVersion: 2, enabled: true }]);
   await expect(page.locator('.task-card')).toHaveCount(before);
-  await expect(page.getByRole('tab')).toHaveText(language === 'en' ? ['Tasks', 'Collaboration environment', 'Shared board'] : ['任务管理', '协作环境', '共享面板']);
+  await expect(page.getByRole('tab')).toHaveText(language === 'en' ? ['Tasks', 'Shared board'] : ['任务管理', '共享面板']);
 });
 
 test('distinguishes idle members from executing peers and supports bounded recovery retry', async ({ page }) => {
@@ -56,11 +57,11 @@ test('distinguishes idle members from executing peers and supports bounded recov
   await expect(page.getByRole('status')).toContainText('下次空闲检查');
   const before = await page.locator('.task-card').count();
   activity.state = 'running'; activity.running = 2; activity.idle = 1; activity.watchdog.nextWakeAt = null;
-  await page.getByRole('button', { name: '刷新面板' }).click();
+  await refreshBoard(page);
   expect(await page.evaluate(async () => (await fetch('/api/runtime')).json())).toMatchObject({ activity: { members: 3, running: 2 } });
   await expect(page.getByRole('status')).not.toContainText('下次空闲检查');
   activity.state = 'attention'; activity.running = 0; activity.idle = 3; activity.watchdog.state = 'attention'; activity.watchdog.attempts = 2;
-  await page.getByRole('button', { name: '刷新面板' }).click();
+  await refreshBoard(page);
   await expect(page.getByRole('alert')).toContainText('两次空闲检查后目标仍未推进');
   await page.getByRole('button', { name: '重新检查', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveCount(0);
@@ -81,7 +82,7 @@ test('grows the same organization with its current version and shows durable CI 
   await page.getByRole('button',{name:'增加成员',exact:true}).click();
   expect(commands).toEqual([{workspacePath:'/synthetic/project',taskIds:['human-goal'],size:4,maxSize:5,expectedVersion:8}]);
   ciWatches[0].state='error';ciWatches[0].error='GitLab lookup needs attention';
-  await page.getByRole('button',{name:'刷新面板'}).click();await expect(page.getByRole('alert')).toContainText('CI #100: GitLab lookup needs attention');
+  await refreshBoard(page);await expect(page.getByRole('alert')).toContainText('CI #100: GitLab lookup needs attention');
   await expect(page.getByRole('status')).not.toContainText('等待 CI 结果，完成后通知全体成员');
 });
 
@@ -122,7 +123,7 @@ for (const { language, maxSize, label, hint } of [
   await page.screenshot({ path: testInfo.outputPath('member-limit-tooltip.png') });
   await page.getByRole('heading', { name: 'Swarmboard', exact: true }).hover();
   await expect(page.getByRole('tooltip')).toBeHidden();
-  await page.getByRole('button', { name: language === 'en' ? 'Refresh board' : '刷新面板' }).focus();
+  await page.getByRole('button', { name: /^(设置|Settings)$/ }).focus();
   await page.keyboard.press('Tab');
   await expect(control).toBeFocused();
   await expect(page.getByRole('tooltip')).toBeVisible();

@@ -157,7 +157,9 @@ async function capture(locale) {
       line: Number.parseFloat(getComputedStyle(element).lineHeight),
     }));
     expect(overviewHeight.actual).toBeLessThanOrEqual(overviewHeight.line + 2);
-    await expect(page.locator('.task-card')).toHaveCount(6);
+    const currentBoard = await call('board_read');
+    expect(currentBoard.tasks).toHaveLength(6);
+    await expect(page.locator('.task-card')).toHaveCount(currentBoard.tasks.filter(task => !['done', 'canceled'].includes(task.status)).length);
     await expect(page.locator('.task-progress')).toHaveCount(3);
     for (const [state, percent] of [['active', 70], ['waiting', 35], ['unknown', null]]) {
       const progress = page.locator(`.task-progress[data-progress-state="${state}"]`);
@@ -174,17 +176,20 @@ async function capture(locale) {
     }
     await checkLanguage();
     await page.screenshot({ path: path.join(output, 'tasks.png') });
-    // Capture both collaboration-environment sections from the combined product UI.
-    await page.getByRole('tab', { name: new RegExp(`^(?:${copy("资源池")}|${copy("协作环境")})$`) }).click();
+    // Capture real settings and preserved resource records, with no private prompts.
+    await page.getByRole('button', { name: copy("设置"), exact: true }).click();
+    await expect(page.getByRole('heading', { name: copy("系统提示词"), exact: true })).toBeVisible();
+    await expect(page.locator('.preference-text')).toHaveText([copy("尚未设置提示词。"), copy("尚未设置提示词。")]);
+    await expect(page.locator('#system-prompt-text')).toHaveValue('');
+    await checkLanguage();
+    await page.screenshot({ path: path.join(output, 'settings.png'), fullPage: true });
+    await page.getByText(copy("原资源记录"), { exact: true }).click();
     await expect(page.locator('.resource-row')).toHaveCount(3);
-    await expect(page.locator('.preferences-panel')).toBeVisible();
-    await expect(page.getByRole('heading', { name: copy("个人偏好"), exact: true })).toBeVisible();
-    await expect(page.locator('.preference-text')).toHaveText(copy("尚无个人偏好。"));
-    await expect(page.locator('#preference-text')).toHaveValue('');
     await page.getByRole('button', { name: copy("查看资源 dev-a"), exact: true }).click();
     await expect(page.locator('.usage-line')).toHaveCount(2);
     await checkLanguage();
     await page.screenshot({ path: path.join(output, 'resources.png'), fullPage: true });
+    await page.getByRole('button', { name: copy("关闭设置"), exact: true }).click();
     await page.getByRole('tab', { name: copy("共享面板"), exact: true }).click();
     await expect(page.getByRole('textbox')).toHaveCount(0);
     await expect(page.getByText(copy("约定：如需重启服务，先通知当前使用者，确认检查结束后再操作。"), { exact: true })).toBeVisible();

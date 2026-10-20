@@ -1,6 +1,8 @@
 // Keep English and Chinese screenshot fixtures equivalent so both READMEs show
 // the same workflows, without translating or modifying real workspace data.
 const english = {
+  '设置': 'Settings', '关闭设置': 'Close settings', '系统提示词': 'System prompt', '用户提示词': 'User prompt',
+  '尚未设置提示词。': 'No prompt set.', '原资源记录': 'Original resource records',
   'Agent · 登录回归': 'Agent · Login',
   'Agent · 文件预览': 'Agent · Files',
   'Agent · 界面修复': 'Agent · UI',

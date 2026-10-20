@@ -1,3 +1,4 @@
+import { openResources } from './settings-helpers.js';
 // Exercise the uneven-column regression in a real browser, including keyboard
 // access to overflowed tasks and preservation of the complete saved content.
 import { test, expect } from '@playwright/test';
@@ -59,6 +60,6 @@ test('keeps readable columns and keyboard navigation inside a narrow viewport', 
   await page.getByRole('button', { name: '查看任务 Layout: narrow viewport target', exact: true }).focus();
   await page.keyboard.press('Enter'); await expect(page.getByLabel('标题', { exact: true })).toHaveValue('Layout: narrow viewport target');
   await page.keyboard.press('Escape');
-  await page.getByRole('tab', { name: '协作环境', exact: true }).click();
-  await expect(page.getByRole('button', { name: '添加资源', exact: true })).toBeVisible();
+  await openResources(page);
+  await expect(page.getByLabel('用户提示词内容', { exact: true })).toBeVisible();
 });

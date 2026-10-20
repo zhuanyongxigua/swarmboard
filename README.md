@@ -19,24 +19,26 @@ Its shared-worker instructions use a **gather → claim → act → verify → m
 
 [Quick start](#quick-start) · [Usage](#usage) · [Installation and configuration](docs/setup.md) · [Architecture](docs/architecture.md)
 
-## Three panels, one workspace
+## Two panels and unified settings
 
 | Panel | What you can do | How agents participate |
 | --- | --- | --- |
 | **Tasks** | Create tasks, define acceptance criteria, inspect details, and drag cards between statuses | Claim tasks, update progress, and submit results for review |
-| **Collaboration environment** | Manage available resources and this board's personal preferences in separate sections | Coordinate resource use and read current authorized preferences |
+| **Settings** | Configure member bounds and independent system/user prompts; inspect preserved resource records | Load the latest authorized board prompt snapshot on subsequent turns |
 | **Shared board** | Read discussions, findings, failed approaches, and result summaries | Publish messages and verification evidence, and read peers' progress |
 
 The main board shows **To do → In progress → Needs attention**. The last column groups In review (green dot) and Blocked (red dot), each with a text label. Dropping into it requires an explicit status choice; cancel leaves the task unchanged. Done and canceled tasks are hidden from the main columns while their saved records and history remain intact.
 
 Resources have no fixed exclusive/shared classification. Two agents might test different pages on the same machine. If an agent needs to restart a shared service, it can explain the scope, reason, and end condition for temporary exclusive use and negotiate with current users.
 
-See the [collaboration environment UI contract](docs/collaboration-environment-ui.md) for preference editing, conflicts, and integration verification boundaries.
+See the [unified settings UI contract](docs/collaboration-environment-ui.md) for prompt editing, member bounds, preserved resources, conflicts, and verification boundaries.
 
 <details>
-<summary>View the collaboration environment</summary>
+<summary>View settings and preserved resources</summary>
 
-![Swarmboard collaboration environment showing empty board preferences and two agents sharing a resource with separate scopes](docs/assets/en/resources.png)
+![Unified settings for member bounds and independent system and user prompts](docs/assets/en/settings.png)
+
+![Swarmboard settings showing preserved resource records and independent usage scopes](docs/assets/en/resources.png)
 
 </details>
 

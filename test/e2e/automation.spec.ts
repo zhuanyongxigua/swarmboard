@@ -1,3 +1,4 @@
+import { openResources, refreshBoard, closeSettings } from './settings-helpers.js';
 // Verify built-in auto-claim initialization with isolated HTTP MCP databases, never real host schedules.
 import { test, expect, type Page } from '@playwright/test';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -40,7 +41,7 @@ window.addEventListener('message',async(event)=>{
 });</script><iframe title="Swarmboard" src="/${english ? '?lang=en' : ''}" style="width:100%;height:calc(100vh - 90px);border:0"></iframe></body></html>` }));
   await page.goto('/automation-host');
   const frame = page.frameLocator('iframe');
-  await expect(frame.getByText(english ? 'Connected' : '已连接', { exact: true })).toBeVisible();
+  await expect(frame.getByRole('button', { name: english ? 'Settings' : '设置', exact: true })).toBeVisible();
   async function tool<T>(name: string, args: Record<string, unknown> = {}) {
     const result = await client.callTool({ name, arguments: args });
     expect(result.isError, JSON.stringify(result)).not.toBe(true);
@@ -54,9 +55,10 @@ window.addEventListener('message',async(event)=>{
 }
 
 async function assertCompactHeader(frame: ReturnType<Page['frameLocator']>, english = false) {
-  await expect(frame.getByRole('tab')).toHaveText(english ? ['Tasks', 'Collaboration environment', 'Shared board'] : ['任务管理', '协作环境', '共享面板']);
+  await closeSettings(frame);
+  await expect(frame.getByRole('tab')).toHaveText(english ? ['Tasks', 'Shared board'] : ['任务管理', '共享面板']);
   await expect(frame.getByRole('banner').getByRole('button')).toHaveCount(1);
-  await expect(frame.getByRole('banner').getByRole('button', { name: english ? 'Refresh board' : '刷新面板' })).toBeVisible();
+  await expect(frame.getByRole('banner').getByRole('button', { name: english ? 'Settings' : '设置' })).toBeVisible();
   await expect(frame.getByRole('button', { name: /自动认领|Auto-claim|讨论方案/ })).toHaveCount(0);
   await expect(frame.getByRole('dialog')).toHaveCount(0);
   await expect(frame.getByRole('switch')).toHaveCount(0);
@@ -87,7 +89,7 @@ test('opening a supported host initializes once in a new conversation without ex
     expect((await host.tool<AutomationConfig>('automation_read')).requestId).toBe(config.requestId);
 
     const stale = config;
-    await host.frame.getByRole('button', { name: '刷新面板', exact: true }).click();
+    await refreshBoard(host.frame);
     await expect.poll(() => host.messages.length).toBe(2);
     await expect(host.frame.getByText('正在核对自动认领状态。', { exact: true })).toBeVisible();
     config = await host.tool<AutomationConfig>('automation_read');
@@ -100,11 +102,11 @@ test('opening a supported host initializes once in a new conversation without ex
     await page.clock.fastForward(16000);
     expect(host.calls.filter(call => call.name === 'automation_ensure')).toHaveLength(ensures);
     expect(host.messages).toHaveLength(2);
-    await host.frame.getByRole('button', { name: '刷新面板', exact: true }).click();
+    await refreshBoard(host.frame);
     await expect.poll(() => host.messages.length).toBe(3);
     config = await host.tool<AutomationConfig>('automation_read');
     await host.tool('automation_confirm', { expectedVersion: config.version, requestId: config.requestId, automationId: 'simulated-schedule', status: 'ACTIVE', model: 'simulated-model', reasoningEffort: 'low', projectId: null });
-    await host.frame.getByRole('button', { name: '刷新面板', exact: true }).click();
+    await refreshBoard(host.frame);
     await expect(host.frame.locator('.automation-notice')).toHaveCount(0);
     expect(host.messages).toHaveLength(3);
     expect(host.board()).toEqual(host.beforeBoard);
@@ -127,7 +129,7 @@ for (const mode of ['denied', 'rpc-error'] as const) {
       await expect.poll(() => host.calls.filter(call => call.name === 'automation_ensure').length).toBe(2);
       expect(host.messages).toHaveLength(1);
       expect((await host.tool<AutomationConfig>('automation_read')).version).toBe(failed.version);
-      await host.frame.getByRole('button', { name: '刷新面板', exact: true }).click();
+      await refreshBoard(host.frame);
       await expect.poll(() => host.messages.length).toBe(2);
       expect(host.messages[1].content[0].text).toContain('READ-ONLY native reconciliation');
       expect((await host.tool<AutomationConfig>('automation_read')).actualStatus).toBe(null);
@@ -146,8 +148,8 @@ for (const mode of ['unsupported', 'mobile'] as const) {
       expect(host.calls.every(call => ['board_read', 'automation_read', 'runtime_read'].includes(call.name))).toBe(true);
       expect(host.messages).toEqual([]);
       expect(await host.tool<AutomationConfig>('automation_read')).toMatchObject({ state: 'off', desiredEnabled: true, actualStatus: null, version: 0 });
-      await host.frame.getByRole('tab', { name: '协作环境', exact: true }).click();
-      await expect(host.frame.getByRole('button', { name: '添加资源', exact: true })).toBeEnabled();
+      await openResources(host.frame);
+      await expect(host.frame.getByLabel('用户提示词内容', { exact: true })).toBeEnabled();
       await assertCompactHeader(host.frame);
     } finally { await host.close(); }
   });
@@ -165,5 +167,5 @@ test('English initialization is localized while standalone preview stays clean a
   await expect(page.getByRole('button', { name: /自动认领|Auto-claim/ })).toHaveCount(0);
   await expect(page.getByRole('region', { name: '协作概览', exact: true })).toHaveText('协作情况未知');
   await expect(page.getByRole('button', { name: '停止协作', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('tab')).toHaveText(['任务管理', '协作环境', '共享面板']);
+  await expect(page.getByRole('tab')).toHaveText(['任务管理', '共享面板']);
 });

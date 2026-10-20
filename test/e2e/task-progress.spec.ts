@@ -1,3 +1,4 @@
+import { refreshBoard } from './settings-helpers.js';
 // Exercise the actual cards against synthetic board snapshots. Persistence and
 // API authorization are verified separately; these checks start no model.
 import { test, expect, type Page } from '@playwright/test';
@@ -36,11 +37,11 @@ test('shows reported progress only in progress and keeps execution independent',
   expect(await page.evaluate(async () => (await (await fetch('/api/runtime')).json()).activity)).toMatchObject({ running: 0, idle: 1 });
   await page.screenshot({ path: testInfo.outputPath('progress-three-states.png') });
   activity.running = 1; activity.idle = 0; activity.state = 'running';
-  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  await refreshBoard(page);
   expect(await page.evaluate(async () => (await (await fetch('/api/runtime')).json()).activity)).toMatchObject({ running: 1, idle: 0 });
   await expect(card(page, 'active').getByRole('progressbar')).toHaveAttribute('aria-valuenow', '70');
   board.tasks[0]!.progress = null;
-  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  await refreshBoard(page);
   await expect(card(page, 'active')).toContainText('待评估');
   await expect(card(page, 'active').getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
   expect(writes).toHaveLength(0);
