@@ -243,6 +243,9 @@ export class EventRuntime {
     const dispatchable = new Set(pool?.memberIds.filter(id => { const member = this.workers.get(id); return member.enabled && member.status === 'idle'; }) ?? []);
     const pending = busy || !!pool?.memberIds.some(id => { if (!dispatchable.has(id)) return false; const batch = this.batch(this.workers.get(id)); return batch.events.length > 0 || batch.hasMore; });
     this.liveness.sync(pool, this.options.now?.() ?? Date.now(), pending, this.ci.list().filter(w => w.state === 'watching').map(w => w.taskId));
+    // Ordinary task/shared events reach registered channels through the same
+    // dispatcher as reminders. No channels registered means no extra work.
+    this.notificationDispatcher.dispatchPending();
     for (const worker of this.workers.list()) {
       // Retired history and unlisted preparations are not delivery targets.
       if (worker.poolId && (!pool || !pool.memberIds.includes(worker.id))) {

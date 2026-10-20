@@ -10,8 +10,11 @@ import { NotificationAdapterStore } from './notification-adapter-store.js';
 import { resolveNotificationTargets, type DeliveryResolution } from './notification-adapters.js';
 
 export interface NotificationDispatcher {
-  /** Record durable intents for one published entry and report the resolution. */
+  /** Record durable intents for one published entry and report the resolution.
+   *  Each board entry is offered at most once, so a re-scan cannot duplicate it. */
   dispatch(entry: Entry): DeliveryResolution;
+  /** Offer every entry after the last dispatched one (bounded). */
+  dispatchPending(limit?: number): number;
   /** Currently registered channels, for status output. */
   adapters(): ReturnType<NotificationAdapterStore['list']>;
 }
@@ -20,14 +23,31 @@ export function createNotificationDispatcher(board: Store): NotificationDispatch
   const store = new NotificationAdapterStore(board.db);
   return {
     adapters: () => store.list(),
+    dispatchPending(limit = 200): number {
+      if (!store.list().length) return 0;
+      const after = store.dispatchedThrough();
+      const page = board.readEntries({ after, limit });
+      for (const entry of page.items) this.dispatch(entry);
+      const highest = page.items.at(-1)?.id;
+      if (highest !== undefined) store.advanceDispatch(highest);
+      return page.items.length;
+    },
     dispatch(entry: Entry): DeliveryResolution {
       const resolution = resolveNotificationTargets(entry, store.list());
       for (const target of resolution.targets) {
-        const sequence = store.nextSequence(target.adapterId, target.memberId);
+        // Idempotent per (entry, channel, member): a re-scan cannot duplicate it.
+        if (!store.claimDispatch(entry.id, target.adapterId, target.memberId)) continue;
+        const pending = store.pendingIntent(target.adapterId, target.memberId);
+        if (pending) {
+          // Busy merge: batch into the unconfirmed delivery rather than opening
+          // a second sequence, which the cross-sequence fence would reject.
+          store.appendEntries(target.adapterId, target.memberId, pending.sequence, [entry.id]);
+          continue;
+        }
         store.recordIntent({
           adapterId: target.adapterId,
           memberId: target.memberId,
-          sequence,
+          sequence: store.nextSequence(target.adapterId, target.memberId),
           entryIds: [entry.id],
           createdAt: entry.createdAt,
         });

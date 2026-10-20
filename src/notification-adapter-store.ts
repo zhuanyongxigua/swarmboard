@@ -24,6 +24,8 @@ export class NotificationAdapterStore {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS notification_adapters(id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, data TEXT NOT NULL, updatedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS notification_deliveries(adapterId TEXT NOT NULL, memberId TEXT NOT NULL, sequence INTEGER NOT NULL, intent TEXT NOT NULL, receipt TEXT, PRIMARY KEY(adapterId, memberId, sequence));
+      CREATE TABLE IF NOT EXISTS notification_dispatched(entryId INTEGER NOT NULL, adapterId TEXT NOT NULL, memberId TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(entryId, adapterId, memberId));
+      CREATE TABLE IF NOT EXISTS notification_dispatch_progress(id INTEGER PRIMARY KEY CHECK(id=1), through INTEGER NOT NULL);
     `);
   }
 
@@ -98,6 +100,50 @@ export class NotificationAdapterStore {
    * plus one. An unsettled (pending/unknown) sequence keeps this value fixed so
    * a caller cannot quietly advance past an unresolved delivery.
    */
+  /** Highest board entry already scanned for dispatch. */
+  dispatchedThrough(): number {
+    const row = this.db.prepare('SELECT through FROM notification_dispatch_progress WHERE id=1').get() as unknown as { through: number } | undefined;
+    return row?.through ?? 0;
+  }
+
+  /** Advance the scan watermark; never moves backwards. */
+  advanceDispatch(through: number): void {
+    this.db.prepare('INSERT INTO notification_dispatch_progress(id, through) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET through=MAX(through, excluded.through)').run(through);
+  }
+
+  /** Claim one entry for one channel member. False means it was already claimed. */
+  claimDispatch(entryId: number, adapterId: string, memberId: string, at = new Date().toISOString()): boolean {
+    const result = this.db.prepare('INSERT OR IGNORE INTO notification_dispatched(entryId, adapterId, memberId, at) VALUES(?,?,?,?)')
+      .run(entryId, adapterId, memberId, at);
+    return result.changes > 0;
+  }
+
+  /** The still-pending (unconfirmed) intent for one channel member, if any. */
+  pendingIntent(adapterId: string, memberId: string): DeliveryIntent | null {
+    const row = this.db.prepare('SELECT intent FROM notification_deliveries WHERE adapterId=? AND memberId=? AND receipt IS NULL ORDER BY sequence DESC LIMIT 1')
+      .get(adapterId, memberId) as unknown as { intent: string } | undefined;
+    return row ? JSON.parse(row.intent) as DeliveryIntent : null;
+  }
+
+  /**
+   * Merge more entries into a delivery that has not been confirmed yet, so busy
+   * channels batch instead of failing the sequence fence. A settled or unknown
+   * delivery is never extended: it must be reconciled first.
+   */
+  appendEntries(adapterId: string, memberId: string, sequence: number, entryIds: readonly number[]): DeliveryIntent {
+    const row = this.db.prepare('SELECT intent, receipt FROM notification_deliveries WHERE adapterId=? AND memberId=? AND sequence=?')
+      .get(adapterId, memberId, sequence) as unknown as { intent: string; receipt: string | null } | undefined;
+    if (!row) throw new Error('Notification merge without a recorded intent');
+    if (row.receipt !== null) throw new Error('Cannot merge into a settled or unknown delivery');
+    const intent = JSON.parse(row.intent) as DeliveryIntent;
+    const merged = [...intent.entryIds];
+    for (const id of entryIds) if (!merged.includes(id)) merged.push(id);
+    const next = { ...intent, entryIds: merged };
+    this.db.prepare('UPDATE notification_deliveries SET intent=? WHERE adapterId=? AND memberId=? AND sequence=?')
+      .run(JSON.stringify(next), adapterId, memberId, sequence);
+    return next;
+  }
+
   nextSequence(adapterId: string, memberId: string): number {
     return this.settledSequence(adapterId, memberId) + 1;
   }

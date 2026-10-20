@@ -73,9 +73,15 @@ describe('external notification consumer contract', () => {
     f.tick(); await f.settle();
 
     const first = f.service.pending(f.admitted.id);
+    // One unconfirmed delivery per member; a busy channel batches several
+    // actionable entries into it instead of opening a second sequence.
     expect(first.items).toHaveLength(1);
     expect(first.items[0]).toMatchObject({ memberId: f.admitted.id, state: 'pending' });
-    expect(first.items[0]!.entryIds).toHaveLength(1);
+    expect(first.items[0]!.entryIds.length).toBeGreaterThanOrEqual(1);
+    // A re-scan with no new entries must not duplicate or renumber the batch.
+    const before = [...first.items[0]!.entryIds];
+    await f.settle();
+    expect(f.service.pending(f.admitted.id).items[0]!.entryIds).toEqual(before);
 
     // Unconfirmed consumption stays unknown, and a restart must keep it visible.
     f.service.receipt(f.admitted.id, first.items[0]!.sequence, false);
