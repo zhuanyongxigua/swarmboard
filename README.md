@@ -9,7 +9,7 @@
 
 When several agents work at once and development machines are limited, it is easy to lose track of who is doing what, which environments can be shared, and which findings others can reuse.
 
-Swarmboard keeps tasks, resources, and collaboration records in one place. Add tasks and register resources through the board or chat. Connected agents work in their existing sessions, claim tasks, declare resource usage, discuss overlapping work, and report results.
+Swarmboard keeps tasks, resources, and collaboration records in one place. Describe goals and register resources through chat. Connected agents work in their existing sessions, claim tasks, declare resource usage, discuss overlapping work, and report results.
 
 Its shared-worker instructions use a **gather → claim → act → verify → merge** loop: agents read shared context, choose work, coordinate with peers, verify results, and record outcomes. This is an independent implementation inspired by Agensh, without an upstream kernel dependency.
 
@@ -23,7 +23,7 @@ Its shared-worker instructions use a **gather → claim → act → verify → m
 
 | Panel | What you can do | How agents participate |
 | --- | --- | --- |
-| **Tasks** | Create tasks, define acceptance criteria, inspect details, and drag cards between statuses | Claim tasks, update progress, and submit results for review |
+| **Tasks** | Inspect and edit saved goals and acceptance criteria, and drag cards between statuses | Claim tasks, update progress, and submit results for review |
 | **Settings** | Configure member bounds and independent system/user prompts; inspect preserved resource records | Load the latest authorized board prompt snapshot on subsequent turns |
 | **Shared board** | Read discussions, findings, failed approaches, and result summaries | Publish messages and verification evidence, and read peers' progress |
 
@@ -84,7 +84,7 @@ Agents can choose what to present through `overview_read` and `overview_write` d
 
 ### Discuss a plan in the native conversation
 
-Open Swarmboard beside a native ChatGPT conversation and discuss your plan there. The board keeps its three tabs; chat history, model selection and approval settings belong to ChatGPT. There is no separate chat interface inside the plugin.
+Open Swarmboard beside a native ChatGPT conversation and discuss your plan there. The board keeps its two tabs; chat history, model selection and approval settings belong to ChatGPT. There is no separate chat interface inside the plugin.
 
 Discuss alternatives first. Ask for draft tasks and acceptance criteria when the plan is ready, then explicitly confirm which items to add. Task details offer **Discuss this task** to append that task's saved context to the current native draft. Review or edit it, then send it yourself. This action creates no tasks, starts no workers and does not submit the message.
 
@@ -92,7 +92,7 @@ The task discussion shortcut requires a desktop host advertising the OpenAI mess
 
 ### Add tasks and resources
 
-Open the task or resource creation dialog, fill in the fields, and save. You can also ask in a chat with Swarmboard tools enabled:
+Ask in a chat with trusted host Swarmboard tools enabled, and confirm which human goals or resources to register:
 
 ```text
 Create a task in Swarmboard: fix the login page's error messages.
@@ -105,7 +105,7 @@ Usage agreement: separate working directories may run in parallel.
 Coordinate with current users before restarting services or changing shared data.
 ```
 
-The agent calls the plugin tools and writes the result to the same board.
+The trusted host calls the existing plugin tools and writes the result to the same board. The panel has no manual task creation button, dialog or shortcut. Saved tasks remain editable and draggable, with their discussion shortcut intact. Preserved resources are available read-only in Settings. Worker and external-member sessions must record internal subproblems in shared context instead of creating task cards.
 
 ### Join from existing agent sessions
 

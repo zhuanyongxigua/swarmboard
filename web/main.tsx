@@ -30,7 +30,11 @@ type Usage = {
   sharing: string; taskId?: string; active: boolean;
 };
 type Board = { tasks: Task[]; resources: Resource[]; agents: Agent[]; usages: Usage[]; entries: Entry[]; cursor: number };
-type Editor = { type: 'task'; item?: Task } | { type: 'resource'; item?: Resource };
+type Editor = { type: 'task'; item: Task } | { type: 'resource'; item?: Resource };
+type UiOperation = 'board_read' | 'runtime_read' | 'overview_read' | 'automation_read'
+  | 'pool_capacity' | 'pool_configure' | 'pool_control' | 'pool_reduce'
+  | 'user_prompt_read' | 'user_prompt_write' | 'preferences_read' | 'preferences_write'
+  | 'task_update' | 'resource_create' | 'resource_update';
 type Tab = 'tasks' | 'shared';
 type RuntimeStatus = { mode: 'events'; ciWatches?: { id: string; pipelineId: number; sha: string; state: string; error: string }[]; pool?: { id?: string; size: number; minSize?: number; maxSize?: number; workspacePath?: string; taskIds?: string[]; enabled: boolean; version: number; state: string; error: string } | null; activity?: { members: number; running: number; idle: number; draining?: number; state: string; executionMode: string; watchdog: { state: string; attempts: number; nextWakeAt: string | null } }; workers: { id: string; name: string; poolId?: string; enabled: boolean; status: string; error: string }[]; error: string };
 
@@ -71,7 +75,7 @@ function unpack(value: unknown): unknown {
   if (result.isError) throw operationError((data as { error?: { code?: string; message?: string } })?.error);
   return data;
 }
-async function operation<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+async function operation<T>(name: UiOperation, args: Record<string, unknown> = {}): Promise<T> {
   if (bridge) return unpack(await bridge.callServerTool({ name, arguments: args })) as T;
   if (window.parent !== window) throw new OperationError(t("插件尚未连接桌面宿主，请重新打开面板后重试。"));
   let url = '/api/board';
@@ -88,7 +92,6 @@ async function operation<T>(name: string, args: Record<string, unknown> = {}): P
   if (name === 'overview_read') url = '/api/overview';
   if (name === 'preferences_write') { url = '/api/preferences'; method = 'PATCH'; body = args; }
   if (name === 'pool_reduce') { url = '/api/pool/reduce'; method = 'POST'; body = args; }
-  if (name === 'task_create') { url = '/api/tasks'; method = 'POST'; body = args; }
   if (name === 'task_update') { url = `/api/tasks/${encodeURIComponent(String(id))}`; method = 'PATCH'; body = patch; }
   if (name === 'resource_create') { url = '/api/resources'; method = 'POST'; body = args; }
   if (name === 'resource_update') { url = `/api/resources/${encodeURIComponent(String(id))}`; method = 'PATCH'; body = patch; }
@@ -449,8 +452,7 @@ function Workspace() {
       <div className="panel-toolbar">
         <span className="subtle">{tab === 'tasks' ? `${board?.tasks.length ?? 0} ${t('个任务')}`
           : t("Agent 交互记录")}</span>
-        {tab === 'tasks' ? <button className="primary" type="button" onClick={() => setEditor({ type: 'task' })}>{t("新建任务")}</button>
-          : <span className="subtle">{t("只读")}</span>}
+        {tab === 'shared' ? <span className="subtle">{t("只读")}</span> : null}
       </div>
       {error && <div className="error" role="alert"><span>{error}</span><button type="button" onClick={() => void refresh()}>{t("重试")}</button></div>}
       {loading ? <Empty title={t("正在读取协作空间")} text={t("获取任务、资源与最新共享记录…")} loading />
@@ -478,7 +480,7 @@ function Workspace() {
     <div className="sr-only" aria-live="polite">{announcement}</div>
     {pendingMove && <PendingMoveDialog task={pendingMove} close={() => setPendingMove(null)}
       choose={status => { setPendingMove(null); void moveTask(pendingMove, status); }} />}
-    {editor && <EditorDialog key={`${editor.type}-${editor.item?.id ?? 'new'}-${editor.item?.version ?? 0}`}
+    {editor && <EditorDialog key={`${editor.type}-${editor.type === 'task' ? editor.item.id : editor.item?.id ?? 'new-resource'}-${editor.item?.version ?? 0}`}
       editor={editor} name={name} usages={usages} resources={board?.resources ?? []}
       close={() => setEditor(null)} saved={() => { setEditor(null); setAnnouncement(t("修改已保存。")); void refresh(true); }}
       failed={() => refresh(true)} reload={reloadEditor}
@@ -632,7 +634,7 @@ function EditorDialog({ editor, name, usages, resources, close, saved, failed, r
   const item = editor.item;
   const task = isTask ? editor.item : undefined;
   const resource = editor.type === 'resource' ? editor.item : undefined;
-  const title = isTask ? item ? t("任务详情") : t("新建任务") : item ? t("编辑资源") : t("添加资源");
+  const title = isTask ? t("任务详情") : item ? t("编辑资源") : t("添加资源");
   const related = task ? [...new Set(usages.filter(usage => usage.taskId === task.id).map(usage => usage.resourceId))]
     .map(id => resources.find(resource => resource.id === id)?.name ?? id) : [];
 
@@ -647,16 +649,16 @@ function EditorDialog({ editor, name, usages, resources, close, saved, failed, r
     if (saving || conflict) return;
     const data = new FormData(event.currentTarget);
     const value = (key: string) => String(data.get(key) ?? '').trim();
-    const args: Record<string, unknown> = isTask
-      ? { title: value('title'), description: value('description'), acceptanceCriteria: value('acceptanceCriteria') }
-      : { name: value('name'), description: value('description'), accessNotes: value('accessNotes') };
-    if (item) {
-      args.id = item.id; args.expectedVersion = item.version;
-      if (isTask) args.status = value('status');
-    }
     setSaving(true); setError('');
     try {
-      await operation(`${isTask ? 'task' : 'resource'}_${item ? 'update' : 'create'}`, args);
+      if (editor.type === 'task') {
+        await operation('task_update', { id: editor.item.id, expectedVersion: editor.item.version,
+          title: value('title'), description: value('description'), acceptanceCriteria: value('acceptanceCriteria'), status: value('status') });
+      } else {
+        const args: Record<string, unknown> = { name: value('name'), description: value('description'), accessNotes: value('accessNotes') };
+        if (editor.item) { args.id = editor.item.id; args.expectedVersion = editor.item.version; }
+        await operation(editor.item ? 'resource_update' : 'resource_create', args);
+      }
       saved();
     } catch (error) {
       const isConflict = error instanceof OperationError && error.code === 'VERSION_CONFLICT';
@@ -705,7 +707,7 @@ function EditorDialog({ editor, name, usages, resources, close, saved, failed, r
           {conflict && <button type="button" disabled={saving} onClick={() => void reloadLatest()}>{t("载入最新内容")}</button>}</div>}
       </div>
       <div className="dialog-actions"><button type="button" className="secondary" onClick={close} disabled={saving}>{t("取消")}</button>
-        <button type="submit" className="primary" disabled={saving || conflict}>{saving ? t("正在保存…") : item ? t("保存修改") : isTask ? t("创建任务") : t("添加资源")}</button></div>
+        <button type="submit" className="primary" disabled={saving || conflict}>{saving ? t("正在保存…") : isTask || item ? t("保存修改") : t("添加资源")}</button></div>
     </form>
   </dialog>;
 }
