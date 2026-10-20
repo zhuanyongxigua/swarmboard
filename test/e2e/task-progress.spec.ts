@@ -75,8 +75,9 @@ test('preserves dragging, column alignment and narrow scrolling with the evidenc
   expect(Math.max(...columns.map(item => item.top)) - Math.min(...columns.map(item => item.top))).toBeLessThan(1);
   expect(Math.max(...columns.map(item => item.bottom)) - Math.min(...columns.map(item => item.bottom))).toBeLessThan(1);
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.getByRole('button', { name: '查看任务 Progress fixture active', exact: true }).dragTo(page.locator('[data-drop-status="in_review"]'));
-  await expect(page.locator('[data-status="in_review"] [data-task-id="active"]')).toBeVisible();
+  await page.getByRole('button', { name: '查看任务 Progress fixture active', exact: true }).dragTo(page.locator('[data-drop-status="pending"]'));
+  await page.getByRole('dialog', { name: '选择待处理状态' }).getByRole('button', { name: '待验收', exact: true }).click();
+  await expect(page.locator('[data-status="pending"] [data-task-id="active"]')).toBeVisible();
   expect(writes).toEqual([{ expectedVersion: 3, status: 'in_review' }]);
   await expect(card(page, 'active').getByRole('progressbar')).toHaveCount(0);
 });

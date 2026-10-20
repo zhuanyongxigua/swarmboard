@@ -17,7 +17,7 @@ test('English preview supports real editing while Chinese remains the default', 
   await expect(page.getByRole('heading', { name: 'Task details', exact: true })).toBeVisible();
   await page.getByRole('combobox', { name: 'Status', exact: true }).selectOption('in_review');
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
-  await expect(page.locator('[data-status="in_review"]').getByRole('button', { name: `View task ${title}`, exact: true })).toBeVisible();
+  await expect(page.locator('[data-status="pending"]').getByRole('button', { name: `View task ${title}`, exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'Collaboration environment', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Add resource', exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'Shared board', exact: true }).click();

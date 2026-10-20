@@ -7,6 +7,7 @@ import './style.css';
 import { TaskProgress, type TaskProgressSnapshot } from './TaskProgress.js';
 import { PreferencesEditor, type Preferences, type PreferenceWrite } from './preferences-editor.js';
 import { CollaborationOverview, type OverviewSnapshot } from './CollaborationOverview.js';
+import { boardTaskColumns, taskDropDestination } from './task-board-columns.js';
 import { appendNativeDraft, nativeConversationUnavailableReason, startNativeAutomationSetup, taskDiscussionPrompt } from './native-conversation.js';
 
 type Task = {
@@ -194,6 +195,7 @@ function Workspace() {
   const automationBusy = useRef(false);
   const [expandedResource, setExpandedResource] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
+  const [pendingMove, setPendingMove] = useState<Task | null>(null);
   const [announcement, setAnnouncement] = useState('');
   const [nativeUnavailable, setNativeUnavailable] = useState(window.parent === window
     ? t("HTTP 预览不提供原生对话，请在 ChatGPT 桌面端打开插件。")
@@ -377,7 +379,9 @@ function Workspace() {
     event.preventDefault();
     const task = dragged.current;
     dragged.current = null;
-    void moveTask(task, status);
+    const destination = taskDropDestination(task.status, status);
+    if (destination === 'choose') setPendingMove(task);
+    else if (destination) void moveTask(task, destination);
   }
   async function reloadEditor(): Promise<boolean> {
     const data = await refresh(true);
@@ -460,6 +464,8 @@ function Workspace() {
               : <SharedFeed board={board} name={name} openTask={openTask} openResource={openResource} />}
     </main>
     <div className="sr-only" aria-live="polite">{announcement}</div>
+    {pendingMove && <PendingMoveDialog task={pendingMove} close={() => setPendingMove(null)}
+      choose={status => { setPendingMove(null); void moveTask(pendingMove, status); }} />}
     {editor && <EditorDialog key={`${editor.type}-${editor.item?.id ?? 'new'}-${editor.item?.version ?? 0}`}
       editor={editor} name={name} usages={usages} resources={board?.resources ?? []}
       close={() => setEditor(null)} saved={() => { setEditor(null); setAnnouncement(t("修改已保存。")); void refresh(true); }}
@@ -476,14 +482,13 @@ function TaskBoard({ board, usages, name, stale, movingId, open, dragStart, drag
   dragStart: (event: React.DragEvent, task: Task) => void; dragEnd: () => void;
   dragOver: (event: React.DragEvent) => void; drop: (event: React.DragEvent, status: string) => void;
 }) {
-  const order = ['todo', 'in_progress', 'in_review', 'done'];
-  for (const task of board.tasks) if (!order.includes(task.status)) order.push(task.status);
-  return <div className="task-board" role="region" tabIndex={0} aria-label={t("任务状态看板")} style={{ '--column-count': order.length } as React.CSSProperties}>
-    {order.map(status => {
-      const tasks = board.tasks.filter(task => task.status === status);
-      return <section className="task-column" key={status} aria-label={statuses[status] ?? status}
+  const columns = boardTaskColumns(board.tasks);
+  return <div className="task-board" role="region" tabIndex={0} aria-label={t("任务状态看板")} style={{ '--column-count': columns.length } as React.CSSProperties}>
+    {columns.map(({ id: status, tasks }) => {
+      const label = status === 'pending' ? t('待处理') : statuses[status];
+      return <section className="task-column" key={status} aria-label={label}
         data-status={status} onDragOver={dragOver} onDrop={event => drop(event, status)}>
-        <div className="column-heading"><h2>{statuses[status] ?? status}</h2><span>{tasks.length}</span></div>
+        <div className="column-heading"><h2>{label}</h2><span>{tasks.length}</span></div>
         <div className="column-list" data-drop-status={status}>
           {tasks.length ? tasks.map(task => {
             const related = [...new Set(usages.filter(usage => usage.taskId === task.id).map(usage => usage.resourceId))]
@@ -492,8 +497,12 @@ function TaskBoard({ board, usages, name, stale, movingId, open, dragStart, drag
               data-card-id={task.id} aria-busy={movingId === task.id}
               onDragStart={event => dragStart(event, task)} onDragEnd={dragEnd}>
               <button type="button" className="task-open" data-task-id={task.id}
-                aria-label={`${t('查看任务')} ${task.title}`} disabled={movingId === task.id} onClick={() => open(task)}>
+                aria-label={`${t('查看任务')} ${task.title}`} aria-describedby={status === 'pending' ? `task-state-${task.id}` : undefined}
+                disabled={movingId === task.id} onClick={() => open(task)}>
                 <span className="task-title" title={task.title}>{task.title}</span>
+                {status === 'pending' && <span id={`task-state-${task.id}`} className="task-state" data-task-state={task.status}>
+                  <span className="task-state-dot" aria-hidden="true" />{statuses[task.status]}
+                </span>}
                 {task.status !== 'in_progress' && task.description && <span className="task-excerpt">{task.description.replace(/\b[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}\b/gi, shortId)}</span>}
               </button>
               {task.status === 'in_progress' && <TaskProgress taskTitle={task.title} progress={task.progress} />}
@@ -509,6 +518,28 @@ function TaskBoard({ board, usages, name, stale, movingId, open, dragStart, drag
       </section>;
     })}
   </div>;
+}
+
+function PendingMoveDialog({ task, close, choose }: {
+  task: Task; close: () => void; choose: (status: 'in_review' | 'blocked') => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    dialog.current?.showModal();
+    return () => { if (previous?.isConnected) previous.focus(); };
+  }, []);
+  return <dialog ref={dialog} aria-labelledby="pending-move-title" aria-describedby="pending-move-description"
+    onCancel={event => { event.preventDefault(); close(); }}
+    onClick={event => { if (event.target === dialog.current) close(); }}>
+    <div className="dialog-header"><h2 id="pending-move-title">{t('选择待处理状态')}</h2></div>
+    <div className="pending-move-description" id="pending-move-description">{task.title} — {t('请选择待验收或受阻，取消不会修改任务。')}</div>
+    <div className="dialog-actions">
+      <button type="button" className="secondary" onClick={close} autoFocus>{t('取消')}</button>
+      <button type="button" onClick={() => choose('in_review')}>{t('待验收')}</button>
+      <button type="button" onClick={() => choose('blocked')}>{t('受阻')}</button>
+    </div>
+  </dialog>;
 }
 
 function ResourcePool({ board, usages, name, stale, expanded, toggle, edit }: {

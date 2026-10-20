@@ -35,6 +35,6 @@ test('real progress writes survive refresh and clear to unknown without completi
   const reviewed = await request.patch(`/api/tasks/${task.id}`, { data: { expectedVersion: task.version, status: 'in_review' } });
   expect(reviewed.ok()).toBe(true);
   await page.getByRole('button', { name: '刷新面板', exact: true }).click();
-  await expect(page.locator('[data-status="in_review"]').locator(`[data-card-id="${task.id}"]`)).toBeVisible();
+  await expect(page.locator('[data-status="pending"]').locator(`[data-card-id="${task.id}"]`)).toBeVisible();
   await expect(card.getByRole('progressbar')).toHaveCount(0);
 });
