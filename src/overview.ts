@@ -13,13 +13,16 @@ export const overviewPartSchema = z.discriminatedUnion('kind', [
 ]);
 export const overviewWriteSchema = z.object({
   expectedVersion: z.number().int().nonnegative(), factsRevision: z.string().regex(/^[a-f0-9]{64}$/),
-  preferencesVersion: z.number().int().nonnegative(), ttlSeconds: z.number().int().min(1).max(900).default(300),
+  preferencesVersion: z.number().int().nonnegative(), userPromptVersion: z.number().int().nonnegative().default(0),
+  ttlSeconds: z.number().int().min(1).max(900).default(300),
   parts: z.array(overviewPartSchema).max(30), agentId: z.string().min(1).max(128).optional(),
 }).strict();
 export type OverviewPart = z.infer<typeof overviewPartSchema>;
 export interface OverviewRecord {
   boardId: string; version: number; authorId: string; updatedAt: string; expiresAt: string;
   preferencesVersion: number; factsRevision: string; parts: OverviewPart[];
+  /** Legacy records predate the independent user prompt and imply revision zero. */
+  userPromptVersion?: number;
   /** Server-verified referenced values at write time. Older records omit this
    *  field; readers must not reconstruct their historical values from live facts. */
   factSnapshot?: OverviewFact[];
@@ -118,12 +121,13 @@ export function overviewFacts(source?: OverviewSource, now = Date.now()): Overvi
 }
 
 export function readOverview(store: Store, source?: OverviewSource, now = Date.now()): OverviewView {
-  const record = store.readOverviewRecord(), facts = overviewFacts(source, now);
+  const { record, ...prompts } = store.readOverviewSnapshot(), facts = overviewFacts(source, now);
   let status: OverviewView['status'] = 'current', reason: string | null = null;
   if (!record?.parts.length) { status = 'missing'; reason = 'NO_OVERVIEW'; }
   else if (!facts.available) { status = 'unavailable'; reason = 'RUNTIME_UNAVAILABLE'; }
   else if (record.factsRevision !== facts.revision) { status = 'stale'; reason = 'FACTS_CHANGED'; }
-  else if (record.preferencesVersion !== store.readPreferences().version) { status = 'stale'; reason = 'PREFERENCES_CHANGED'; }
+  else if (record.preferencesVersion !== prompts.systemPrompt.version) { status = 'stale'; reason = 'PREFERENCES_CHANGED'; }
+  else if ((record.userPromptVersion ?? 0) !== prompts.userPrompt.version) { status = 'stale'; reason = 'USER_PROMPT_CHANGED'; }
   else if (Date.parse(record.expiresAt) <= now) { status = 'stale'; reason = 'EXPIRED'; }
   return { status, reason, record, facts };
 }
@@ -135,7 +139,8 @@ export function writeOverview(store: Store, input: unknown, authorId: string, so
   for (const part of data.parts) if (part.kind === 'fact' && !facts.items.some(f => f.id === part.factId)) throw new AppError('INVALID_FACT', 'Choose a fact from overview_read', 400);
   const referenced = new Set(data.parts.flatMap(part => part.kind === 'fact' ? [part.factId] : []));
   store.saveOverviewRecord({ boardId: store.readPreferences().boardId, authorId, updatedAt: new Date(now).toISOString(),
-    expiresAt: new Date(now + data.ttlSeconds * 1000).toISOString(), preferencesVersion: data.preferencesVersion, factsRevision: facts.revision, parts: data.parts,
+    expiresAt: new Date(now + data.ttlSeconds * 1000).toISOString(), preferencesVersion: data.preferencesVersion,
+    userPromptVersion: data.userPromptVersion, factsRevision: facts.revision, parts: data.parts,
     factSnapshot: facts.items.filter(fact => referenced.has(fact.id)) }, data.expectedVersion);
   return readOverview(store, source, now);
 }

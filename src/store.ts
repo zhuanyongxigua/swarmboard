@@ -256,12 +256,18 @@ export class Store {
     const row = this.db.prepare('SELECT data FROM board_overview WHERE id=1').get();
     return row ? JSON.parse(String(row.data)) as OverviewRecord : null;
   }
+  readOverviewSnapshot() {
+    return this.transaction(() => ({ record: this.readOverviewRecord(),
+      systemPrompt: this.readPreferences(), userPrompt: this.readUserPrompt() }));
+  }
   // Formal transports bind the author and validate facts. No board event is
   // emitted for decoration: readers observe the durable CAS value directly.
   saveOverviewRecord(record: Omit<OverviewRecord, 'version'>, expectedVersion: number): OverviewRecord {
     return this.transaction(() => {
       this.checkVersion(this.readOverviewRecord()?.version ?? 0, expectedVersion);
-      if (this.readPreferences().version !== record.preferencesVersion) throw new AppError('OVERVIEW_PREFERENCES_CHANGED', 'Preferences changed; read current preferences again', 409);
+      const prompts = { systemPrompt: this.readPreferences(), userPrompt: this.readUserPrompt() };
+      if (prompts.systemPrompt.version !== record.preferencesVersion) throw new AppError('OVERVIEW_PREFERENCES_CHANGED', 'Preferences changed; read current preferences again', 409);
+      if (prompts.userPrompt.version !== (record.userPromptVersion ?? 0)) throw new AppError('OVERVIEW_USER_PROMPT_CHANGED', 'User prompt changed; read current user prompt again', 409);
       const next = { ...record, version: expectedVersion + 1 };
       this.db.prepare('INSERT INTO board_overview VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(JSON.stringify(next));
       return next;

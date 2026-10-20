@@ -61,6 +61,8 @@ Agent 心跳是会话活动信息。界面把超过两分钟未报告的会话�
 
 ### 协作概览
 
+概览同时绑定两个提示词版本：写入时提供 `preferences_read` 的 `version` 作为 `preferencesVersion`，以及 `user_prompt_read` 的 `version` 作为 `userPromptVersion`。服务端在保存概览的同一事务内校验两者，读取时在同一 SQLite 快照内核对记录与两个提示词；任一提示词更新或清空后，旧概览为 stale，旧草稿写入被拒。为兼容尚未使用用户提示词的旧客户端，省略 `userPromptVersion` 只表示初始版本 0，不能绕过首次编辑或清空后的版本检查；旧 JSON 概览缺少此字段时也只按 0 比较，不改写历史记录或迁移。用户提示词变化的读取原因是 `USER_PROMPT_CHANGED`，写入冲突代码是 `OVERVIEW_USER_PROMPT_CHANGED`。
+
 概览是成员自主选择的安全说明与事实引用，不由产品固定拼接成员数、厂商或执行状态。`overview_read`／`GET /api/overview` 返回当前事实目录和持久概览；`overview_write`／`POST /api/overview` 使用 `expectedVersion`、`factsRevision`、`preferencesVersion`、`parts` 和可选 `ttlSeconds`，默认有效 300 秒、最多 900 秒，空 `parts` 清除当前概览。作者和更新时间由服务端绑定，客户端不能伪造；并发、失活连接与事实版本变化按现有授权和版本门禁处理。模式 9 在已发布模式 8 之后追加存储，不改写历史迁移。外部座位可通过 `overview_status_facts_write` 以正式边界自注册 harness 无关的状态事实封套（member-status-fact v2 语义：executing 须执行证据、投递在途无证据记 unknown、过期记 last-recorded stale），身份由会话绑定不可自选；`external.running`、各组 `external.harness.<组>.members/executing/...` 与 `organization.total`（原生绑定＋准入协作者的去重成员数，属成员证据而非执行证据）据此计算，未知组不抹已知组数字；当前 fact 分类的已验证模型身份（可含数字，如 GLM-5.3）以独立字符串事实暴露供 AI 引用展示，文字数字禁令不变，且模型身份与执行状态分离——执行未知不抹已知模型；封套变化计入事实指纹，使旧概览转 stale。模式 10 在模式 9 之后追加 `overview_status_facts` 存储。
 
 `parts` 由说明 `{kind:'text',text}` 与引用 `{kind:'fact',factId}` 组成，顺序及选择由 AI 决定。主界面将说明与引用值按 AI 选择的顺序组成紧凑一行，窄屏自然换行，不逐段追加标签或技术口径；不接受直接编造数字来替代事实引用。引用值由服务端从可核实来源提供。原生投递、外部准入、绑定会话和实际执行分别计量；仅登记或更新读取游标不能证明模型正在工作，harness 名称也不能证明实际模型。没有实际模型或外部运行观测时返回未知，不填零或猜测总人数。来源、口径、观察时间及概览作者、偏好版本和有效期保留在正式读接口，主区域不添加依据面板、UUID 或时间等元数据。HTML／脚本始终按文本呈现。
