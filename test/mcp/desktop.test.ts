@@ -114,12 +114,13 @@ describe('portable desktop plugin', () => {
     expect(config.mcpServers.swarmboard).toEqual({ type: 'stdio', command: process.platform === 'win32' ? 'node' : 'sh', args: [process.platform === 'win32' ? '${PLUGIN_ROOT}/server/swarmboard.mjs' : '${PLUGIN_ROOT}/server/launch.sh'], cwd: '${PLUGIN_ROOT}' });
     const names = files(pluginRoot);
     expect(names).toEqual(expect.arrayContaining(['server/swarmboard.mjs', 'widget.html', 'skills/shared-worker/SKILL.md', 'BUILD.json']));
+    expect(names).toEqual(expect.arrayContaining(['docs/board-prompt-settings.md', 'docs/collaboration-environment-ui.md']));
     expect(names.some(name => /(^|\/)(node_modules|\.env|\.git)(\/|$)|\.(sqlite|db)(-|$)/.test(name))).toBe(false);
     // Documentation links must also work after moving and unpacking the plugin.
     for (const [readme, language] of [['README.md', 'en'], ['README.zh-CN.md', 'zh-CN']]) {
       const markdown = readFileSync(join(pluginRoot, readme!), 'utf8');
       const images = [...markdown.matchAll(/!\[[^\]]*\]\((docs\/assets\/[^)]+)\)/g)].map(match => match[1]!);
-      expect(images).toHaveLength(3);
+      expect(images.sort()).toEqual(['resources', 'settings', 'shared', 'tasks'].map(name => `docs/assets/${language}/${name}.png`).sort());
       for (const image of images) {
         expect(image.startsWith(`docs/assets/${language}/`)).toBe(true);
         expect(existsSync(join(pluginRoot, image))).toBe(true);

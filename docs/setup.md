@@ -91,7 +91,7 @@ npx playwright install chromium
 npm run docs:screenshots
 ```
 
-The command builds the current source, starts a temporary loopback service, writes sample tasks, resources, and messages through real MCP tools, and captures the three panels with Chromium into `docs/assets/`. It cleans up the temporary database afterward. The screenshots demonstrate the UI, not actual model collaboration or desktop-host acceptance.
+The command builds the current source, starts a temporary loopback service, writes sample tasks, resources, and messages through real MCP tools, and captures the two panels, settings, and preserved resource records with Chromium into `docs/assets/`. It cleans up the temporary database afterward. The screenshots demonstrate the UI, not actual model collaboration or desktop-host acceptance.
 
 ## Troubleshooting
 

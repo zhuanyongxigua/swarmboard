@@ -38,13 +38,13 @@ if (process.platform !== 'win32') {
 await writeFile(path.join(destination, 'mcp.json'), JSON.stringify(mcp, null, 2) + '\n');
 
 await mkdir(path.join(destination, 'docs'), { recursive: true });
-for (const name of ['architecture.md', 'testing.md', 'verification.md', 'setup.md', 'setup.zh-CN.md', 'event-workers.md', 'harness-adapters.md', 'external-collaborators.md']) {
+for (const name of ['architecture.md', 'testing.md', 'verification.md', 'setup.md', 'setup.zh-CN.md', 'event-workers.md', 'harness-adapters.md', 'external-collaborators.md', 'board-prompt-settings.md', 'collaboration-environment-ui.md']) {
   await cp(path.join(root, 'docs', name), path.join(destination, 'docs', name));
 }
 // Keep the README image links usable in the portable plugin as well as on GitHub.
 for (const language of ['en', 'zh-CN']) {
   await mkdir(path.join(destination, 'docs/assets', language), { recursive: true });
-  for (const image of ['tasks.png', 'resources.png', 'shared.png']) {
+  for (const image of ['tasks.png', 'settings.png', 'resources.png', 'shared.png']) {
     await cp(path.join(root, 'docs/assets', language, image), path.join(destination, 'docs/assets', language, image));
   }
 }
