@@ -224,16 +224,19 @@ export class WorkerStore {
       return restored;
     });
   }
-  requestPeer(input: unknown) {
+  requestPeer(input: unknown, authorize?: () => void) {
     const data = parse(peerRequestSchema, input);
     return this.transaction(() => {
       const pool = this.pool();
-      if (!pool?.enabled || ['completed','stopped','stopping'].includes(pool.state)) throw new AppError('POOL_STOPPED', 'The organization is stopped', 409);
-      const worker = this.get(data.workerId);
-      if (!worker.enabled || !pool.memberIds.includes(worker.id)) throw new AppError('NOT_MEMBER', 'Only an enabled organization member may request a peer', 403);
-      if (this.db.prepare('SELECT 1 FROM peer_requests WHERE poolId=? AND workerId=? AND requestId=?').get(pool.id, worker.id, data.requestId)) return pool;
+      if (!pool?.enabled || ['stopped','stopping'].includes(pool.state) || pool.state === 'completed' && !authorize) throw new AppError('POOL_STOPPED', 'The organization is stopped', 409);
+      if (authorize) authorize();
+      else {
+        const worker = this.get(data.workerId);
+        if (!worker.enabled || !pool.memberIds.includes(worker.id)) throw new AppError('NOT_MEMBER', 'Only an enabled organization member may request a peer', 403);
+      }
+      if (this.db.prepare('SELECT 1 FROM peer_requests WHERE poolId=? AND workerId=? AND requestId=?').get(pool.id, data.workerId, data.requestId)) return pool;
       if (pool.size >= pool.maxSize) throw new AppError('PEER_BUDGET', 'The human-configured member budget is exhausted', 409);
-      this.db.prepare('INSERT INTO peer_requests VALUES(?,?,?,?)').run(pool.id, worker.id, data.requestId, data.reason);
+      this.db.prepare('INSERT INTO peer_requests VALUES(?,?,?,?)').run(pool.id, data.workerId, data.requestId, data.reason);
       return this.savePool({ ...pool, size: pool.size + 1, version: pool.version + 1 });
     });
   }

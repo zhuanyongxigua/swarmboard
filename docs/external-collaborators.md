@@ -6,9 +6,9 @@
 
 ## 身份、授权与生命周期
 
-- **接入（admission）**：宿主在获得人类直接授权后，通过根 MCP 的 `collaborator_configure` 登记一个版本化身份：名称、harness 标签（如 `dsh`）、宿主侧会话引用 `sessionRef`、显式目标范围 `taskIds`（必须至少一个、必须存在；空列表不是"全板"）、可选 cost 记录、`enabled`。接入即在看板注册稳定 agentId（= 协作者 id），并发布加入事件，池内同伴与人类都能看到。
-- **范围**：读取与写入都按 `taskIds` 过滤：越界的 `task_read`、`task_list`/`board_read` 摘要、`task_claim`、带越界 `taskId` 的 `context_publish`/资源声明返回 `UNBOUND_GOAL` 或被过滤。共享历史同样执行范围：`context_read`/`context_search` 与 `board_read` 的紧凑历史只返回已接入目标相关条目与无目标绑定的公告，发给其他成员的定向消息不出现在主结果或附加更新中（发给本人的可见）；过滤在存储查询内完成，分页与游标保持有界且不消费范围外条目。范围内的目标仍是共享目标：CLAIM/task_claim 只加入参与，不排他。
-- **撤销（revocation）**：`enabled=false` 是**终态**，记录 `revokedAt`；被撤销身份不能被重新启用或改范围，需要协作就接入新身份。撤销在下一次工具调用生效：非清理写入被拒绝（`COLLABORATOR_STOPPED`），心跳、释放资源声明与不带 CLAIM 的收尾发布仍允许；工具返回的 control 信号变为 `stop-after-safe-boundary`。范围内目标全部 done/canceled 时同样停止。
+- **接入（admission）**：宿主在获得人类直接授权后，通过根 MCP 的 `collaborator_configure` 登记一个版本化身份：名称、harness 标签（如 `dsh`）、宿主侧会话引用 `sessionRef`、显式目标订阅（默认 `scope:"selected"`，`taskIds` 至少一个且必须存在；或由人类明确指定 `scope:"organization"`、当前 `poolId` 与空 `taskIds`，跟随该组织的当前及后续目标）、可选 cost 记录、`enabled`。接入即在看板注册稳定 agentId（= 协作者 id），并发布加入事件，池内同伴与人类都能看到。
+- **范围**：旧记录保持逐目标 selected 订阅，不因省略新字段或传入空数组而扩大。organization 模式必须由人类通过版本化配置显式选择并绑定当前组织 id；组织更换不会自动把旧外部成员带入新组织。读取与写入按准入范围和组织订阅的交集过滤，交集为空就是没有目标，不能解释为全板：越界的 `task_read`、`task_list`/`board_read` 摘要、`task_claim`、带越界 `taskId` 的 `context_publish`/资源声明返回 `UNBOUND_GOAL` 或被过滤。共享历史同样执行范围：`context_read`/`context_search` 与 `board_read` 的紧凑历史只返回已接入目标相关条目与无目标绑定的公告，发给其他成员的定向消息不出现在主结果或附加更新中（发给本人的可见）；过滤在存储查询内完成，分页与游标保持有界且不消费范围外条目。范围内的目标仍是共享目标：CLAIM/task_claim 只加入参与，不排他。组织停止、范围收窄与撤销在下一次调用重新检查；原生和外部历史查询、紧凑快照及附加更新均过滤发给其他收件人的定向消息。看到目标并不授予其源码、项目、业务凭据或生产执行权限。
+- **撤销（revocation）**：`enabled=false` 是**终态**，记录 `revokedAt`；被撤销身份不能被重新启用或改范围，需要协作就接入新身份。撤销在下一次工具调用生效：非清理写入被拒绝（`COLLABORATOR_STOPPED`），心跳、释放资源声明与不带 CLAIM 的收尾发布仍允许；工具返回的 control 信号变为 `stop-after-safe-boundary`。有效订阅范围内目标全部 done/canceled 时同样停止。组织的 `completed` 是运行时派生快照，不代表人类停止；后续新增或重新打开的范围内目标必须在每次调用时重查，即使尚无运行时 owner 或尚未同步也可继续协作。`enabled=false`、`stopped`、`stopping` 仍立即阻止新动作。
 - **审批交接**：需要人类决定时，协作者在共享面板发布请求（MESSAGE/OBSERVED）；Swarmboard 绝不代批、不提供自动批准通道，也不把任务文本当授权。
 
 ## 直接协作面
@@ -19,7 +19,29 @@
 - `SWARMBOARD_COLLABORATOR_ID`：接入时返回的协作者 id；未知 id 会让子进程以诊断退出。
 - 该子进程**不运行事件 runtime**（等价 `SWARMBOARD_DISABLE_RUNTIME`）。
 
-工具面与池成员的协作面一致：`board_read`/`board_open`/`task_list`/`task_read`（范围内有界分页）、`context_read`/`context_search`/`context_publish`（FACT/FAIL/CLAIM/PATCH_SUMMARY/MESSAGE）、`task_claim`/`task_release`/`task_update`（参与者身份）、`resource_release`（仅旧占用清理；`resource_use`/`resource_usage_update` 保留兼容名但拒绝新写）、`agent_heartbeat`。管理工具（任务/资源定义、组织控制、worker 注册、授权配置、`collaborator_configure` 自身、peer_request、pipeline_watch、execution_grants_read）不注册。写入强制绑定身份：伪造或省略 `agentId` 返回 `BOUND_IDENTITY`。
+工具面与池成员的协作面一致：`board_read`/`board_open`/`task_list`/`task_read`（范围内有界分页）、`context_read`/`context_search`/`context_publish`（FACT/FAIL/CLAIM/PATCH_SUMMARY/MESSAGE）、`task_claim`/`task_release`/`task_update`（参与者身份）、`resource_release`（仅旧占用清理；`resource_use`/`resource_usage_update` 保留兼容名但拒绝新写）、`agent_heartbeat`，以及同一规则下的 `peer_request`、`pipeline_watch`、`execution_grants_read`。管理工具（任务/资源定义、组织控制、worker 注册、授权配置、`collaborator_configure` 自身）不注册。`execution_grants_read` 只读取当前启用组织中、当前准入目标的有效宿主执行授权；每次调用重查范围、撤销和组织停止，不允许配置授权，也不把读取结果当作工具审批。外部 stdio 子进程仅连接同一 sidecar 的组织、授权和 CI 订阅存储，不创建事件 runtime 或 watcher。`peer_request` 与 `pipeline_watch` 需要准入记录显式绑定当前 `poolId`（selected 与 organization 两种模式均可）；旧逐目标记录仍可协作和读取其目标授权，不能凭新增工具名称自行取得组织能力。peer 请求沿用同一个人类人数预算与真实 agentId/requestId 去重；CI 沿用同一宿主授权源码 origin 与目标/SHA 校验，由既有 owner 处理订阅，不由外部子进程另开轮询器。写入强制绑定身份：伪造 `agentId` 被拒绝；必填身份字段不能省略。两类成员都不能配置自己的准入、订阅、执行授权或个人偏好。
+
+## 显式选择同组织订阅
+
+人类宿主使用当前 CAS 版本为已有外部身份设置：
+
+```json
+{
+  "id": "<existing collaborator id>",
+  "expectedVersion": 3,
+  "name": "<member name>",
+  "harness": "dsh",
+  "sessionRef": "<observed native session reference>",
+  "scope": "organization",
+  "poolId": "<current organization id>",
+  "taskIds": [],
+  "enabled": true
+}
+```
+
+实际版本、身份、组织与会话引用必须回读，示例不是当前事实。首次接入省略 `id` 并使用 `expectedVersion:0`；服务返回真实稳定身份，不能以自拟 UUID 直接创建。已有记录省略 `scope`/`poolId` 会保留原选择；它们不会从 selected 自动升级为 organization。若只参与指定目标，可使用 selected、非空 taskIds 与明确 poolId；无论哪种模式，都不能超出宿主给组织选择的目标范围。
+
+通知通道的任务列表仍由成员通过 `notification_register` 显式登记；同组织成员可登记当前组织范围内的新目标，范围收窄或组织 id 变化后不能据旧声明扩大准入。读取到新目标不等于已经登记通知或启动模型。
 
 ## 更新与唤醒的诚实边界
 
@@ -65,6 +87,8 @@ DSH 当前不经由会话后端驱动（[harness 适配](harness-adapters.md)中
 **边界与停止**：范围/历史/身份围栏与成员计数分离按上文各节执行；撤销协作者或目标终态后，非清理写入被 `COLLABORATOR_STOPPED` 围栏，control 变为 `stop-after-safe-boundary`。宿主配置入口永远仅宿主可用；不得直写看板/sidecar，也不得以成员身份代行宿主配置。
 
 ## 测试边界
+
+`test/integration/equal-collaboration.test.ts` 对比真实 SQLite/MCP 中两类身份的工具面、显式组织订阅/后续目标、空交集、私信、真实作者、peer 预算/去重、CI origin/scope 与执行授权过滤；打包子进程验证显式订阅切换和无 runtime owner。模拟凭据、CI 和模型适配器不能替代实际跨 harness 连接验收。
 
 `test/integration/collaborators.test.ts` 用真实 SQLite 与官方 MCP 客户端验证：版本化接入/校验/终态撤销、与池成员分离计数、工具面与身份绑定、范围内读写、直接协作（CLAIM/FACT/FAIL/MESSAGE、加入参与）、游标更新无重复、撤销与终态目标停止及清理豁免、重启持久化。`test/mcp/desktop.test.ts` 在真实打包子进程中验证同一角色（含范围拒绝、附加更新、撤销围栏）。这些是隔离确定性证据：不证明任何真实外部 harness 已连接、会唤醒或其模型行为；真实连接须另行验收并记录于 [verification.md](verification.md)。
 

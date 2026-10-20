@@ -191,17 +191,17 @@ export class Store {
   readTask(taskId: string): Task { return this.get<Task>('tasks', taskId); }
   // Runtime lifecycle checks need states, never full human requirements or context.
   taskStates() { return this.db.prepare('SELECT id,status,version,assignee FROM tasks ORDER BY id').all() as unknown as Pick<Task, 'id' | 'status' | 'version' | 'assignee'>[]; }
-  readTasks(input: unknown = {}, subscribedIds: string[] = []) {
+  readTasks(input: unknown = {}, subscribedIds?: string[]) {
     return this.transaction(() => this.taskPage(input, subscribedIds));
   }
-  private taskPage(input: unknown, subscribedIds: string[]) {
+  private taskPage(input: unknown, subscribedIds?: string[]) {
     const query = parse(schemas.taskList, input);
     // Task rows are never deleted/reinserted. Their insertion ordinal is stable
     // across edits and tied/backward wall clocks; UUID/time ordering is not.
     const clauses = [`rowid > ?`, `status IN (${query.statuses.map(() => '?').join(',')})`];
     const values: (string | number)[] = [query.after, ...query.statuses];
     if (query.query) { clauses.push("instr(lower(title || char(10) || description || char(10) || acceptanceCriteria), lower(?)) > 0"); values.push(query.query); }
-    if (subscribedIds.length) { clauses.push(`id IN (${subscribedIds.map(() => '?').join(',')})`); values.push(...subscribedIds); }
+    if (subscribedIds) { clauses.push(subscribedIds.length ? `id IN (${subscribedIds.map(() => '?').join(',')})` : '0'); values.push(...subscribedIds); }
     const rows = this.db.prepare(`SELECT rowid AS discoveryCursor,id,title,status,assignee,version,createdAt,updatedAt FROM tasks WHERE ${clauses.join(' AND ')} ORDER BY rowid LIMIT ?`).all(...values, query.limit + 1);
     const hasMore = rows.length > query.limit;
     const items = rows.slice(0, query.limit).map(({ discoveryCursor: _, ...row }) => {
@@ -224,13 +224,13 @@ export class Store {
   // someone else are withheld the same way the runtime's update attachments
   // withhold them. Unlinked board notices stay visible.
   static historyScopeClause(scope: { taskIds?: string[]; recipientId?: string }): { clause: string; values: (string | number)[] } | undefined {
-    if (!scope.taskIds?.length && !scope.recipientId) return undefined;
+    if (scope.taskIds === undefined && !scope.recipientId) return undefined;
     const clauses: string[] = []; const values: (string | number)[] = [];
-    if (scope.taskIds?.length) { clauses.push(`(taskId IS NULL OR taskId IN (${scope.taskIds.map(() => '?').join(',')}))`); values.push(...scope.taskIds); }
+    if (scope.taskIds) { clauses.push(scope.taskIds.length ? `(taskId IS NULL OR taskId IN (${scope.taskIds.map(() => '?').join(',')}))` : 'taskId IS NULL'); values.push(...scope.taskIds); }
     if (scope.recipientId) { clauses.push('(recipientId IS NULL OR recipientId = ?)'); values.push(scope.recipientId); }
     return { clause: clauses.join(' AND '), values };
   }
-  peerBoard(subscribedIds: string[] = [], history?: { taskIds?: string[]; recipientId?: string }) {
+  peerBoard(subscribedIds?: string[], history?: { taskIds?: string[]; recipientId?: string }) {
     return this.transaction(() => {
       const page = this.taskPage({}, subscribedIds);
       const visibility = Store.historyScopeClause(history ?? {});

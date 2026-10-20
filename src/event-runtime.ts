@@ -142,7 +142,7 @@ export class EventRuntime {
   // delivers turns to them; it registers their stable board identity and keeps
   // their scoped record for the collaborator MCP role.
   configureCollaborator(input: unknown) {
-    const { collaborator } = this.collaborators.configure(input, this.board);
+    const { collaborator } = this.collaborators.configure(input, this.board, this.workers);
     // Revocation/disable cancels queued notifications instead of leaving them to
     // be delivered (or confirmed) after the identity lost its admission.
     if (!collaborator.enabled || collaborator.revokedAt) {

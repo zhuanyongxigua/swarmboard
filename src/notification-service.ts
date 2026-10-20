@@ -7,7 +7,8 @@
 // only read or acknowledge its own deliveries. Adapters therefore never touch
 // the board database and never load code from task text.
 import type { Store } from './store.js';
-import type { CollaboratorStore } from './collaborators.js';
+import { collaboratorTaskIds, type CollaboratorStore } from './collaborators.js';
+import type { WorkerStore } from './worker-store.js';
 import { AppError } from './store.js';
 import type { NotificationAdapterRegistration } from './notification-adapters.js';
 import { NotificationAdapterStore } from './notification-adapter-store.js';
@@ -31,7 +32,7 @@ export interface NotificationPendingPage {
 export class NotificationService {
   private readonly adapters: NotificationAdapterStore;
 
-  constructor(private readonly board: Store, private readonly collaborators?: CollaboratorStore) {
+  constructor(private readonly board: Store, private readonly collaborators?: CollaboratorStore, private readonly workers?: WorkerStore) {
     this.adapters = new NotificationAdapterStore(board.db);
   }
 
@@ -60,7 +61,8 @@ export class NotificationService {
     if (declaration.members[0].sessionRef !== record.sessionRef) {
       throw new AppError('BOUND_IDENTITY', 'Notification session reference must match the admitted session', 403);
     }
-    const outside = declaration.members[0].taskIds.filter(id => !record.taskIds.includes(id));
+    const ids = collaboratorTaskIds(record, this.workers);
+    const outside = declaration.members[0].taskIds.filter(id => ids !== undefined && !ids.includes(id));
     if (outside.length) {
       throw new AppError('SCOPE_VIOLATION', `Notification scope exceeds admitted tasks: ${outside.join(', ')}`, 403);
     }

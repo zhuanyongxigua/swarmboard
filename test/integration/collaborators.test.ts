@@ -38,7 +38,7 @@ const updates = (r: Awaited<ReturnType<typeof call>>) => {
 };
 async function collaboratorClient(id: string) {
   const role = collaboratorRole(store, runtime.collaborators, id);
-  const server = createMcpServer(store, 'unused', undefined, { collaborator: true, collaboratorId: id, collaborators: runtime.collaborators, workerId: id, sharedUpdates: role.sharedUpdates, mayAct: role.mayAct });
+  const server = createMcpServer(store, 'unused', undefined, { collaborator: true, collaboratorId: id, collaborators: runtime.collaborators, workerId: id, peers: runtime.workers, sharedUpdates: role.sharedUpdates, mayAct: role.mayAct });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(a);
   const client = new Client({ name: 'collaborator-test', version: '1' });
@@ -92,8 +92,31 @@ describe('admitted collaborator MCP surface', () => {
     const admitted = await admit({ expectedVersion: 0, name: 'Peer reviewer', harness: 'zcode', taskIds: [goal.id], enabled: true });
     const client = await collaboratorClient(admitted.id);
     const names = (await client.listTools()).tools.map(t => t.name);
-    for (const withheld of ['task_create', 'resource_create', 'resource_update', 'automation_prepare', 'automation_claim', 'worker_register', 'pool_configure', 'pool_control', 'task_execution_configure', 'collaborator_configure', 'peer_request', 'pipeline_watch', 'execution_grants_read']) expect(names, withheld).not.toContain(withheld);
-    for (const available of ['board_read', 'task_list', 'task_read', 'context_read', 'context_search', 'context_publish', 'task_claim', 'task_release', 'task_update', 'resource_use', 'agent_heartbeat']) expect(names, available).toContain(available);
+    for (const withheld of ['task_create', 'resource_create', 'resource_update', 'automation_prepare', 'automation_claim', 'worker_register', 'pool_configure', 'pool_control', 'task_execution_configure', 'collaborator_configure', 'pipeline_watch']) expect(names, withheld).not.toContain(withheld);
+    for (const available of ['execution_grants_read', 'board_read', 'task_list', 'task_read', 'context_read', 'context_search', 'context_publish', 'task_claim', 'task_release', 'task_update', 'resource_use', 'agent_heartbeat']) expect(names, available).toContain(available);
+  });
+  it('reads live host grants only for admitted active goals and fences scope changes, revocation and pool stop', async () => {
+    const goal = store.createTask({ title: 'Authorized experiment' });
+    const outside = store.createTask({ title: 'Another project' });
+    runtime.configurePool({ workspacePath: dir, size: 1 });
+    const input = { expectedVersion: 0, projectPath: dir, executionWorkspace: dir, externalHarnesses: ['dsh'], monitoring: true, enabled: true };
+    runtime.configureExecutionGrant({ ...input, taskId: goal.id });
+    runtime.configureExecutionGrant({ ...input, taskId: outside.id });
+    const admitted = await admit({ expectedVersion: 0, name: 'Grant reader', harness: 'dsh', taskIds: [goal.id], enabled: true });
+    const client = await collaboratorClient(admitted.id);
+    const read = () => call(client, 'execution_grants_read');
+    expect(data<{ grants: {taskId: string}[] }>(await read()).grants.map(g => g.taskId)).toEqual([goal.id]);
+    await admit({ expectedVersion: 1, id: admitted.id, name: admitted.name, harness: admitted.harness, taskIds: [outside.id], enabled: true });
+    expect(data<{ grants: {taskId: string}[] }>(await read()).grants.map(g => g.taskId)).toEqual([outside.id]);
+    runtime.configureExecutionGrant({ ...input, taskId: outside.id, expectedVersion: 1, enabled: false });
+    expect(data<{ grants: unknown[] }>(await read()).grants).toEqual([]);
+    const pool = runtime.workers.pool()!;
+    runtime.workers.savePool({ ...pool, enabled: false });
+    expect((await read()).isError).toBe(true);
+    runtime.workers.savePool(pool);
+    await admit({ expectedVersion: 2, id: admitted.id, name: admitted.name, harness: admitted.harness, taskIds: [outside.id], enabled: false });
+    expect((await read()).isError).toBe(true);
+    expect((await client.listTools()).tools.map(t => t.name)).not.toContain('task_execution_configure');
   });
   it('reads only its admitted scope and writes under its bound identity', async () => {
     const goal = store.createTask({ title: 'In scope' });
