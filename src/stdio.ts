@@ -8,7 +8,7 @@ import { Store } from './store.js';
 import { EventRuntime } from './event-runtime.js';
 import { resolveHarness } from './harness/registry.js';
 import { WorkerStore } from './worker-store.js';
-import { CollaboratorStore, collaboratorRole } from './collaborators.js';
+import { CollaboratorStore, collaboratorRole, readCollaboratorSnapshot } from './collaborators.js';
 import { PipelineEvents } from './pipeline-events.js';
 import { ExecutionGrants } from './execution-grants.js';
 
@@ -38,8 +38,9 @@ export async function startStdioServer(options: StdioOptions = {}) {
   const poolMember = process.env.SWARMBOARD_POOL_MEMBER === '1';
   const workerId = process.env.SWARMBOARD_WORKER_ID;
   const peerState = poolMember && workerId ? new WorkerStore(sidecar) : undefined;
-  // The collaborator reader also supplies overview facts; no second reader,
-  // EventRuntime owner or watcher is needed.
+  // Native pool children read admission facts without gaining a collaborator role.
+  const overviewAdmissions = poolMember && workerId ? () => readCollaboratorSnapshot(sidecar) : undefined;
+  // The collaborator reader also supplies overview facts without a runtime owner.
   let updateCursor = peerState && workerId ? (peerState.get(workerId).deliveryCursor ?? peerState.get(workerId).cursor) : 0;
   const mayAct = () => {
     const pool = peerState?.pool();
@@ -56,6 +57,7 @@ export async function startStdioServer(options: StdioOptions = {}) {
   };
   const server = createMcpServer(store, widgetPath, runtime, {
     poolMember,
+    ...(overviewAdmissions ? { overviewAdmissions } : {}),
     ...(peerState ? { sharedUpdates, mayAct, peers: peerState, workerId, ci: new PipelineEvents(store, peerState) } : {}),
     ...(collaboratorState && collaboratorId && role ? { collaborator: true, collaboratorId, collaborators: collaboratorState, peers: collaboratorPeers, ci: new PipelineEvents(store, collaboratorPeers!), sharedUpdates: role.sharedUpdates, mayAct: role.mayAct, workerId: collaboratorId } : {}),
   });

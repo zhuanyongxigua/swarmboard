@@ -36,6 +36,17 @@ export const collaboratorSchemas = {
     enabled: z.boolean(),
   }).strict(),
 };
+/** Read-only admission snapshot for the native pool overview path. It never
+ * creates the table or writes; a sidecar without collaborators is an empty
+ * snapshot, not an error. */
+export function readCollaboratorSnapshot(path: string): Collaborator[] {
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    db.exec('PRAGMA busy_timeout=5000;');
+    if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='external_collaborators'").get()) return [];
+    return db.prepare('SELECT data FROM external_collaborators ORDER BY id').all().map(row => JSON.parse(String(row.data)) as Collaborator);
+  } finally { db.close(); }
+}
 export class CollaboratorStore {
   readonly db: DatabaseSync;
   constructor(path: string) {
@@ -117,7 +128,8 @@ export function collaboratorRole(board: Store, state: CollaboratorStore, id: str
   const mayAct = () => {
     const admitted = state.get(id);
     const pool = workers?.pool();
-    if (!admitted.enabled || pool && (!pool.enabled || ['stopped', 'stopping', 'completed'].includes(pool.state))) return false;
+    if (!admitted.enabled || pool && (!pool.enabled || ['stopped', 'stopping'].includes(pool.state))) return false;
+    // Completed is a derived snapshot; new subscribed goals may precede runtime sync.
     const ids = collaboratorTaskIds(admitted, workers);
     return board.taskStates().some(t => (!ids || ids.includes(t.id)) && !['done', 'canceled'].includes(t.status));
   };

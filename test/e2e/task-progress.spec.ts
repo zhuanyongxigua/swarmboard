@@ -1,3 +1,4 @@
+import { refreshBoard } from './settings-helpers.js';
 // Exercise the actual cards against synthetic board snapshots. Persistence and
 // API authorization are verified separately; these checks start no model.
 import { test, expect, type Page } from '@playwright/test';
@@ -32,15 +33,15 @@ test('shows reported progress only in progress and keeps execution independent',
   await expect(card(page, 'unknown').getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
   await expect(card(page, 'unknown')).not.toContainText('0%');
   await expect(card(page, 'review').getByRole('progressbar')).toHaveCount(0);
-  await expect(page.getByRole('region', { name: '协作概览', exact: true })).toContainText('尚无有效协作概览');
+  await expect(page.getByRole('region', { name: '协作概览', exact: true })).toContainText('协作情况未知');
   expect(await page.evaluate(async () => (await (await fetch('/api/runtime')).json()).activity)).toMatchObject({ running: 0, idle: 1 });
   await page.screenshot({ path: testInfo.outputPath('progress-three-states.png') });
   activity.running = 1; activity.idle = 0; activity.state = 'running';
-  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  await refreshBoard(page);
   expect(await page.evaluate(async () => (await (await fetch('/api/runtime')).json()).activity)).toMatchObject({ running: 1, idle: 0 });
   await expect(card(page, 'active').getByRole('progressbar')).toHaveAttribute('aria-valuenow', '70');
   board.tasks[0]!.progress = null;
-  await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+  await refreshBoard(page);
   await expect(card(page, 'active')).toContainText('待评估');
   await expect(card(page, 'active').getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
   expect(writes).toHaveLength(0);
@@ -75,8 +76,9 @@ test('preserves dragging, column alignment and narrow scrolling with the evidenc
   expect(Math.max(...columns.map(item => item.top)) - Math.min(...columns.map(item => item.top))).toBeLessThan(1);
   expect(Math.max(...columns.map(item => item.bottom)) - Math.min(...columns.map(item => item.bottom))).toBeLessThan(1);
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.getByRole('button', { name: '查看任务 Progress fixture active', exact: true }).dragTo(page.locator('[data-drop-status="in_review"]'));
-  await expect(page.locator('[data-status="in_review"] [data-task-id="active"]')).toBeVisible();
+  await page.getByRole('button', { name: '查看任务 Progress fixture active', exact: true }).dragTo(page.locator('[data-drop-status="pending"]'));
+  await page.getByRole('dialog', { name: '选择待处理状态' }).getByRole('button', { name: '待验收', exact: true }).click();
+  await expect(page.locator('[data-status="pending"] [data-task-id="active"]')).toBeVisible();
   expect(writes).toEqual([{ expectedVersion: 3, status: 'in_review' }]);
   await expect(card(page, 'active').getByRole('progressbar')).toHaveCount(0);
 });

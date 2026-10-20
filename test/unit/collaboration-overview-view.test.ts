@@ -11,42 +11,113 @@ const snapshot = (): OverviewSnapshot => ({
       { id: 'model', kind: 'model', value: null, scope: 'Synthetic actual model', source: 'No observation' }] },
   record: { boardId: 'synthetic', version: 1, authorId: 'peer-a', updatedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 60000).toISOString(), preferencesVersion: 0, factsRevision: 'facts-a',
+    factSnapshot: [{ id: 'bound', kind: 'count', value: 3, scope: 'Synthetic bound sessions', source: 'Synthetic runtime' },
+      { id: 'model', kind: 'model', value: null, scope: 'Synthetic actual model', source: 'No observation' }],
     parts: [{ kind: 'text', text: 'Start with the source' }, { kind: 'fact', factId: 'bound' }, { kind: 'fact', factId: 'model' }] },
 });
 const render = (value: OverviewSnapshot | null) => renderToStaticMarkup(createElement(CollaborationOverview, { snapshot: value }));
 
 describe('collaboration overview', () => {
-  it('retains AI ordering and makes factual scope and provenance accessible', () => {
+  it('retains AI ordering in a compact line while leaving provenance in the formal interface', () => {
     const value = snapshot(); const html = render(value);
-    expect(html.indexOf('Start with the source')).toBeLessThan(html.indexOf('Synthetic bound sessions'));
-    expect(html).toContain('Synthetic runtime'); expect(html).toContain('peer-a');
+    expect(html.indexOf('Start with the source')).toBeLessThan(html.indexOf('>3<'));
+    for (const text of ['Synthetic bound sessions', 'Synthetic runtime', 'peer-a', '<details', '<small', 'AI 说明', '概览依据', '有效至']) expect(html).not.toContain(text);
     value.record!.parts = [{ kind: 'fact', factId: 'model' }, { kind: 'text', text: 'A different expression' }];
     expect(render(value)).not.toContain('Synthetic bound sessions');
     expect(render(value)).toContain('A different expression');
   });
-  it('renders AI text as inert text, clearly separate from mechanically sourced facts', () => {
+  it('renders AI text as inert text without injecting a fixed label', () => {
     const value = snapshot(); value.record!.parts = [{ kind: 'text', text: '<img src=x onerror=alert(1)>' }];
     const html = render(value);
     expect(html).toContain('&lt;img'); expect(html).not.toContain('<img');
-    expect(html).toContain('AI 说明');
+    expect(html).not.toContain('AI 说明');
   });
   it('keeps unknown model evidence and missing references unknown, never zero', () => {
     const value = snapshot(); value.record!.parts = [{ kind: 'fact', factId: 'model' }, { kind: 'fact', factId: 'absent' }];
-    const html = render(value); expect(html).toContain('未知'); expect(html).toContain('引用已失效');
-    expect(html).not.toContain('<strong>0</strong>');
+    const html = render(value); expect(html.match(/未知/g)).toHaveLength(2);
+    expect(html).not.toMatch(/>0</);
   });
-  for (const status of ['stale', 'unavailable'] as const) it(`does not display old claims when ${status}`, () => {
-    const value = snapshot(); value.status = status;
-    const html = render(value); expect(html).not.toContain('Start with the source');
-    expect(html).not.toContain('Synthetic bound sessions');
+  for (const status of ['stale', 'unavailable'] as const) it(`marks the whole report as previous with its own values when ${status}`,  () => {
+    const value = snapshot(); value.status = status; value.facts.items[0]!.value = 9;
+    const html = render(value); expect(html).toContain('Start with the source');
+    expect(html).not.toContain('上次概览'); expect(html).not.toContain('Previous overview');
+    expect(html).toContain(`data-overview-state="${status}"`);
+    expect(html).toContain('title="协作概览不是最新"');
+    expect(html).not.toContain('title="协作概览已过期"');
+    expect(html).toContain('>3<'); expect(html).not.toContain('>9<');
+    expect(html.includes('role="alert"')).toBe(status === 'unavailable');
   });
-  it('hides expired claims locally even before the next transport read', () => {
+  it('marks expired claims as previous before the next transport read without hiding useful context', () => {
     const value = snapshot(); value.record!.expiresAt = new Date(Date.now() - 1).toISOString();
-    expect(render(value)).not.toContain('Start with the source'); expect(render(value)).toContain('概览已失效');
+    const html = render(value); expect(html).toContain('Start with the source');
+    expect(html).not.toContain('上次概览'); expect(html).toContain('data-overview-state="expired"');
+    expect(html).toContain('title="协作概览已过期"');
+    expect(html).toContain('>3<'); expect(html).not.toContain('正常工作回合');
+  });
+  it('separates missing, unavailable-without-record, future-dated stale/unavailable and malformed expiry', () => {
+    const missing = snapshot(); missing.record = null; missing.status = 'missing'; missing.facts.available = false;
+    let html = render(missing);
+    expect(html).toContain('data-overview-state="missing"');
+    expect(html).toContain('title="协作情况未知"');
+    expect(html).not.toContain('title="协作概览已过期"'); expect(html).not.toContain('title="协作概览不是最新"');
+
+    const unavailable = snapshot(); unavailable.record = null; unavailable.status = 'unavailable';
+    html = render(unavailable);
+    expect(html).toContain('data-overview-state="unavailable"');
+    expect(html).toContain('title="协作情况未知"');
+    expect(html).toContain('role="alert"');
+
+    for (const status of ['stale', 'unavailable'] as const) {
+      const value = snapshot(); value.status = status;
+      value.record!.expiresAt = new Date(Date.now() + 60000).toISOString();
+      html = render(value);
+      expect(html).toContain(`data-overview-state="${status}"`);
+      expect(html).toContain('title="协作概览不是最新"');
+      expect(html).not.toContain('title="协作概览已过期"');
+    }
+
+    const malformed = snapshot(); malformed.status = 'stale'; malformed.record!.expiresAt = 'not-a-date';
+    html = render(malformed);
+    expect(html).toContain('data-overview-state="stale"');
+    expect(html).toContain('title="协作概览不是最新"');
+    expect(html).not.toContain('title="协作概览已过期"');
+  });
+  it('never promotes a current snapshot with an invalid expiry to current', () => {
+    const value = snapshot(); value.status = 'current'; value.facts.available = true;
+    value.facts.items[0]!.value = 9; value.record!.expiresAt = 'not-a-date';
+    const html = render(value);
+    expect(html).toContain('data-overview-state="stale"');
+    expect(html).not.toContain('data-overview-state="current"');
+    expect(html).toContain('>3<'); expect(html).not.toContain('>9<');
+    expect(html).toContain('title="协作概览不是最新"');
+    expect(html).not.toContain('title="协作概览已过期"');
+  });
+  it('renders a null snapshot conservatively without a fixed prefix', () => {
+    const html = render(null);
+    expect(html).toContain('data-overview-state="missing"');
+    expect(html).toContain('协作情况未知');
+    expect(html).not.toContain('上次概览'); expect(html).not.toContain('Previous overview');
+  });
+  it('does not reconstruct missing legacy historical values from current facts', () => {
+    const value = snapshot(); value.status = 'stale'; delete value.record!.factSnapshot;
+    const html = render(value); expect(html).not.toContain('上次概览'); expect(html).toContain('data-overview-state="stale"');
+    expect(html).toContain('Start with the source');
+    expect(html.match(/未知/g)).toHaveLength(2); expect(html).not.toContain('>3<');
+  });
+  it('never renders the removed fixed previous-overview prefix in any freshness state', () => {
+    const value = snapshot();
+    for (const status of ['current', 'stale', 'unavailable', 'missing'] as const) {
+      value.status = status;
+      const html = render(value);
+      expect(html).not.toContain('上次概览'); expect(html).not.toContain('Previous overview');
+    }
+    expect(render(snapshot())).toContain('data-overview-state="current"');
+    expect(render(snapshot())).not.toContain('title="协作概览已过期"');
   });
   it('has no fallback organization template or personal sample when no overview exists', () => {
-    const value = snapshot(); value.status = 'missing'; value.record = null;
-    const html = render(value); expect(html).toContain('尚无有效协作概览');
+    const value = snapshot(); value.status = 'missing'; value.record = null; value.facts.available = false;
+    const html = render(value); expect(html).toContain('协作情况未知');
     expect(html).not.toContain('Synthetic bound sessions'); expect(html).not.toContain('14');
+    expect(html).not.toContain('role="alert"');
   });
 });

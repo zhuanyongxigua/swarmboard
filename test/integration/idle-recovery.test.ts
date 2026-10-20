@@ -44,7 +44,7 @@ describe('internal peer idle recovery', () => {
     expect(JSON.parse(recovery[0]!.detail).goalIds).toHaveLength(20);
     expect(f.runtime.status().error).toBe('');
   });
-  it('waits for the interval, nudges one existing peer, survives restart and stops after two unproductive nudges', async () => {
+  it('nudges one existing peer per interval, survives restart and keeps reminding while goals stay unfinished', async () => {
     const f = fixture(); await f.settle(); const ids = f.runtime.workers.list().map(w => [w.id, w.threadId]);
     expect(f.turns).toHaveLength(3); expect(f.turns[0]!.prompt).toContain('INTERNAL_ONLY');
     expect(f.runtime.status().activity).toMatchObject({ members: 3, running: 0, idle: 3, state: 'idle' });
@@ -55,9 +55,13 @@ describe('internal peer idle recovery', () => {
     await f.restart(); await f.settle(); expect(f.turns).toHaveLength(4);
     f.tick(); await f.settle(); expect(f.turns).toHaveLength(5);
     expect(f.turns[3]!.id).not.toBe(f.turns[4]!.id);
-    f.tick(); await f.settle();
-    expect(f.runtime.status().activity.state).toBe('attention');
-    f.tick(10000); await f.settle(); expect(f.turns).toHaveLength(5);
+    // No attempt budget: a third idle interval still reminds instead of going
+    // permanently silent, and no 'attention' verdict is derived from the count.
+    f.tick(); await f.settle(); expect(f.turns).toHaveLength(6);
+    expect(f.runtime.status().activity.watchdog.attempts).toBe(3);
+    expect(f.runtime.status().activity.state).not.toBe('attention');
+    f.tick(10000); await f.settle();
+    expect(f.turns.length).toBeGreaterThanOrEqual(6);
     expect(f.runtime.workers.list().map(w => [w.id, w.threadId])).toEqual(ids);
     expect(f.board.board().tasks).toHaveLength(1); expect(f.board.board().resources).toHaveLength(0);
     expect(f.board.board().tasks[0]!.status).toBe('todo');

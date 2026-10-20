@@ -2,7 +2,7 @@ import express, { type ErrorRequestHandler, type Request } from 'express';
 import { timingSafeEqual } from 'node:crypto';
 import type { Server } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { AppError, Store } from './store.js';
+import { AppError, Store, rejectLegacyResourceWrite } from './store.js';
 import { createMcpServer } from './mcp.js';
 import { defaultDatabasePath, defaultWidgetPath } from './paths.js';
 import type { EventRuntime } from './event-runtime.js';
@@ -48,30 +48,36 @@ export function createApp(options: AppOptions = {}) {
     try { if (!options.runtime) throw new AppError('RUNTIME_UNAVAILABLE', 'Event runtime is not active in this preview', 503); res.json(options.runtime.configurePool(req.body)); }
     catch (error) { next(error); }
   });
+  app.post('/api/pool/capacity', (req,res,next) => {
+    try { if (!options.runtime) throw new AppError('RUNTIME_UNAVAILABLE', 'Event runtime is not active in this preview', 503); res.json(options.runtime.configureCapacity(req.body)); }
+    catch (error) { next(error); }
+  });
   app.post('/api/pool/reduce', (req,res,next) => {
     try { if (!options.runtime) throw new AppError('RUNTIME_UNAVAILABLE', 'Event runtime is not active in this preview', 503); res.json(options.runtime.reducePool(req.body)); }
     catch (error) { next(error); }
   });
   app.get('/api/board',(_req,res)=>res.json(store.board()));
   app.get('/api/preferences',(_req,res)=>res.json(store.readPreferences()));
-  const overviewSource = () => options.runtime ? { ...options.runtime.status(), ownerEpoch: options.runtime.workers?.ownerEpoch() } : undefined;
+  app.get('/api/user-prompt',(_req,res)=>res.json(store.readUserPrompt()));
+  const overviewSource = () => options.runtime ? { ...options.runtime.status(), ownerEpoch: options.runtime.workers?.ownerEpoch(), statusFacts: store.readOverviewStatusFacts() } : undefined;
   app.get('/api/overview',(_req,res)=>res.json(readOverview(store, overviewSource())));
   const route = (method:'post'|'patch',path:string,operation:(req:Request)=>unknown)=>app[method](path,(req,res,next)=>{try{res.json(operation(req));}catch(error){next(error);}});
   route('patch','/api/preferences',req=>{const value=store.writePreferences(req.body);options.runtime?.notify();return value;});
+  route('patch','/api/user-prompt',req=>{const value=store.writeUserPrompt(req.body);options.runtime?.notify();return value;});
   route('post','/api/overview',req=>writeOverview(store,req.body,'human-host',overviewSource()));
   route('post','/api/tasks',req=>store.createTask(req.body));
   route('patch','/api/tasks/:id',req=>store.updateTask(String(req.params.id),req.body));
   route('patch','/api/tasks/:id/progress',req=>store.writeTaskProgress(String(req.params.id),req.body));
   route('post','/api/tasks/:id/claim',req=>store.claimTask(String(req.params.id),req.body));
   route('post','/api/tasks/:id/release',req=>store.releaseTask(String(req.params.id),req.body));
-  route('post','/api/resources',req=>store.createResource(req.body));
-  route('patch','/api/resources/:id',req=>store.updateResource(String(req.params.id),req.body));
+  route('post','/api/resources',()=>rejectLegacyResourceWrite());
+  route('patch','/api/resources/:id',()=>rejectLegacyResourceWrite());
   route('post','/api/agents',req=>store.registerAgent(req.body));
   route('post','/api/agents/:id/heartbeat',req=>store.heartbeat(String(req.params.id)));
   route('post','/api/entries',req=>store.publishEntry(req.body));
   app.get('/api/entries',(req,res,next)=>{try{res.json(store.readEntries(req.query));}catch(error){next(error);}});
-  route('post','/api/usages',req=>store.declareUsage(req.body));
-  route('patch','/api/usages/:id',req=>store.updateUsage(String(req.params.id),req.body));
+  route('post','/api/usages',()=>rejectLegacyResourceWrite());
+  route('patch','/api/usages/:id',()=>rejectLegacyResourceWrite());
   route('post','/api/usages/:id/release',req=>store.releaseUsage(String(req.params.id),req.body));
   app.post('/mcp',async(req,res,next)=>{
     const mcp = createMcpServer(store,widgetPath,options.runtime);

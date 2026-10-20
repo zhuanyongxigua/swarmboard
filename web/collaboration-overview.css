@@ -1,13 +1,8 @@
 .collaboration-overview { flex: 1 1 300px; min-width: 0; overflow-wrap: anywhere; }
-.overview-parts { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 12px; }
-.overview-note, .overview-fact { min-width: 0; white-space: pre-wrap; }
-.overview-note small { opacity: .75; font-size: 10px; }
-.overview-fact strong { color: var(--text); font-variant-numeric: tabular-nums; }
-.overview-state { margin: 0; }
-.overview-evidence { margin-top: 4px; font-size: 11px; }
-.overview-evidence summary { cursor: pointer; width: fit-content; }
-.overview-evidence summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.overview-evidence dl { margin: 8px 0; }
-.overview-evidence dt { font-weight: 600; }
-.overview-evidence dd { margin: 0 0 5px; white-space: pre-wrap; }
-.overview-evidence p { margin: 5px 0; }
+.overview-line { margin: 0; line-height: 1.6; white-space: pre-wrap; }
+.overview-fact { color: var(--text); font-variant-numeric: tabular-nums; }
+
+.collaboration-overview[data-overview-state="stale"] .overview-line,
+.collaboration-overview[data-overview-state="expired"] .overview-line,
+.collaboration-overview[data-overview-state="unavailable"] .overview-line { opacity: .75; }
+.overview-error { margin: 4px 0 0; }

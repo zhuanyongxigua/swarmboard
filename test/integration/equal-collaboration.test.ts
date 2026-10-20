@@ -9,6 +9,7 @@ import { Store } from '../../src/store.js';
 import { EventRuntime } from '../../src/event-runtime.js';
 import { createMcpServer } from '../../src/mcp.js';
 import { collaboratorRole } from '../../src/collaborators.js';
+import { NotificationService } from '../../src/notification-service.js';
 let root: string, board: Store, runtime: EventRuntime, nativeId: string;
 const cleanup: (() => Promise<void>)[] = [];
 beforeEach(() => {
@@ -38,7 +39,8 @@ it('requires an explicit organization choice, preserves legacy selected scope an
  const second=board.createTask({title:'Later human goal'});
  expect(data(await call(selected,'task_list')).items.map((t:any)=>t.id)).toEqual([first.id]);
  for(const c of [native,external])expect(data(await call(c,'task_list')).items.map((t:any)=>t.id)).toEqual([first.id,second.id]);
- const n=(await native.listTools()).tools.map(t=>t.name).sort(),e=(await external.listTools()).tools.map(t=>t.name).sort();expect(e).toEqual(n);
+ const n=(await native.listTools()).tools.map(t=>t.name).sort(),e=(await external.listTools()).tools.map(t=>t.name).sort();expect(e.filter(name => !name.startsWith('notification_'))).toEqual(n);
+ expect(e.filter(name => name.startsWith('notification_'))).toEqual(['notification_pending', 'notification_receipt', 'notification_register']);
  expect(e).toEqual(expect.arrayContaining(['peer_request','pipeline_watch','execution_grants_read']));expect(e).not.toContain('collaborator_configure');
  data(await call(external,'context_publish',{agentId:member.id,taskId:second.id,kind:'CLAIM',summary:'Independent contribution'}));
  const task=board.readTask(second.id);expect(task.participants).toContain(member.id);
@@ -76,4 +78,42 @@ it('binds peer requests, CI and grant reads to the real external principal and c
  const pool=runtime.workers.pool()!;runtime.workers.savePool({...pool,enabled:false});expect((await call(c,'peer_request',{requestId:'stop',reason:'No'})).isError).toBe(true);
  runtime.workers.savePool(pool);runtime.configureCollaborator({id:member.id,expectedVersion:2,name:member.name,harness:member.harness,taskIds:[outside.id],enabled:false});
  expect((await call(c,'execution_grants_read')).isError).toBe(true);expect((await call(c,'peer_request',{requestId:'revoked',reason:'No'})).isError).toBe(true);
+});
+it.each(['task_claim', 'execution_grants_read', 'peer_request', 'pipeline_watch'])('rechecks current goals before %s after a stale completed snapshot', async name => {
+ const first = board.createTask({ title: 'Finished goal' });
+ const member = admit([], { scope: 'organization', poolId: runtime.workers.pool()!.id });
+ const external = await connect(member.id, true);
+ board.updateTask(first.id, { expectedVersion: first.version, status: 'done' });
+ const pool = runtime.workers.pool()!;
+ runtime.workers.savePool({ ...pool, state: 'completed' });
+ expect(collaboratorRole(board, runtime.collaborators, member.id, runtime.workers).mayAct()).toBe(false);
+ const next = board.createTask({ title: 'New human goal' });
+ runtime.configureExecutionGrant({ taskId: next.id, expectedVersion: 0, projectPath: root, executionWorkspace: root, externalHarnesses: ['dsh'], monitoring: true, enabled: true });
+ const args = name === 'task_claim' ? { id: next.id, expectedVersion: next.version, agentId: member.id }
+  : name === 'peer_request' ? { requestId: 'new-goal', reason: 'New independent contribution' }
+  : name === 'pipeline_watch' ? { taskId: next.id, pipelineId: 1, sha: 'a'.repeat(40) } : {};
+ data(await call(external, name, args));
+ expect(runtime.workers.pool()!.state).toBe('completed'); // No runtime owner or implicit pool mutation.
+ for (const state of ['stopping', 'stopped'] as const) {
+  runtime.workers.savePool({ ...pool, state });
+  expect(collaboratorRole(board, runtime.collaborators, member.id, runtime.workers).mayAct()).toBe(false);
+  expect((await call(external, name, args)).isError).toBe(true);
+ }
+ runtime.workers.savePool({ ...pool, state: 'completed', enabled: false });
+ expect(collaboratorRole(board, runtime.collaborators, member.id, runtime.workers).mayAct()).toBe(false);
+});
+it('validates notification declarations against the current organization scope', () => {
+ const member = admit([], { scope: 'organization', poolId: runtime.workers.pool()!.id, sessionRef: 'notification-session' });
+ const goal = board.createTask({ title: 'Future organization goal' });
+ const other = board.createTask({ title: 'Other human goal' });
+ const service = new NotificationService(board, runtime.collaborators, runtime.workers);
+ const declaration = { id: 'organization-channel', version: 1, displayName: 'External channel', harness: 'fixture', enabled: true,
+  capabilities: ['durableDelivery', 'receipt'], members: [{ memberId: member.id, sessionRef: member.sessionRef, taskIds: [goal.id] }] };
+ expect(service.register(member.id, declaration).members[0]!.taskIds).toEqual([goal.id]);
+ const pool = runtime.workers.pool()!;
+ runtime.workers.savePool({ ...pool, taskIds: [other.id] });
+ expect(() => service.register(member.id, { ...declaration, version: 2 })).toThrow(/exceeds admitted tasks/);
+ expect(service.register(member.id, { ...declaration, version: 2, members: [{ ...declaration.members[0]!, taskIds: [other.id] }] }).version).toBe(2);
+ runtime.workers.savePool({ ...pool, id: 'replacement-organization' });
+ expect(() => service.register(member.id, { ...declaration, version: 3 })).toThrow(/exceeds admitted tasks/);
 });

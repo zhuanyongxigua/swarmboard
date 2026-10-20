@@ -66,7 +66,27 @@ describe('portable desktop plugin', () => {
     const client = await connect(path, work, { SWARMBOARD_DISABLE_RUNTIME: '1', SWARMBOARD_POOL_MEMBER: '1', SWARMBOARD_WORKER_ID: member.id });
     try {
       const names = (await client.listTools()).tools.map(t => t.name);
-      for (const name of ['task_create','resource_create','resource_update','pool_configure','pool_control']) expect(names).not.toContain(name);
+      for (const name of ['task_create','resource_create','resource_update','pool_configure','pool_control','notification_register','notification_receipt']) expect(names).not.toContain(name);
+      const overview = await call<{ facts: { items: { id: string; value: number | null }[] } }>(client, 'overview_read');
+      expect(overview.facts.items.find(f => f.id === 'organization.observed-members')?.value).toBe(1);
+      expect(state.db.prepare("SELECT name FROM sqlite_master WHERE name='external_collaborators'").get()).toBeUndefined();
+      expect(state.owner()).toBeNull();
+      const admissions = new CollaboratorStore(path + '.runtime.sqlite');
+      try {
+        const admit = (name: string, enabled = true) => admissions.configure({ expectedVersion: 0, name,
+          harness: 'synthetic-adapter', sessionRef: name, taskIds: [goal.id], enabled }, board).collaborator;
+        const current = admit('Current reporter'); admit('Historical admission'); const revoked = admit('Revoked reporter', false);
+        const observedAt = new Date().toISOString();
+        for (const reporter of [current, revoked]) board.saveOverviewStatusFact({ memberId: reporter.id, harness: reporter.harness,
+          classification: 'fact', activity: 'turn-settled', modelId: null, asOf: observedAt, observedAt,
+          expiresAt: new Date(Date.now() + 60_000).toISOString() });
+        const mixed = await call<{ facts: { items: { id: string; value: number | null }[] } }>(client, 'overview_read');
+        const value = (id: string) => mixed.facts.items.find(f => f.id === id)?.value;
+        expect(value('organization.observed-members')).toBe(2);
+        expect(value('external.admitted')).toBe(2);
+        expect(value('organization.total')).toBe(3);
+        expect((await client.listTools()).tools.map(t => t.name)).toEqual(names);
+      } finally { admissions.close(); }
       expect(names).toEqual(expect.arrayContaining(['pipeline_watch','peer_request']));
       const spoof = await client.callTool({name:'context_publish',arguments:{agentId:'other-peer',taskId:goal.id,kind:'CLAIM',summary:'Impersonation'}});
       expect(spoof.isError).toBe(true);expect(JSON.stringify(spoof.content)).toContain('BOUND_IDENTITY');
@@ -115,12 +135,13 @@ describe('portable desktop plugin', () => {
     expect(config.mcpServers.swarmboard).toEqual({ type: 'stdio', command: process.platform === 'win32' ? 'node' : 'sh', args: [process.platform === 'win32' ? '${PLUGIN_ROOT}/server/swarmboard.mjs' : '${PLUGIN_ROOT}/server/launch.sh'], cwd: '${PLUGIN_ROOT}' });
     const names = files(pluginRoot);
     expect(names).toEqual(expect.arrayContaining(['server/swarmboard.mjs', 'widget.html', 'skills/shared-worker/SKILL.md', 'BUILD.json']));
+    expect(names).toEqual(expect.arrayContaining(['docs/board-prompt-settings.md', 'docs/collaboration-environment-ui.md']));
     expect(names.some(name => /(^|\/)(node_modules|\.env|\.git)(\/|$)|\.(sqlite|db)(-|$)/.test(name))).toBe(false);
     // Documentation links must also work after moving and unpacking the plugin.
     for (const [readme, language] of [['README.md', 'en'], ['README.zh-CN.md', 'zh-CN']]) {
       const markdown = readFileSync(join(pluginRoot, readme!), 'utf8');
       const images = [...markdown.matchAll(/!\[[^\]]*\]\((docs\/assets\/[^)]+)\)/g)].map(match => match[1]!);
-      expect(images).toHaveLength(3);
+      expect(images.sort()).toEqual(['resources', 'settings', 'shared', 'tasks'].map(name => `docs/assets/${language}/${name}.png`).sort());
       for (const image of images) {
         expect(image.startsWith(`docs/assets/${language}/`)).toBe(true);
         expect(existsSync(join(pluginRoot, image))).toBe(true);
@@ -235,9 +256,12 @@ describe('portable desktop plugin', () => {
     await call(client, 'agent_register', { agentId: 'portable-b', name: 'Portable B' });
     const task = await call<Task>(client, 'task_create', { title: 'Portable acceptance', acceptanceCriteria: 'Survives process restart' });
     await call(client, 'task_claim', { id: task.id, agentId: 'portable-a', expectedVersion: 1 });
-    const resource = await call<Resource>(client, 'resource_create', { name: 'Synthetic machine', kind: 'machine' });
-    const usage = await call<Usage>(client, 'resource_use', { resourceId: resource.id, agentId: 'portable-a', purpose: 'compile', scope: 'isolated checkout', sharing: 'read-only access welcome' });
-    await call(client, 'resource_use', { resourceId: resource.id, agentId: 'portable-b', purpose: 'inspect logs' });
+    // Pre-existing rows remain auditable; new public legacy writers are retired.
+    const archiveStore = new Store(database);
+    const resource = archiveStore.createResource({ name: 'Synthetic machine', kind: 'machine' });
+    const usage = archiveStore.declareUsage({ resourceId: resource.id, agentId: 'portable-a', purpose: 'historical compile', scope: 'isolated checkout', sharing: 'read-only access welcome' });
+    archiveStore.declareUsage({ resourceId: resource.id, agentId: 'portable-b', purpose: 'historical logs' });
+    archiveStore.close();
     await call(client, 'context_publish', { agentId: 'portable-a', kind: 'MESSAGE', summary: 'Concurrent read access agreed', recipientId: 'portable-b', resourceId: resource.id });
     await call(client, 'resource_release', { id: usage.id, agentId: 'portable-a', expectedVersion: 1 });
     await call(client, 'task_release', { id: task.id, agentId: 'portable-a', expectedVersion: 2 });

@@ -10,12 +10,14 @@ export function wakePolicySettings(options: WakePolicyOptions, env: NodeJS.Proce
   if (raw === 'all' || raw === 'reference-quiet') return raw;
   throw new Error('Invalid wake policy configuration');
 }
-// Preferences are board-scoped host data, not a synthetic task or resource.
+// Both prompt fields are board-scoped host data, never a synthetic task/resource.
 export function boardPreferencesChanged(entry: Entry): boolean {
-  if (entry.kind !== 'OBSERVED' || entry.agentId !== 'host-preferences' || entry.taskId || entry.resourceId || entry.recipientId) return false;
+  const signal = entry.agentId === 'host-preferences' ? 'BOARD_PREFERENCES_UPDATED'
+    : entry.agentId === 'host-user-prompt' ? 'BOARD_USER_PROMPT_UPDATED' : null;
+  if (entry.kind !== 'OBSERVED' || !signal || entry.taskId || entry.resourceId || entry.recipientId) return false;
   try {
     const detail = JSON.parse(entry.detail);
-    return detail?.signalId === 'BOARD_PREFERENCES_UPDATED' && Number.isInteger(detail.version) && detail.version > 0
+    return detail?.signalId === signal && Number.isInteger(detail.version) && detail.version > 0
       && ['human-input', 'main-chat-relay'].includes(detail.source) && typeof detail.cleared === 'boolean';
   } catch { return false; }
 }

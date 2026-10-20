@@ -4,7 +4,7 @@ import type { WorkerStore } from './worker-store.js';
 import { collaboratorTaskIds, type CollaboratorStore } from './collaborators.js';
 export function assertOrganizationMember(workers: WorkerStore, id: string, collaborators?: CollaboratorStore, taskId?: string) {
   const pool = workers.pool();
-  if (!pool?.enabled || ['stopped', 'stopping', 'completed'].includes(pool.state)) throw new AppError('POOL_STOPPING', 'The organization is stopped', 409);
+  if (!pool?.enabled || ['stopped', 'stopping'].includes(pool.state)) throw new AppError('POOL_STOPPING', 'The organization is stopped', 409);
   if (collaborators) {
     const member = collaborators.get(id);
     if (!member.enabled || member.poolId !== pool.id) throw new AppError('NOT_MEMBER', 'This identity is not admitted to this organization', 403);

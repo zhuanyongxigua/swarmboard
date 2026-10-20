@@ -1,3 +1,4 @@
+import { openSettings, refreshBoard, closeSettings } from './settings-helpers.js';
 // Verify the three reviewed product features coexist through real HTTP and
 // disposable SQLite, while explicitly forbidding native or model dispatch.
 import { test, expect } from '@playwright/test';
@@ -29,9 +30,7 @@ test('progress, preferences and capacity controls coexist without losing each ot
   runtime.workers.savePool({ ...pool, memberIds });
   const server = await startServer({ port: 0, store, runtime });
   try {
-    const resourceResponse = await request.post(`${server.url}/api/resources`, { data: { name: 'Synthetic combined resource', accessNotes: 'Synthetic sharing agreement' } });
-    expect(resourceResponse.ok()).toBe(true);
-    const resource = await resourceResponse.json();
+    const resource = store.createResource({ name: 'Synthetic combined resource', accessNotes: 'Synthetic sharing agreement' });
     const taskResponse = await request.post(`${server.url}/api/tasks`, { data: { title: 'Synthetic combined task' } });
     expect(taskResponse.ok()).toBe(true);
     let task = await taskResponse.json();
@@ -58,7 +57,7 @@ test('progress, preferences and capacity controls coexist without losing each ot
       } });
       expect(response.ok()).toBe(true);
       expect(await response.json()).toMatchObject({ status: 'current', record: { authorId: 'human-host' } });
-      await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+      await refreshBoard(page);
     };
     await writeOverview();
     const overview = page.getByRole('region', { name: '协作概览', exact: true });
@@ -77,14 +76,17 @@ test('progress, preferences and capacity controls coexist without losing each ot
     await page.getByRole('button', { name: '关闭编辑窗口', exact: true }).click();
     await expect(page.locator('button button')).toHaveCount(0);
 
-    await page.getByRole('tab', { name: '协作环境', exact: true }).click();
-    await expect(page.getByRole('button', { name: '查看资源 Synthetic combined resource', exact: true })).toBeVisible();
-    await page.getByLabel('偏好内容', { exact: true }).fill('Synthetic user expectation');
-    await page.getByLabel('内容来源', { exact: true }).selectOption('main-chat-relay');
-    await page.getByRole('button', { name: '保存偏好', exact: true }).click();
-    await expect(page.getByLabel('当前保存的偏好')).toContainText('v1');
-    await expect(overview).not.toContainText('Synthetic overview chosen for this fixture');
-    await expect(overview).toContainText('概览已失效');
+    await openSettings(page);
+    await expect(page.getByRole('button', { name: '查看资源 Synthetic combined resource', exact: true })).toHaveCount(0);
+    await page.getByLabel('系统提示词内容', { exact: true }).fill('Synthetic user expectation');
+    await page.getByLabel('系统提示词 · 内容来源', { exact: true }).selectOption('main-chat-relay');
+    await page.getByRole('button', { name: '保存系统提示词', exact: true }).click();
+    await expect(page.getByLabel('当前保存的系统提示词')).toContainText('v1');
+    await closeSettings(page);
+    await expect(overview).toContainText('Synthetic overview chosen for this fixture');
+    await expect(overview).not.toHaveAttribute('data-overview-state', 'current');
+    await expect(overview).not.toContainText('上次概览');
+    await expect(overview.locator('strong')).toHaveText(['2', '未知']);
     const preferences = await (await request.get(`${server.url}/api/preferences`)).json();
     expect(preferences).toMatchObject({ text: 'Synthetic user expectation', source: 'main-chat-relay', version: 1 });
 
@@ -97,7 +99,7 @@ test('progress, preferences and capacity controls coexist without losing each ot
     await page.getByRole('button', { name: '增加成员', exact: true }).click();
     await expect.poll(() => runtime.workers.pool()!.size).toBe(2);
     new WorkerPool(runtime.workers, store, dbPath).ensureMembers(runtime.workers.pool()!);
-    await page.getByRole('button', { name: '刷新面板', exact: true }).click();
+    await refreshBoard(page);
     expect(await (await request.get(`${server.url}/api/runtime`)).json()).toMatchObject({ activity: { members: 2, running: 0 } });
     await writeOverview();
     await expect(overview.locator('strong')).toHaveText(['2', '未知']);
@@ -111,12 +113,17 @@ test('progress, preferences and capacity controls coexist without losing each ot
     await expect(card).toContainText('Waiting');
     await expect(page.getByRole('button', { name: 'Reduce member', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.getByRole('tab', { name: 'Collaboration environment', exact: true }).click();
-    await expect(page.getByLabel('Preference text', { exact: true })).toHaveValue('Synthetic user expectation');
-    await expect(page.getByRole('button', { name: 'View resource Synthetic combined resource', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Clear saved preferences', exact: true }).click();
-    await expect(page.getByLabel('Preference text', { exact: true })).toHaveValue('');
-    await expect(page.getByRole('region', { name: 'Collaboration overview', exact: true })).not.toContainText('Synthetic overview chosen for this fixture');
+    await openSettings(page);
+    await expect(page.getByLabel('System prompt text', { exact: true })).toHaveValue('Synthetic user expectation');
+    await expect(page.getByRole('button', { name: 'View resource Synthetic combined resource', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Clear system prompt', exact: true }).click();
+    await expect(page.getByLabel('System prompt text', { exact: true })).toHaveValue('');
+    await closeSettings(page);
+    const previousOverview = page.getByRole('region', { name: 'Collaboration overview', exact: true });
+    await expect(previousOverview).toContainText('Synthetic overview chosen for this fixture');
+    await expect(previousOverview).not.toHaveAttribute('data-overview-state', 'current');
+    await expect(previousOverview).not.toContainText('Previous overview:');
+    await expect(previousOverview.locator('strong')).toHaveText(['2', 'Unknown']);
     expect(await (await request.get(`${server.url}/api/preferences`)).json()).toMatchObject({ text: '', version: 2 });
     expect((await readTask()).progress).toEqual(originalProgress);
     const board = await (await request.get(`${server.url}/api/board`)).json();

@@ -1,3 +1,4 @@
+import { SettingsDialog, type SettingsPool } from './settings-dialog.js';
 import { locale, t } from './i18n.js';
 import type { AutomationConfig } from '../src/automation.js';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -7,6 +8,7 @@ import './style.css';
 import { TaskProgress, type TaskProgressSnapshot } from './TaskProgress.js';
 import { PreferencesEditor, type Preferences, type PreferenceWrite } from './preferences-editor.js';
 import { CollaborationOverview, type OverviewSnapshot } from './CollaborationOverview.js';
+import { boardTaskColumns, taskDropDestination } from './task-board-columns.js';
 import { appendNativeDraft, nativeConversationUnavailableReason, startNativeAutomationSetup, taskDiscussionPrompt } from './native-conversation.js';
 
 type Task = {
@@ -28,8 +30,12 @@ type Usage = {
   sharing: string; taskId?: string; active: boolean;
 };
 type Board = { tasks: Task[]; resources: Resource[]; agents: Agent[]; usages: Usage[]; entries: Entry[]; cursor: number };
-type Editor = { type: 'task'; item?: Task } | { type: 'resource'; item?: Resource };
-type Tab = 'tasks' | 'resources' | 'shared';
+type Editor = { type: 'task'; item: Task };
+type UiOperation = 'board_read' | 'runtime_read' | 'overview_read' | 'automation_read'
+  | 'pool_capacity' | 'pool_configure' | 'pool_control' | 'pool_reduce'
+  | 'user_prompt_read' | 'user_prompt_write' | 'preferences_read' | 'preferences_write'
+  | 'task_update';
+type Tab = 'tasks' | 'shared';
 type RuntimeStatus = { mode: 'events'; ciWatches?: { id: string; pipelineId: number; sha: string; state: string; error: string }[]; pool?: { id?: string; size: number; minSize?: number; maxSize?: number; workspacePath?: string; taskIds?: string[]; enabled: boolean; version: number; state: string; error: string } | null; activity?: { members: number; running: number; idle: number; draining?: number; state: string; executionMode: string; watchdog: { state: string; attempts: number; nextWakeAt: string | null } }; workers: { id: string; name: string; poolId?: string; enabled: boolean; status: string; error: string }[]; error: string };
 
 
@@ -43,7 +49,6 @@ const entryKinds: Record<string, string> = {
 };
 const tabs: { id: Tab; title: string }[] = [
   { id: 'tasks', title: t("任务管理") },
-  { id: 'resources', title: t("协作环境") },
   { id: 'shared', title: t("共享面板") },
 ];
 let bridge: App | null = null;
@@ -70,7 +75,7 @@ function unpack(value: unknown): unknown {
   if (result.isError) throw operationError((data as { error?: { code?: string; message?: string } })?.error);
   return data;
 }
-async function operation<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+async function operation<T>(name: UiOperation, args: Record<string, unknown> = {}): Promise<T> {
   if (bridge) return unpack(await bridge.callServerTool({ name, arguments: args })) as T;
   if (window.parent !== window) throw new OperationError(t("插件尚未连接桌面宿主，请重新打开面板后重试。"));
   let url = '/api/board';
@@ -78,16 +83,16 @@ async function operation<T>(name: string, args: Record<string, unknown> = {}): P
   let body: Record<string, unknown> | undefined;
   const { id, ...patch } = args;
   if (name === 'runtime_read') url = '/api/runtime';
+  if (name === 'pool_capacity') { url = '/api/pool/capacity'; method = 'POST'; body = args; }
   if (name === 'pool_configure') { url = '/api/pool/configure'; method = 'POST'; body = args; }
   if (name === 'pool_control') { url = '/api/pool/control'; method = 'POST'; body = args; }
+  if (name === 'user_prompt_read') url = '/api/user-prompt';
+  if (name === 'user_prompt_write') { url = '/api/user-prompt'; method = 'PATCH'; body = args; }
   if (name === 'preferences_read') url = '/api/preferences';
   if (name === 'overview_read') url = '/api/overview';
   if (name === 'preferences_write') { url = '/api/preferences'; method = 'PATCH'; body = args; }
   if (name === 'pool_reduce') { url = '/api/pool/reduce'; method = 'POST'; body = args; }
-  if (name === 'task_create') { url = '/api/tasks'; method = 'POST'; body = args; }
   if (name === 'task_update') { url = `/api/tasks/${encodeURIComponent(String(id))}`; method = 'PATCH'; body = patch; }
-  if (name === 'resource_create') { url = '/api/resources'; method = 'POST'; body = args; }
-  if (name === 'resource_update') { url = `/api/resources/${encodeURIComponent(String(id))}`; method = 'PATCH'; body = patch; }
   const response = await fetch(url, {
     method, headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
@@ -96,6 +101,9 @@ async function operation<T>(name: string, args: Record<string, unknown> = {}): P
   if (!response.ok) throw operationError(data.error);
   return data as T;
 }
+function readUserPrompt() { return operation<Preferences>('user_prompt_read'); }
+function writeUserPrompt(input: PreferenceWrite) { return operation<Preferences>('user_prompt_write', input); }
+
 function readPreferences() { return operation<Preferences>('preferences_read'); }
 function writePreferences(input: PreferenceWrite) { return operation<Preferences>('preferences_write', input); }
 function RichText({ value }: { value: string }) {
@@ -116,9 +124,8 @@ function Workspace() {
   const [tab, setTab] = useState<Tab>('tasks');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [connected, setConnected] = useState(false);
-  const [updated, setUpdated] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsRefresh, setSettingsRefresh] = useState(0);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [automation, setAutomation] = useState<AutomationConfig | null>(null);
   const [automationError, setAutomationError] = useState('');
@@ -148,6 +155,16 @@ function Workspace() {
     void readRuntimeAndOverview().catch(() => {});
     return value;
   }
+  async function saveUserPrompt(input: PreferenceWrite) {
+    const value = await writeUserPrompt(input);
+    // A confirmed user-prompt change invalidates the prior overview immediately;
+    // an older in-flight overview read cannot restore it after this point.
+    overviewRead.current++;
+    setOverview(current => current?.record && (current.record.userPromptVersion ?? 0) !== value.version
+      ? { ...current, status: 'stale', reason: 'user-prompt-changed' } : current);
+    void readRuntimeAndOverview().catch(() => {});
+    return value;
+  }
   const [poolBusy, setPoolBusy] = useState(false);
   const poolOperation = useRef(false);
   const [poolFeedback, setPoolFeedback] = useState('');
@@ -159,7 +176,7 @@ function Workspace() {
   const reduceDisabledReason = poolBusy ? t('正在更新成员，请稍候。')
     : eventRuntime?.pool && eventRuntime.pool.size <= minimumMembers
       ? t('至少保留 {limit} 名成员').replace('{limit}', String(minimumMembers))
-      : !eventRuntime?.pool?.enabled ? t('协作已停止，请先恢复协作。') : '';
+      : !eventRuntime?.pool?.enabled ? t('协作已停止，暂不可调整成员。') : '';
   async function controlPool(enabled?: boolean) {
     const pool = eventRuntime?.pool; if (!pool || poolOperation.current) return;
     poolOperation.current = true; setPoolBusy(true); setPoolFeedback(''); setPoolError('');
@@ -192,8 +209,8 @@ function Workspace() {
     } finally { poolOperation.current = false; setPoolBusy(false); }
   }
   const automationBusy = useRef(false);
-  const [expandedResource, setExpandedResource] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
+  const [pendingMove, setPendingMove] = useState<Task | null>(null);
   const [announcement, setAnnouncement] = useState('');
   const [nativeUnavailable, setNativeUnavailable] = useState(window.parent === window
     ? t("HTTP 预览不提供原生对话，请在 ChatGPT 桌面端打开插件。")
@@ -248,22 +265,21 @@ function Workspace() {
     } finally { automationBusy.current = false; }
   }, [readAutomation]);
 
-  const refresh = useCallback(async (quiet = false): Promise<Board | null> => {
-    if (!quiet) setRefreshing(true);
+  const refresh = useCallback(async (_quiet = false): Promise<Board | null> => {
     try {
       const data = await operation<Board>('board_read');
       void readAutomation();
       void readRuntimeAndOverview().catch(() => { if (mounted.current) setOverview({ status: 'unavailable', reason: 'runtime-unavailable', record: null,
         facts: { revision: '', observedAt: new Date().toISOString(), available: false, items: [] } }); });
       if (mounted.current) {
-        setBoard(data); setError(''); setUpdated(new Date().toISOString());
+        setBoard(data); setError('');
       }
       return data;
     } catch (error) {
       if (mounted.current) setError(message(error));
       return null;
     } finally {
-      if (mounted.current) { setLoading(false); setRefreshing(false); }
+      if (mounted.current) { setLoading(false); }
     }
   }, [readAutomation, readRuntimeAndOverview]);
 
@@ -281,7 +297,7 @@ function Workspace() {
             try {
               const data = unpack(result) as Board;
               if (data?.tasks && data?.resources && active) {
-                setBoard(data); setLoading(false); setUpdated(new Date().toISOString());
+                setBoard(data); setLoading(false);
               }
             } catch (error) { if (active) setError(message(error)); }
           };
@@ -291,7 +307,7 @@ function Workspace() {
           await app.connect();
           if (!active) return;
           bridge = app;
-          setConnected(true);
+
           setNativeUnavailable(nativeConversationUnavailableReason(app.getHostCapabilities(), app.getHostContext()?.platform));
         }
         await refresh();
@@ -319,7 +335,31 @@ function Workspace() {
   const usages = board?.usages.filter(usage => usage.active) ?? [];
   const autoUnavailable = Boolean(automation?.desiredEnabled && nativeUnavailable);
   const autoError = automationError || (automation?.state === 'error' ? automation.lastError : '');
-  async function manualRefresh() { await refresh(); await ensureAutomation(true); }
+  async function refreshSettings() { const cursor = board?.cursor; const latest = await refresh(); await ensureAutomation(true); await readRuntimeAndOverview(); if (!latest || latest.cursor === cursor) setSettingsRefresh(value => value + 1); }
+  async function saveCapacity(minSize: number, maxSize: number, expectedVersion: number, onSaved?: (pool: SettingsPool) => void) {
+    const pool = eventRuntime?.pool;
+    if (!pool?.workspacePath || poolOperation.current) throw new Error(t('正在更新成员，请稍候。'));
+    poolOperation.current = true; setPoolBusy(true);
+    try {
+      const updated = await operation<NonNullable<RuntimeStatus['pool']> & SettingsPool>('pool_capacity', { minSize, maxSize, expectedVersion });
+      // The POST is authoritative: adopt its returned Pool before the refresh so
+      // the dialog keeps the confirmed revision and the next save cannot reuse
+      // an older expectedVersion, even when the follow-up read fails.
+      if (updated) setEventRuntime(current => current ? { ...current, pool: updated } : current);
+      onSaved?.(updated);
+      try { await readRuntimeAndOverview(); }
+      catch (failure) {
+        const detail = failure instanceof Error && failure.message ? ' ' + failure.message : '';
+        const error = new Error(t('成员上下限已保存，但最新状态读取失败，请重新读取核对。') + detail);
+        (error as { saved?: boolean }).saved = true;
+        throw error;
+      }
+    } catch (failure) {
+      if (!(failure as { saved?: boolean })?.saved) await readRuntimeAndOverview().catch(() => {});
+      throw failure;
+    }
+    finally { poolOperation.current = false; setPoolBusy(false); }
+  }
 
 
   async function discuss(task: Task) {
@@ -345,19 +385,14 @@ function Workspace() {
   function tabKey(event: React.KeyboardEvent, index: number) {
     if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? 2
-      : (index + (event.key === 'ArrowRight' ? 1 : 2)) % tabs.length;
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+      : (index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length;
     changeTab(tabs[next].id);
     document.getElementById(`tab-${tabs[next].id}`)?.focus();
   }
   function openTask(taskId: string) {
     const task = board?.tasks.find(task => task.id === taskId);
     if (task) { setTab('tasks'); setEditor({ type: 'task', item: task }); }
-  }
-  function openResource(resourceId: string) {
-    if (!board?.resources.some(resource => resource.id === resourceId)) return;
-    setTab('resources'); setExpandedResource(resourceId);
-    requestAnimationFrame(() => document.getElementById(`resource-${resourceId}`)?.focus());
   }
   async function moveTask(task: Task, status: string) {
     if (task.status === status || moving.current) return;
@@ -377,16 +412,16 @@ function Workspace() {
     event.preventDefault();
     const task = dragged.current;
     dragged.current = null;
-    void moveTask(task, status);
+    const destination = taskDropDestination(task.status, status);
+    if (destination === 'choose') setPendingMove(task);
+    else if (destination) void moveTask(task, destination);
   }
   async function reloadEditor(): Promise<boolean> {
     const data = await refresh(true);
     if (!data || !editor?.item) return false;
-    const latest = editor.type === 'task'
-      ? data.tasks.find(item => item.id === editor.item?.id)
-      : data.resources.find(item => item.id === editor.item?.id);
+    const latest = data.tasks.find(item => item.id === editor.item.id);
     if (!latest) return false;
-    setEditor(editor.type === 'task' ? { type: 'task', item: latest as Task } : { type: 'resource', item: latest as Resource });
+    setEditor({ type: 'task', item: latest });
     return true;
   }
 
@@ -399,11 +434,9 @@ function Workspace() {
           tabIndex={tab === item.id ? 0 : -1} onKeyDown={event => tabKey(event, index)}
           onClick={() => changeTab(item.id)}>{item.title}</button>)}
       </nav>
-      <span className="connection" title={updated ? `${t('上次同步')} ${time(updated, true)}` : t("等待连接")}>
-        {error ? t("同步需检查") : connected ? t("已连接") : t("本地空间")}
-      </span>
-      <button className="refresh-button" type="button" aria-label={t("刷新面板")}
-        disabled={refreshing} onClick={() => void manualRefresh()}>↻</button>
+      <button className="settings-button" type="button" aria-label={t('设置')} onClick={() => setSettingsOpen(true)}>
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" aria-hidden="true"><path d="M10.186 4.723 10.514 2.617 13.486 2.617 13.814 4.723 15.863 5.571 17.584 4.314 19.686 6.416 18.429 8.137 19.277 10.186 21.383 10.514 21.383 13.486 19.277 13.814 18.429 15.863 19.686 17.584 17.584 19.686 15.863 18.429 13.814 19.277 13.486 21.383 10.514 21.383 10.186 19.277 8.137 18.429 6.416 19.686 4.314 17.584 5.571 15.863 4.723 13.814 2.617 13.486 2.617 10.514 4.723 10.186 5.571 8.137 4.314 6.416 6.416 4.314 8.137 5.571Z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
     </header>
     {eventRuntime ? <div className="automation-notice" role="status">
       {eventRuntime.pool ? <div className="pool-controls"><CollaborationOverview snapshot={overview} />
@@ -415,7 +448,7 @@ function Workspace() {
           <button type="button" className="secondary" disabled={Boolean(reduceDisabledReason)} aria-describedby={reduceDisabledReason ? 'member-minimum-tooltip' : undefined} onClick={() => void reducePeer()}>{t('减少成员')}</button>
           {reduceDisabledReason ? <span id="member-minimum-tooltip" className="member-limit-tooltip" role="tooltip">{reduceDisabledReason}</span> : null}
         </span> : null}
-        {!eventRuntime.pool.enabled ? <button type="button" className="secondary" disabled={poolBusy} onClick={() => void controlPool(true)}>{t('恢复协作')}</button> : null}</div>
+      </div>
         : <CollaborationOverview snapshot={overview} />}
       {eventRuntime.activity?.draining ? <p className="subtle">{eventRuntime.activity.draining} {t('个正在退出')} · {t('正在等待成员安全收尾或核清，实际人数尚未减少。')}</p> : poolFeedback ? <p className="subtle">{poolFeedback}</p> : null}
       {poolError ? <p role="alert">{poolError}</p> : null}
@@ -431,16 +464,13 @@ function Workspace() {
         : automation?.state === 'pending' ? <p className="automation-notice" role="status">{automation.setupMode === 'reconcile'
           ? t("正在核对自动认领状态。") : t("正在初始化自动认领，等待宿主确认。")}</p> : null}
     <main id={`panel-${tab}`} className={tab === 'tasks' ? 'task-panel' : undefined} role="tabpanel" aria-labelledby={`tab-${tab}`}>
-      <div className="panel-toolbar">
-        <span className="subtle">{tab === 'tasks' ? `${board?.tasks.length ?? 0} ${t('个任务')}`
-          : tab === 'resources' ? `${board?.resources.length ?? 0} ${t('项资源')}` : t("Agent 交互记录")}</span>
-        {tab === 'tasks' ? <button className="primary" type="button" onClick={() => setEditor({ type: 'task' })}>{t("新建任务")}</button>
-          : tab === 'resources' ? <button className="primary" type="button" onClick={() => setEditor({ type: 'resource' })}>{t("添加资源")}</button>
-            : <span className="subtle">{t("只读")}</span>}
-      </div>
+      {tab === 'shared' && <div className="panel-toolbar">
+        <span className="subtle">{t("Agent 交互记录")}</span>
+        <span className="subtle">{t("只读")}</span>
+      </div>}
       {error && <div className="error" role="alert"><span>{error}</span><button type="button" onClick={() => void refresh()}>{t("重试")}</button></div>}
-      {loading ? <Empty title={t("正在读取协作空间")} text={t("获取任务、资源与最新共享记录…")} loading />
-        : !board ? <Empty title={t("协作空间暂未连接")} text={t("恢复连接后可查看已有任务、资源与共享记录。")} />
+      {loading ? <Empty title={t("正在读取协作空间")} text={t("获取任务与最新共享记录…")} loading />
+        : !board ? <Empty title={t("协作空间暂未连接")} text={t("恢复连接后可查看已有任务与共享记录。")} />
           : tab === 'tasks' ? <TaskBoard board={board} usages={usages} name={name} stale={stale}
             movingId={movingId} open={task => setEditor({ type: 'task', item: task })}
             dragStart={(event, task) => {
@@ -450,17 +480,16 @@ function Workspace() {
               event.dataTransfer.effectAllowed = 'move';
             }} dragEnd={() => { dragged.current = null; }}
             dragOver={event => { if (dragged.current) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} drop={drop} />
-            : tab === 'resources' ? <div className="collaboration-environment"><section aria-labelledby="available-resources-heading">
-              <h2 id="available-resources-heading" className="environment-heading">{t('可用资源')}</h2>
-              <ResourcePool board={board} usages={usages} name={name} stale={stale}
-              expanded={expandedResource} toggle={id => setExpandedResource(current => current === id ? null : id)}
-              edit={resource => setEditor({ type: 'resource', item: resource })} /></section>
-              <PreferencesEditor read={readPreferences} write={savePreferences} refreshKey={board.cursor} />
-            </div>
-              : <SharedFeed board={board} name={name} openTask={openTask} openResource={openResource} />}
+             : <SharedFeed board={board} name={name} openTask={openTask} />}
     </main>
+    {settingsOpen && <SettingsDialog pool={eventRuntime?.pool ?? null} saveCapacity={saveCapacity} refresh={refreshSettings} close={() => setSettingsOpen(false)}>
+      <PreferencesEditor read={readPreferences} write={savePreferences} refreshKey={settingsRefresh + (board?.cursor ?? 0)} kind="system" />
+      <PreferencesEditor read={readUserPrompt} write={saveUserPrompt} refreshKey={settingsRefresh + (board?.cursor ?? 0)} kind="user" />
+    </SettingsDialog>}
     <div className="sr-only" aria-live="polite">{announcement}</div>
-    {editor && <EditorDialog key={`${editor.type}-${editor.item?.id ?? 'new'}-${editor.item?.version ?? 0}`}
+    {pendingMove && <PendingMoveDialog task={pendingMove} close={() => setPendingMove(null)}
+      choose={status => { setPendingMove(null); void moveTask(pendingMove, status); }} />}
+    {editor && <EditorDialog key={`${editor.item.id}-${editor.item.version}`}
       editor={editor} name={name} usages={usages} resources={board?.resources ?? []}
       close={() => setEditor(null)} saved={() => { setEditor(null); setAnnouncement(t("修改已保存。")); void refresh(true); }}
       failed={() => refresh(true)} reload={reloadEditor}
@@ -476,14 +505,13 @@ function TaskBoard({ board, usages, name, stale, movingId, open, dragStart, drag
   dragStart: (event: React.DragEvent, task: Task) => void; dragEnd: () => void;
   dragOver: (event: React.DragEvent) => void; drop: (event: React.DragEvent, status: string) => void;
 }) {
-  const order = ['todo', 'in_progress', 'in_review', 'done'];
-  for (const task of board.tasks) if (!order.includes(task.status)) order.push(task.status);
-  return <div className="task-board" role="region" tabIndex={0} aria-label={t("任务状态看板")} style={{ '--column-count': order.length } as React.CSSProperties}>
-    {order.map(status => {
-      const tasks = board.tasks.filter(task => task.status === status);
-      return <section className="task-column" key={status} aria-label={statuses[status] ?? status}
+  const columns = boardTaskColumns(board.tasks);
+  return <div className="task-board" role="region" tabIndex={0} aria-label={t("任务状态看板")} style={{ '--column-count': columns.length } as React.CSSProperties}>
+    {columns.map(({ id: status, tasks }) => {
+      const label = status === 'pending' ? t('待处理') : statuses[status];
+      return <section className="task-column" key={status} aria-label={label}
         data-status={status} onDragOver={dragOver} onDrop={event => drop(event, status)}>
-        <div className="column-heading"><h2>{statuses[status] ?? status}</h2><span>{tasks.length}</span></div>
+        <div className="column-heading"><h2>{label}</h2><span>{tasks.length}</span></div>
         <div className="column-list" data-drop-status={status}>
           {tasks.length ? tasks.map(task => {
             const related = [...new Set(usages.filter(usage => usage.taskId === task.id).map(usage => usage.resourceId))]
@@ -492,8 +520,12 @@ function TaskBoard({ board, usages, name, stale, movingId, open, dragStart, drag
               data-card-id={task.id} aria-busy={movingId === task.id}
               onDragStart={event => dragStart(event, task)} onDragEnd={dragEnd}>
               <button type="button" className="task-open" data-task-id={task.id}
-                aria-label={`${t('查看任务')} ${task.title}`} disabled={movingId === task.id} onClick={() => open(task)}>
+                aria-label={`${t('查看任务')} ${task.title}`} aria-describedby={status === 'pending' ? `task-state-${task.id}` : undefined}
+                disabled={movingId === task.id} onClick={() => open(task)}>
                 <span className="task-title" title={task.title}>{task.title}</span>
+                {status === 'pending' && <span id={`task-state-${task.id}`} className="task-state" data-task-state={task.status}>
+                  <span className="task-state-dot" aria-hidden="true" />{statuses[task.status]}
+                </span>}
                 {task.status !== 'in_progress' && task.description && <span className="task-excerpt">{task.description.replace(/\b[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}\b/gi, shortId)}</span>}
               </button>
               {task.status === 'in_progress' && <TaskProgress taskTitle={task.title} progress={task.progress} />}
@@ -511,42 +543,30 @@ function TaskBoard({ board, usages, name, stale, movingId, open, dragStart, drag
   </div>;
 }
 
-function ResourcePool({ board, usages, name, stale, expanded, toggle, edit }: {
-  board: Board; usages: Usage[]; name: (id: string) => string; stale: (id: string) => boolean;
-  expanded: string | null; toggle: (id: string) => void; edit: (resource: Resource) => void;
+function PendingMoveDialog({ task, close, choose }: {
+  task: Task; close: () => void; choose: (status: 'in_review' | 'blocked') => void;
 }) {
-  if (!board.resources.length) return <Empty title={t("暂无资源")} text={t("添加资源名称、说明与使用约定，供 Agents 协商使用。")} />;
-  return <div className="resources">
-    <div className="resource-grid table-heading" aria-hidden="true"><span>{t("名称与说明")}</span><span>{t("使用声明")}</span><span>{t("使用约定")}</span></div>
-    {board.resources.map(resource => {
-      const declarations = usages.filter(usage => usage.resourceId === resource.id);
-      const isExpanded = expanded === resource.id;
-      return <section className="resource-item" key={resource.id}>
-        <button className="resource-grid resource-row" type="button" id={`resource-${resource.id}`}
-          aria-label={`${t('查看资源')} ${resource.name}`} aria-expanded={isExpanded} aria-controls={`usage-${resource.id}`}
-          onClick={() => toggle(resource.id)}>
-          <span><span className="resource-name">{resource.name}</span><span className="resource-description">{resource.description || t("暂无说明")}</span></span>
-          <span className="usage-summary">{declarations.length
-            ? declarations.map(usage => <span key={usage.id}>{name(usage.agentId)} · {usage.purpose}</span>)
-            : t("暂无活跃使用声明")}</span>
-          <span className="subtle resource-agreement">{resource.accessNotes || t("暂无使用约定")}</span>
-        </button>
-        {isExpanded && <div className="resource-detail" id={`usage-${resource.id}`}>
-          <div className="resource-detail-heading"><p className="subtle">{t("使用声明供协作参考，不代表独占或机器实际空闲。")}</p>
-            <button className="secondary" type="button" aria-label={`${t('编辑资源')} ${resource.name}`} onClick={() => edit(resource)}>{t("编辑资源")}</button></div>
-          {declarations.length ? declarations.map(usage => <div className="usage-line" key={usage.id}>
-            <div>{name(usage.agentId)}{stale(usage.agentId) && <p className="stale">{t("最近未报告 · 使用待核实")}</p>}</div>
-            <div><p>{usage.purpose}</p><p><span>{t("范围：")}</span><RichText value={usage.scope || t("未说明")} /></p>
-              <p><span>{t("共享约定：")}</span><RichText value={usage.sharing || t("未说明")} /></p></div>
-          </div>) : <p className="subtle">{t("尚无 Agent 声明使用这项资源，实际使用情况仍需核实。")}</p>}
-        </div>}
-      </section>;
-    })}
-  </div>;
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    dialog.current?.showModal();
+    return () => { if (previous?.isConnected) previous.focus(); };
+  }, []);
+  return <dialog ref={dialog} aria-labelledby="pending-move-title" aria-describedby="pending-move-description"
+    onCancel={event => { event.preventDefault(); close(); }}
+    onClick={event => { if (event.target === dialog.current) close(); }}>
+    <div className="dialog-header"><h2 id="pending-move-title">{t('选择待处理状态')}</h2></div>
+    <div className="pending-move-description" id="pending-move-description">{task.title} — {t('请选择待验收或受阻，取消不会修改任务。')}</div>
+    <div className="dialog-actions">
+      <button type="button" className="secondary" onClick={close} autoFocus>{t('取消')}</button>
+      <button type="button" onClick={() => choose('in_review')}>{t('待验收')}</button>
+      <button type="button" onClick={() => choose('blocked')}>{t('受阻')}</button>
+    </div>
+  </dialog>;
 }
 
-function SharedFeed({ board, name, openTask, openResource }: {
-  board: Board; name: (id: string) => string; openTask: (id: string) => void; openResource: (id: string) => void;
+function SharedFeed({ board, name, openTask }: {
+  board: Board; name: (id: string) => string; openTask: (id: string) => void;
 }) {
   if (!board.entries.length) return <Empty title={t("暂无共享记录")} text={t("Agents 发布工作声明、发现或消息后，会显示在这里。")} />;
   return <div className="shared-feed" aria-label={t("Agent 交互记录")}>
@@ -557,8 +577,8 @@ function SharedFeed({ board, name, openTask, openResource }: {
         <div className="entry-references">
           {entry.taskId && <button type="button" className="reference-button" onClick={() => openTask(entry.taskId!)}>
             {t("任务 ·")} {board.tasks.find(task => task.id === entry.taskId)?.title ?? shortId(entry.taskId)}</button>}
-          {entry.resourceId && <button type="button" className="reference-button" onClick={() => openResource(entry.resourceId!)}>
-            {t("资源 ·")} {board.resources.find(resource => resource.id === entry.resourceId)?.name ?? shortId(entry.resourceId)}</button>}
+          {entry.resourceId && <span className="subtle">
+            {t("历史资源 ·")} {board.resources.find(resource => resource.id === entry.resourceId)?.name ?? shortId(entry.resourceId)}</span>}
           {entry.recipientId && <span className="subtle">{t("发送给 ·")} {name(entry.recipientId)}</span>}
         </div>
         {entry.detail && <details className="entry-details"><summary>{t("展开详情")}</summary><pre>{entry.detail}</pre></details>}
@@ -584,11 +604,8 @@ function EditorDialog({ editor, name, usages, resources, close, saved, failed, r
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [conflict, setConflict] = useState(false);
-  const isTask = editor.type === 'task';
-  const item = editor.item;
-  const task = isTask ? editor.item : undefined;
-  const resource = editor.type === 'resource' ? editor.item : undefined;
-  const title = isTask ? item ? t("任务详情") : t("新建任务") : item ? t("编辑资源") : t("添加资源");
+  const task = editor.item;
+  const title = t("任务详情");
   const related = task ? [...new Set(usages.filter(usage => usage.taskId === task.id).map(usage => usage.resourceId))]
     .map(id => resources.find(resource => resource.id === id)?.name ?? id) : [];
 
@@ -603,16 +620,10 @@ function EditorDialog({ editor, name, usages, resources, close, saved, failed, r
     if (saving || conflict) return;
     const data = new FormData(event.currentTarget);
     const value = (key: string) => String(data.get(key) ?? '').trim();
-    const args: Record<string, unknown> = isTask
-      ? { title: value('title'), description: value('description'), acceptanceCriteria: value('acceptanceCriteria') }
-      : { name: value('name'), description: value('description'), accessNotes: value('accessNotes') };
-    if (item) {
-      args.id = item.id; args.expectedVersion = item.version;
-      if (isTask) args.status = value('status');
-    }
     setSaving(true); setError('');
     try {
-      await operation(`${isTask ? 'task' : 'resource'}_${item ? 'update' : 'create'}`, args);
+      await operation('task_update', { id: task.id, expectedVersion: task.version,
+        title: value('title'), description: value('description'), acceptanceCriteria: value('acceptanceCriteria'), status: value('status') });
       saved();
     } catch (error) {
       const isConflict = error instanceof OperationError && error.code === 'VERSION_CONFLICT';
@@ -633,7 +644,7 @@ function EditorDialog({ editor, name, usages, resources, close, saved, failed, r
       <div className="dialog-header"><h2 id="editor-title">{title}</h2>
         <button type="button" className="close-button" aria-label={t("关闭编辑窗口")} disabled={saving} onClick={close}>×</button></div>
       <div className="form-body">
-        {isTask ? <>
+        <>
           {task && <div className="task-discussion">
             <div className="task-discussion-action"><span className="subtle">{t("已保存版本 v")}{task.version}</span>
               <button type="button" className="secondary" aria-describedby="task-native-help"
@@ -650,18 +661,13 @@ function EditorDialog({ editor, name, usages, resources, close, saved, failed, r
           </div>}
           <label>{t("任务说明")}<textarea name="description" rows={3} maxLength={20000} defaultValue={task?.description} /></label>
           <label>{t("验收条件")}<textarea name="acceptanceCriteria" rows={3} maxLength={20000} defaultValue={task?.acceptanceCriteria} /></label>
-          {task && <div className="field-info"><span>{t("资源")}</span><span>{related.length ? related.join(locale === 'en' ? ', ' : '、') : t("暂无活跃资源声明")}</span></div>}
-        </> : <>
-          <label>{t("资源名称")}<input ref={first} name="name" required maxLength={500} defaultValue={resource?.name} /></label>
-          <label>{t("资源说明")}<textarea name="description" rows={3} maxLength={20000} defaultValue={resource?.description} /></label>
-          <label>{t("使用约定")}<textarea name="accessNotes" rows={3} maxLength={20000} defaultValue={resource?.accessNotes} /></label>
-          <p className="form-note">{t("说明访问和共享条件，请勿填写密码、密钥或订阅凭据。")}</p>
-        </>}
+          {task && <div className="field-info"><span>{t("历史资源")}</span><span>{related.length ? related.join(locale === 'en' ? ', ' : '、') : t("暂无活跃资源声明")}</span></div>}
+        </>
         {error && <div className="error dialog-error" role="alert"><span>{error}</span>
           {conflict && <button type="button" disabled={saving} onClick={() => void reloadLatest()}>{t("载入最新内容")}</button>}</div>}
       </div>
       <div className="dialog-actions"><button type="button" className="secondary" onClick={close} disabled={saving}>{t("取消")}</button>
-        <button type="submit" className="primary" disabled={saving || conflict}>{saving ? t("正在保存…") : item ? t("保存修改") : isTask ? t("创建任务") : t("添加资源")}</button></div>
+        <button type="submit" className="primary" disabled={saving || conflict}>{saving ? t("正在保存…") : t("保存修改")}</button></div>
     </form>
   </dialog>;
 }
