@@ -33,6 +33,17 @@ export const collaboratorSchemas = {
     enabled: z.boolean(),
   }).strict(),
 };
+/** Read-only admission snapshot for the native pool overview path. It never
+ * creates the table or writes; a sidecar without collaborators is an empty
+ * snapshot, not an error. */
+export function readCollaboratorSnapshot(path: string): Collaborator[] {
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    db.exec('PRAGMA busy_timeout=5000;');
+    if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='external_collaborators'").get()) return [];
+    return db.prepare('SELECT data FROM external_collaborators ORDER BY id').all().map(row => JSON.parse(String(row.data)) as Collaborator);
+  } finally { db.close(); }
+}
 export class CollaboratorStore {
   readonly db: DatabaseSync;
   constructor(path: string) {

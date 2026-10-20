@@ -84,6 +84,22 @@ export function overviewFacts(source?: OverviewSource, now = Date.now()): Overvi
   count('organization.total', nativeTotal !== null && admittedTotal !== null ? nativeTotal + admittedTotal : null,
     'Non-retired native bindings plus admitted external collaborators, both deduplicated; membership evidence, not executing activity',
     nativeTotal !== null && admittedTotal !== null ? 'runtime.workers + runtime.collaborators.admission' : 'unavailable');
+  // Admissions include historical seats. A separate fact counts only the
+  // externally reported cohort, without changing the legacy admission total.
+  const nativeIds = new Set(workers.map(w => w.id));
+  const admissions = new Map((source?.collaborators ?? []).filter(c => c.enabled && !c.revokedAt && !nativeIds.has(c.id)).map(c => [c.id, c]));
+  const reported = (source?.statusFacts ?? []).filter(row => admissions.has(row.memberId) && !nativeIds.has(row.memberId));
+  const reportedBindings = new Set(reported.map(row => {
+    const admitted = admissions.get(row.memberId)!;
+    return JSON.stringify([admitted.harness, admitted.sessionRef || admitted.id]);
+  }));
+  const reportedSummary = aggregateStatusFacts(reported, now);
+  const reportsCertain = Object.values(reportedSummary.groups).every(g => g.unknown === 0 && g.stale === 0);
+  const hasCoverage = source?.collaborators !== undefined
+    && (admissions.size === 0 || (source.statusFacts !== undefined && reported.length > 0));
+  count('organization.observed-members', nativeTotal !== null && hasCoverage && reportsCertain ? nativeTotal + reportedBindings.size : null,
+    'Non-retired native bindings plus current fact-classified external reports with active admissions; deduplicated by identity and harness/session. Unreported admissions excluded; this is the observed cohort, not a complete census or proof of health. Any unknown or stale report makes this total unknown',
+    'runtime.workers + overview_status_facts + runtime.collaborators.admission');
   for (const group of ['native', 'external']) items.push({ id: `${group}.model`, kind: 'model', value: null, source: 'unavailable', scope: 'Harness labels and admission metadata are not actual model evidence' });
   if (status) {
     const groups = Object.entries(status.groups).sort(([a], [b]) => (a < b ? -1 : 1));
