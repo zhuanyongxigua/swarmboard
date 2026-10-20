@@ -55,6 +55,8 @@
 | `notification_pending` | 增量读取**自己**未结算的投递（`after`/`limit` 有界），只返回 `entryIds` 与状态；内容仍要通过 `context_read` 读取，由成员自行决定是否行动 |
 | `notification_receipt` | 只对自己某条 `sequence` 确认消费/未消费；未消费保持 `unknown` 且不得重放；弃用属宿主/操作者动作，不开放给成员 |
 
+**外部通道要收到空闲恢复提醒，必须声明 `boardWide: true`**：提醒是定向给内部池 worker 的，外部 collaborator 不是池成员，逐成员匹配不会命中，只有板级 opt-in 才接收。这是当前实现的真实行为，已由端到端合同测试固定。
+
 三条都在服务层再次校验身份与范围（`NotificationService`），不信任入参：`memberId`/`sessionRef`/`taskIds` 一律与正式准入记录比对。注册不等于启动、通知到达不等于执行或完成。
 
 ## 持久路径
