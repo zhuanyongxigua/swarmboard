@@ -11,6 +11,7 @@ const english: Record<string, string> = {
   "最少成员不能大于最多成员。": "Minimum members cannot exceed maximum members.",
   "成员配置已更新，草稿已保留。请重新读取并核对后保存。": "Member settings changed. Your draft is preserved. Reload and review before saving.",
   "成员上下限已保存。人数调整将在安全边界完成。": "Member bounds saved. Membership changes will finish at a safe boundary.",
+  "成员上下限已保存，但最新状态读取失败，请重新读取核对。": "Member bounds were saved, but the latest state could not be read. Reload and verify.",
   "成员配置未保存，请重试。": "Member settings were not saved. Please retry.",
   "当前目标人数": "Current target members",
   "收缩会等待在途工作安全收尾，保留会话与历史。": "Reduction waits for active work to finish safely and preserves sessions and history.",

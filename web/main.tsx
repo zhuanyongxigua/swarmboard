@@ -1,4 +1,4 @@
-import { SettingsDialog } from './settings-dialog.js';
+import { SettingsDialog, type SettingsPool } from './settings-dialog.js';
 import { locale, t } from './i18n.js';
 import type { AutomationConfig } from '../src/automation.js';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -328,16 +328,17 @@ function Workspace() {
   const autoUnavailable = Boolean(automation?.desiredEnabled && nativeUnavailable);
   const autoError = automationError || (automation?.state === 'error' ? automation.lastError : '');
   async function refreshSettings() { const cursor = board?.cursor; const latest = await refresh(); await ensureAutomation(true); await readRuntimeAndOverview(); if (!latest || latest.cursor === cursor) setSettingsRefresh(value => value + 1); }
-  async function saveCapacity(minSize: number, maxSize: number, expectedVersion: number, onSaved?: () => void) {
+  async function saveCapacity(minSize: number, maxSize: number, expectedVersion: number, onSaved?: (pool: SettingsPool) => void) {
     const pool = eventRuntime?.pool;
     if (!pool?.workspacePath || poolOperation.current) throw new Error(t('正在更新成员，请稍候。'));
     poolOperation.current = true; setPoolBusy(true);
     try {
-      await operation('pool_capacity', { minSize, maxSize, expectedVersion });
-      // The POST is authoritative: adopt its version before the refresh so the
-      // SettingsDialog draft effect cannot mistake our own confirmed revision
-      // for a concurrent edit and raise a false conflict.
-      onSaved?.();
+      const updated = await operation<NonNullable<RuntimeStatus['pool']> & SettingsPool>('pool_capacity', { minSize, maxSize, expectedVersion });
+      // The POST is authoritative: adopt its returned Pool before the refresh so
+      // the dialog keeps the confirmed revision and the next save cannot reuse
+      // an older expectedVersion, even when the follow-up read fails.
+      if (updated) setEventRuntime(current => current ? { ...current, pool: updated } : current);
+      onSaved?.(updated);
       try { await readRuntimeAndOverview(); }
       catch (failure) {
         const detail = failure instanceof Error && failure.message ? ' ' + failure.message : '';

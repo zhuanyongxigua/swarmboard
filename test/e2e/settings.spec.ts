@@ -75,6 +75,31 @@ test('capacity save reports a saved value separately from a failed refresh', asy
   await expect(page.getByText('成员配置未保存，请重试。', { exact: true })).toHaveCount(0);
 });
 
+test('capacity reuses the confirmed POST version when the refresh failed', async ({ page }) => {
+  const pool = { id: 'synthetic', workspacePath: '/synthetic', taskIds: [], size: 4, minSize: 2, maxSize: 8, version: 3, enabled: true, state: 'active', error: '' };
+  let posts = 0; const calls: Record<string, unknown>[] = [];
+  await page.route('**/api/runtime', route => posts > 0
+    ? route.fulfill({ status: 503, json: { error: { code: 'RUNTIME_UNAVAILABLE', message: 'Synthetic runtime read failed' } } })
+    : route.fulfill({ json: { mode: 'events', pool, workers: [] } }));
+  await page.route('**/api/preferences', route => route.fulfill({ json: { boardId: 'fixture', text: '', version: 0, source: null, updatedAt: null } }));
+  await page.route('**/api/user-prompt', route => route.fulfill({ json: { boardId: 'fixture', text: '', version: 0, source: null, updatedAt: null } }));
+  await page.route('**/api/pool/capacity', route => {
+    calls.push(route.request().postDataJSON()); posts++;
+    if (posts === 1) return route.fulfill({ json: { ...pool, minSize: 1, maxSize: 5, version: 4 } });
+    return route.fulfill({ status: 409, json: { error: { code: 'VERSION_CONFLICT', message: 'conflict' } } });
+  });
+  await page.goto('/'); await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByLabel('最少成员', { exact: true }).fill('1'); await page.getByLabel('最多成员', { exact: true }).fill('5');
+  await page.getByRole('button', { name: '保存成员上下限' }).click();
+  await expect(page.getByText('成员上下限已保存。人数调整将在安全边界完成。', { exact: true })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: '最新状态读取失败' })).toBeVisible();
+  await page.getByLabel('最多成员', { exact: true }).fill('6');
+  await page.getByRole('button', { name: '保存成员上下限' }).click();
+  expect(calls[1]).toMatchObject({ minSize: 1, maxSize: 6, expectedVersion: 4 });
+  await expect(page.getByRole('alert').filter({ hasText: '草稿已保留' })).toBeVisible();
+  await expect(page.getByLabel('最多成员', { exact: true })).toHaveValue('6');
+});
+
 test('capacity validates bounds, uses the current revision, and preserves the draft after a conflict', async ({ page }) => {
   let pool = { id: 'synthetic', workspacePath: '/synthetic', taskIds: [], size: 4, minSize: 2, maxSize: 8, version: 3, enabled: true, state: 'active', error: '' };
   await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'events', pool, workers: [] } }));

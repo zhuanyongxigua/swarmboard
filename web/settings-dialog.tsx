@@ -3,7 +3,7 @@ import { t } from './i18n.js';
 
 export type SettingsPool = { workspacePath?: string; taskIds?: string[]; size: number; minSize?: number; maxSize?: number; version: number };
 export function SettingsDialog({ pool, saveCapacity, refresh, close, children }: {
-  pool: SettingsPool | null; saveCapacity: (min: number, max: number, expectedVersion: number, onSaved?: () => void) => Promise<void>;
+  pool: SettingsPool | null; saveCapacity: (min: number, max: number, expectedVersion: number, onSaved?: (pool: SettingsPool) => void) => Promise<void>;
   refresh: () => Promise<void>; close: () => void; children: React.ReactNode;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -24,6 +24,8 @@ export function SettingsDialog({ pool, saveCapacity, refresh, close, children }:
   }, []);
   useEffect(() => {
     if (!pool || pool.version === revision) return;
+    // Never roll a confirmed save back to an older prop/read snapshot.
+    if (revision !== undefined && pool.version < revision) return;
     if (dirty) { setConflict(true); setError(t('成员配置已更新，草稿已保留。请重新读取并核对后保存。')); }
     else { setMin(String(pool.minSize ?? 1)); setMax(String(pool.maxSize)); setRevision(pool.version); }
   }, [pool, revision, dirty]);
@@ -35,7 +37,7 @@ export function SettingsDialog({ pool, saveCapacity, refresh, close, children }:
     }
     if (lower > upper) { setError(t('最少成员不能大于最多成员。')); return; }
     busy.current = true; setSaving(true); setError(''); setNotice('');
-    try { await saveCapacity(lower, upper, revision, () => { setDirty(false); setConflict(false); }); setDirty(false); setNotice(t('成员上下限已保存。人数调整将在安全边界完成。')); }
+    try { await saveCapacity(lower, upper, revision, confirmed => { setRevision(confirmed.version); setMin(String(confirmed.minSize ?? 1)); setMax(String(confirmed.maxSize ?? '')); setDirty(false); setConflict(false); }); setDirty(false); setNotice(t('成员上下限已保存。人数调整将在安全边界完成。')); }
     catch (failure) {
       if ((failure as { saved?: boolean })?.saved) {
         // The POST already committed; a later runtime read failed. Keep the
