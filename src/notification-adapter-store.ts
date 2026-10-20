@@ -75,6 +75,13 @@ export class NotificationAdapterStore {
       .run(JSON.stringify(receipt), adapterId, memberId, receipt.sequence);
   }
 
+  /** Next strictly-increasing sequence number to assign for one channel member. */
+  nextSequence(adapterId: string, memberId: string): number {
+    const row = this.db.prepare('SELECT MAX(sequence) AS value FROM notification_deliveries WHERE adapterId=? AND memberId=?')
+      .get(adapterId, memberId) as unknown as { value: number | null } | undefined;
+    return (row?.value ?? 0) + 1;
+  }
+
   /** Latest intent for one channel member, and how it reconciles with its receipt. */
   reconcile(adapterId: string, memberId: string): { intent: DeliveryIntent | null; state: DeliveryState | null } {
     const row = this.db.prepare('SELECT intent, receipt FROM notification_deliveries WHERE adapterId=? AND memberId=? ORDER BY sequence DESC LIMIT 1')

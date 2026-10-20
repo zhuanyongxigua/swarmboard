@@ -10,6 +10,7 @@ import { resolveHarness } from './harness/registry.js';
 import { workerPrompt } from './worker-prompt.js';
 import { WorkerPool } from './worker-pool.js';
 import { PoolLiveness } from './pool-liveness.js';
+import { createNotificationDispatcher } from './notification-dispatch.js';
 import { PipelineEvents, type PipelineReader } from './pipeline-events.js';
 import { ExecutionGrants } from './execution-grants.js';
 import { CollaboratorStore } from './collaborators.js';
@@ -34,6 +35,7 @@ export class EventRuntime {
   readonly grants: ExecutionGrants;
   readonly collaborators: CollaboratorStore;
   private liveness: PoolLiveness;
+  private notificationDispatcher: ReturnType<typeof createNotificationDispatcher>;
   private scanning?: Promise<void>;
   private token = randomUUID();
   private watcher?: FSWatcher;
@@ -61,7 +63,11 @@ export class EventRuntime {
     this.pool = new WorkerPool(this.workers, board, options.databasePath);
     this.grants = new ExecutionGrants(board, this.workers);
     this.collaborators = new CollaboratorStore(this.statePath);
-    this.liveness = new PoolLiveness(board, this.workers, options.idleMs ?? 5 * 60 * 1000);
+    // Reminders are also offered to registered notification channels as durable
+    // intents; the core never delivers or starts anything itself.
+    this.notificationDispatcher = createNotificationDispatcher(board);
+    this.liveness = new PoolLiveness(board, this.workers, options.idleMs ?? 5 * 60 * 1000,
+      entry => { this.notificationDispatcher.dispatch(entry); });
     this.ci = new PipelineEvents(board, this.workers, options.pipelineReader, options.now, () => !this.closed && this.workers.owns(this.token));
   }
   start() {

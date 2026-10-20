@@ -37,6 +37,14 @@
 
 **一个适配器异常不影响其他通道**：非法声明只让该通道记 `invalid-registration`，其余通道照常解析。
 
+## 与内核的最小接线
+
+`src/notification-dispatch.ts` 把"已注册通道"接到真实发布路径上：运行时每次发布**空闲恢复提醒**时，都会按注册表解析收件人，并为每个命中的 `(adapter, member)` 落一条 `sequence` 递增的持久意图。
+
+- 内核只写看板数据库：**不投递、不拉起任何 harness、不启动模型回合**；已注册适配器自己消费意图并回执。
+- 未注册、停用、范围不符、参考型证据一律不产生意图（原因码同投递决策）。
+- 目前只有恢复提醒接入该分发；其余系统事件仍走原有的面板发布，后续可按同一入口扩展。
+
 ## 持久路径
 
 `src/notification-adapter-store.ts` 把上述状态落到看板同一 SQLite 文件（`notification_adapters`、`notification_deliveries` 两张表）：

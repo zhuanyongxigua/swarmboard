@@ -17,7 +17,10 @@ export interface Liveness {
   pending: Omit<Entry, 'id' | 'createdAt'> | null;
 }
 export class PoolLiveness {
-  constructor(private board: Store, private workers: WorkerStore, private idleMs: number) {}
+  constructor(private board: Store, private workers: WorkerStore, private idleMs: number,
+    /** Called with each published recovery reminder so registered notification
+     *  channels can enqueue a durable intent. Never used to start work. */
+    private onSystemEntry?: (entry: Entry) => void) {}
   private tasks(pool: Pool) { return this.board.taskStates().filter(t => !pool.taskIds.length || pool.taskIds.includes(t.id)); }
   sync(pool: Pool | null, now: number, queuedOrBusy: boolean, awaitingGoalIds: string[] = []) {
     if (!pool) return;
@@ -61,7 +64,8 @@ export class PoolLiveness {
     }
     if (value.pending) {
       if (!this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(value.pending.agentId)) this.board.registerAgent({ agentId: value.pending.agentId, name: 'Swarmboard runtime' });
-      this.board.publishSystemEntryOnce(value.pending);
+      const published = this.board.publishSystemEntryOnce(value.pending);
+      this.onSystemEntry?.(published);
       value = { ...value, pending: null };
     }
     this.workers.saveLiveness(value);
