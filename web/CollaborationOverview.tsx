@@ -10,7 +10,7 @@ export interface OverviewFact {
 export interface OverviewSnapshot {
   status: 'missing' | 'current' | 'stale' | 'unavailable'; reason: string | null;
   record: null | { boardId: string; version: number; authorId: string; updatedAt: string; expiresAt: string;
-    preferencesVersion: number; factsRevision: string; factSnapshot?: OverviewFact[];
+    preferencesVersion: number; userPromptVersion?: number; factsRevision: string; factSnapshot?: OverviewFact[];
     parts: ({ kind: 'text'; text: string } | { kind: 'fact'; factId: string })[] };
   facts: { revision: string; observedAt: string; available: boolean; items: OverviewFact[] };
 }

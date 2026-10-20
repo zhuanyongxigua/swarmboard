@@ -160,3 +160,39 @@ test('settings persist both prompt fields and capacity through real HTTP and SQL
     await runtime.close(); store.close(); rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('a delayed old overview response cannot revive current after a user-prompt write', async ({ page }) => {
+  const board = { tasks: [], resources: [], agents: [], usages: [], entries: [], cursor: 0 };
+  const pool = { id: 'synthetic', workspacePath: '/synthetic', taskIds: [], size: 4, minSize: 2, maxSize: 8, version: 3, enabled: true, state: 'active', error: '' };
+  await page.route('**/api/board', route => route.fulfill({ json: board }));
+  await page.route('**/api/runtime', route => route.fulfill({ json: { mode: 'events', pool, workers: [] } }));
+  await page.route('**/api/pool/configure', route => route.fulfill({ json: { ...pool, size: 5, version: 4 } }));
+  const prompt = (text: string, version: number) => ({ boardId: 'fixture', text, version, source: 'human-input', updatedAt: null });
+  let user = prompt('U', 0);
+  await page.route('**/api/preferences', route => route.fulfill({ json: prompt('S', 1) }));
+  await page.route('**/api/user-prompt', route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: user });
+    const input = route.request().postDataJSON(); user = { ...prompt(input.text, 1), source: input.source };
+    return route.fulfill({ json: user });
+  });
+  const overview = (status: 'current' | 'stale') => ({ status, reason: status === 'current' ? null : 'USER_PROMPT_CHANGED',
+    record: { boardId: 'fixture', version: 1, authorId: 'a', updatedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 600000).toISOString(),
+      preferencesVersion: 1, userPromptVersion: 0, factsRevision: 'r', factSnapshot: [], parts: [{ kind: 'text', text: 'Synthetic overview' }] },
+    facts: { revision: 'r', observedAt: new Date().toISOString(), available: true, items: [] } });
+  let calls = 0; let releaseSecond: (() => void) | undefined;
+  await page.route('**/api/overview', async route => {
+    calls++;
+    if (calls === 2) { await new Promise<void>(resolve => { releaseSecond = () => { void route.fulfill({ json: overview('current') }); resolve(); }; }); return; }
+    return route.fulfill({ json: calls >= 3 ? overview('stale') : overview('current') });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '增加成员', exact: true }).click();
+  for (let i = 0; i < 100 && !releaseSecond; i++) await page.waitForTimeout(10);
+  expect(releaseSecond).toBeTruthy();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByLabel('用户提示词内容', { exact: true }).fill('changed');
+  await page.getByRole('button', { name: '保存用户提示词', exact: true }).click();
+  await expect(page.getByText('用户提示词已保存。', { exact: true })).toBeVisible();
+  releaseSecond!(); await page.waitForTimeout(50);
+  await expect(page.getByRole('region', { name: '协作概览', exact: true })).toHaveAttribute('data-overview-state', 'stale');
+});

@@ -105,6 +105,7 @@ async function operation<T>(name: UiOperation, args: Record<string, unknown> = {
 }
 function readUserPrompt() { return operation<Preferences>('user_prompt_read'); }
 function writeUserPrompt(input: PreferenceWrite) { return operation<Preferences>('user_prompt_write', input); }
+
 function readPreferences() { return operation<Preferences>('preferences_read'); }
 function writePreferences(input: PreferenceWrite) { return operation<Preferences>('preferences_write', input); }
 function RichText({ value }: { value: string }) {
@@ -153,6 +154,16 @@ function Workspace() {
     overviewRead.current++;
     setOverview(current => current?.record && current.record.preferencesVersion !== value.version
       ? { ...current, status: 'stale', reason: 'preferences-changed' } : current);
+    void readRuntimeAndOverview().catch(() => {});
+    return value;
+  }
+  async function saveUserPrompt(input: PreferenceWrite) {
+    const value = await writeUserPrompt(input);
+    // A confirmed user-prompt change invalidates the prior overview immediately;
+    // an older in-flight overview read cannot restore it after this point.
+    overviewRead.current++;
+    setOverview(current => current?.record && (current.record.userPromptVersion ?? 0) !== value.version
+      ? { ...current, status: 'stale', reason: 'user-prompt-changed' } : current);
     void readRuntimeAndOverview().catch(() => {});
     return value;
   }
@@ -483,7 +494,7 @@ function Workspace() {
     </main>
     {settingsOpen && <SettingsDialog pool={eventRuntime?.pool ?? null} saveCapacity={saveCapacity} refresh={refreshSettings} close={() => setSettingsOpen(false)}>
       <PreferencesEditor read={readPreferences} write={savePreferences} refreshKey={settingsRefresh + (board?.cursor ?? 0)} kind="system" />
-      <PreferencesEditor read={readUserPrompt} write={writeUserPrompt} refreshKey={settingsRefresh + (board?.cursor ?? 0)} kind="user" />
+      <PreferencesEditor read={readUserPrompt} write={saveUserPrompt} refreshKey={settingsRefresh + (board?.cursor ?? 0)} kind="user" />
       <details className="legacy-resources" open={expandedResource !== null}><summary>{t('原资源记录')}</summary>
         <p className="subtle">{t('原资源与使用声明原样保留，只读查看；不会自动转为用户提示词。')}</p>
         {board ? <ResourcePool board={board} usages={usages} name={name} stale={stale} expanded={expandedResource}
