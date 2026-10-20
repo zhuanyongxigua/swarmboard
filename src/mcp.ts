@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { AppError, Store, schemas } from './store.js';
 import { automationSchemas, buildSetupPrompt } from './automation.js';
 import { workerSchemas, poolSchemas, type WorkerStore } from './worker-store.js';
-import { collaboratorSchemas, type CollaboratorStore } from './collaborators.js';
+import { collaboratorSchemas, type Collaborator, type CollaboratorStore } from './collaborators.js';
 import { pipelineSchema, type PipelineEvents } from './pipeline-events.js';
 import type { EventRuntime } from './event-runtime.js';
 import { overviewWriteSchema, readOverview, writeOverview, type OverviewSource } from './overview.js';
@@ -35,7 +35,7 @@ const notificationRegistrationSchema = z.object({
     boardWide: z.boolean().optional(),
   }).strict()).min(1).max(1),
 }).strict();
-export function createMcpServer(store: Store, widgetPath: string, runtime?: EventRuntime, options: { poolMember?: boolean; collaborator?: boolean; sharedUpdates?: () => unknown; mayAct?: () => boolean; peers?: WorkerStore; workerId?: string; collaborators?: CollaboratorStore; collaboratorId?: string; ci?: PipelineEvents; overviewSource?: () => OverviewSource | undefined } = {}) {
+export function createMcpServer(store: Store, widgetPath: string, runtime?: EventRuntime, options: { poolMember?: boolean; collaborator?: boolean; sharedUpdates?: () => unknown; mayAct?: () => boolean; peers?: WorkerStore; workerId?: string; collaborators?: CollaboratorStore; collaboratorId?: string; ci?: PipelineEvents; overviewSource?: () => OverviewSource | undefined; overviewAdmissions?: () => Collaborator[] } = {}) {
   const bounded = !!options.poolMember || !!options.collaborator;
   // Preferences are user data. A bounded connection needs a current positive
   // authorization check, even when reading through an existing board tool.
@@ -50,7 +50,7 @@ export function createMcpServer(store: Store, widgetPath: string, runtime?: Even
   };
   const overviewSource = (): OverviewSource | undefined => {
     const base = options.overviewSource?.() ?? (runtime ? { ...runtime.status(), ownerEpoch: runtime.workers.ownerEpoch() } : undefined) ?? (options.peers ? {
-      owner: options.peers.owner(), ownerEpoch: options.peers.ownerEpoch(), pool: options.peers.pool(), workers: options.peers.list(), collaborators: options.collaborators?.list(),
+      owner: options.peers.owner(), ownerEpoch: options.peers.ownerEpoch(), pool: options.peers.pool(), workers: options.peers.list(), collaborators: options.overviewAdmissions ? options.overviewAdmissions() : options.collaborators?.list(),
     } : undefined);
     return base === undefined ? undefined : { ...base, statusFacts: store.readOverviewStatusFacts() };
   };
