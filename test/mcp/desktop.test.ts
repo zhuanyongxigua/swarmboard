@@ -66,6 +66,8 @@ describe('portable desktop plugin', () => {
     try {
       const names = (await client.listTools()).tools.map(t => t.name);
       for (const name of ['task_create','resource_create','resource_update','pool_configure','pool_control']) expect(names).not.toContain(name);
+      const overview = await call<{ facts: { items: { id: string; value: number | null }[] } }>(client, 'overview_read');
+      expect(overview.facts.items.find(f => f.id === 'organization.observed-members')?.value).toBe(1);
       expect(names).toEqual(expect.arrayContaining(['pipeline_watch','peer_request']));
       const spoof = await client.callTool({name:'context_publish',arguments:{agentId:'other-peer',taskId:goal.id,kind:'CLAIM',summary:'Impersonation'}});
       expect(spoof.isError).toBe(true);expect(JSON.stringify(spoof.content)).toContain('BOUND_IDENTITY');

@@ -33,6 +33,18 @@ export const collaboratorSchemas = {
     enabled: z.boolean(),
   }).strict(),
 };
+/** Read-only admission snapshot for the native pool overview path. It never
+ * creates the table or writes; a sidecar without collaborators is an empty
+ * snapshot, not an error. */
+export function readCollaboratorSnapshot(path: string): Collaborator[] {
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    return db.prepare('SELECT data FROM external_collaborators ORDER BY id').all().map(row => JSON.parse(String(row.data)) as Collaborator);
+  } catch (error) {
+    if (error instanceof Error && /no such table/i.test(error.message)) return [];
+    throw error;
+  } finally { db.close(); }
+}
 export class CollaboratorStore {
   readonly db: DatabaseSync;
   constructor(path: string) {
