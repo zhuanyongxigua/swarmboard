@@ -92,14 +92,35 @@ export class NotificationService {
     };
   }
 
-  /** Confirm consumption of one of the caller's own deliveries. */
-  receipt(collaboratorId: string, sequence: number, consumed: boolean): { sequence: number; consumed: boolean } {
+  /**
+   * Confirm consumption of one of the caller's own deliveries.
+   *
+   * `consumedEntryIds` must echo the entries the caller actually processed. A
+   * busy channel can merge more entries into an unconfirmed delivery after the
+   * caller polled it; without the echo that late entry would be settled as
+   * delivered without ever being seen. A mismatch is rejected so the caller
+   * re-polls and processes the current batch.
+   */
+  receipt(collaboratorId: string, sequence: number, consumed: boolean, consumedEntryIds?: readonly number[]): { sequence: number; consumed: boolean; entryIds: number[] } {
     this.admitted(collaboratorId);
     if (!Number.isSafeInteger(sequence) || sequence < 1) throw new AppError('VALIDATION_ERROR', 'Invalid delivery sequence', 400);
     if (typeof consumed !== 'boolean') throw new AppError('VALIDATION_ERROR', 'consumed must be a boolean', 400);
     const mine = this.adapters.unsettled().find(item => item.intent.memberId === collaboratorId && item.intent.sequence === sequence);
     if (!mine) throw new AppError('DELIVERY_NOT_FOUND', 'No unsettled delivery with that sequence for this collaborator', 404);
+    const current = [...mine.intent.entryIds];
+    if (consumed) {
+      if (!Array.isArray(consumedEntryIds)) {
+        throw new AppError('VALIDATION_ERROR', 'A confirming receipt must echo the consumed entry ids', 400);
+      }
+      const echoed = [...new Set(consumedEntryIds)].sort((a, b) => a - b);
+      const expected = [...new Set(current)].sort((a, b) => a - b);
+      if (echoed.length !== expected.length || echoed.some((id, index) => id !== expected[index])) {
+        // The batch grew after the caller polled it: refuse rather than settle
+        // an entry the caller never saw.
+        throw new AppError('STALE_DELIVERY_VIEW', 'Delivery contents changed since this read; poll pending again before confirming', 409);
+      }
+    }
     this.adapters.recordReceipt(mine.intent.adapterId, collaboratorId, { sequence, consumed });
-    return { sequence, consumed };
+    return { sequence, consumed, entryIds: current };
   }
 }

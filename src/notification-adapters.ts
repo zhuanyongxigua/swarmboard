@@ -256,8 +256,15 @@ export function resolveNotificationTargets(entry: Entry, adapters: readonly Noti
 
 /** True for the runtime's idle-recovery reminder, which is a public board signal. */
 export function isIdleReminder(entry: Entry): boolean {
-  return typeof entry.agentId === 'string' && entry.agentId.startsWith('runtime-') &&
-    typeof entry.summary === 'string' && entry.summary.startsWith('IDLE_RECOVERY');
+  if (typeof entry.agentId !== 'string' || !entry.agentId.startsWith('runtime-')) return false;
+  // Prefer the structured marker so a reworded summary cannot change routing.
+  if (typeof entry.detail === 'string') {
+    try {
+      const detail: unknown = JSON.parse(entry.detail);
+      if (typeof detail === 'object' && detail !== null && (detail as { kind?: unknown }).kind === 'IDLE_RECOVERY') return true;
+    } catch { /* fall back to the summary prefix for older records */ }
+  }
+  return typeof entry.summary === 'string' && entry.summary.startsWith('IDLE_RECOVERY');
 }
 
 /**

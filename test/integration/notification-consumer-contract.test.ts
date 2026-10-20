@@ -97,7 +97,7 @@ describe('external notification consumer contract', () => {
     expect(channels.unsettled()).toHaveLength(1);
 
     // Confirming consumption clears it and opens the next sequence.
-    restarted.receipt(f.admitted.id, first.items[0]!.sequence, true);
+    restarted.receipt(f.admitted.id, first.items[0]!.sequence, true, afterRestart.items[0]!.entryIds);
     expect(restarted.pending(f.admitted.id).items).toHaveLength(0);
   });
 

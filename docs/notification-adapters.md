@@ -55,7 +55,7 @@
 | --- | --- |
 | `notification_register` | 只登记**调用者自己**：`members` 必须恰为本人 `memberId` 且 `sessionRef` 与准入一致；`taskIds` 必须是当前准入范围的子集（越界报 `SCOPE_VIOLATION`）。替换需严格更大的 `version` |
 | `notification_pending` | 增量读取**自己**未结算的投递（`after`/`limit` 有界），只返回 `entryIds` 与状态；内容仍要通过 `context_read` 读取，由成员自行决定是否行动 |
-| `notification_receipt` | 只对自己某条 `sequence` 确认消费/未消费；未消费保持 `unknown` 且不得重放；弃用属宿主/操作者动作，不开放给成员 |
+| `notification_receipt` | 只对自己某条 `sequence` 确认消费/未消费。**确认时必须回显 `entryIds`**：忙时合并可能在你读完后又追加条目，回显不一致会被拒（`STALE_DELIVERY_VIEW`），需重新 `notification_pending` 再确认——避免把没看见的条目静默记为已投递。未消费保持 `unknown` 且不得重放；弃用属宿主/操作者动作，不开放给成员 |
 
 **空闲恢复提醒是公开信号，不靠 `boardWide` 截获**：提醒条目上的 `recipientId` 只用于轮换内部池唤醒，不代表地址语义；`resolveReminderTargets` 会把它投给**每个已启用、已准入的登记成员**（无需 `boardWide`、无需订阅该任务）。反过来说，`boardWide` **永远不能绕过收件人隔离**：任何带 `recipientId` 且不是本人的事件，即使同任务或开了 `boardWide`，也一律不投。
 

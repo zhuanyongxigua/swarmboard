@@ -57,8 +57,9 @@ describe('notification service identity and scope', () => {
     expect(first.hasMore).toBe(false);
     expect(f.service.pending(f.me.id, first.cursor).items).toHaveLength(0);
     expect(f.service.pending(f.me.id).items.every(item => item.memberId === f.me.id)).toBe(true);
-    // Once the first delivery is confirmed, the next one becomes visible.
-    f.service.receipt(f.me.id, 1, true);
+    // Once the first delivery is confirmed (echoing what it saw), the next one
+    // becomes visible.
+    f.service.receipt(f.me.id, 1, true, [10]);
     channels.recordIntent({ adapterId: 'chan-me', memberId: f.me.id, sequence: 2, entryIds: [11], createdAt: new Date(0).toISOString() });
     expect(f.service.pending(f.me.id, 1).items.map(item => item.sequence)).toEqual([2]);
   });
@@ -69,10 +70,29 @@ describe('notification service identity and scope', () => {
     channels.save({ id: 'chan-me', version: 1, displayName: 'Mine', harness: 'anything', enabled: true, capabilities: ['durableDelivery', 'receipt'], members: [{ memberId: f.me.id, sessionRef: f.me.sessionRef, taskIds: [f.taskA] }] });
     channels.recordIntent({ adapterId: 'chan-me', memberId: f.me.id, sequence: 1, entryIds: [10], createdAt: new Date(0).toISOString() });
     expect(() => f.service.receipt(f.me.id, 2, true)).toThrow(/No unsettled delivery/);
-    expect(f.service.receipt(f.me.id, 1, false)).toEqual({ sequence: 1, consumed: false });
+    expect(f.service.receipt(f.me.id, 1, false)).toMatchObject({ sequence: 1, consumed: false });
     expect(f.service.pending(f.me.id).items[0]).toMatchObject({ sequence: 1, state: 'unknown', reason: 'unconfirmed' });
-    expect(f.service.receipt(f.me.id, 1, true)).toEqual({ sequence: 1, consumed: true });
+    expect(() => f.service.receipt(f.me.id, 1, true)).toThrow(/must echo the consumed entry ids/);
+    expect(() => f.service.receipt(f.me.id, 1, true, [999])).toThrow(/contents changed/);
+    expect(f.service.receipt(f.me.id, 1, true, [10])).toMatchObject({ sequence: 1, consumed: true });
     expect(f.service.pending(f.me.id).items).toHaveLength(0);
+  });
+
+  it('rejects a confirming receipt whose echo is stale after a busy merge (P1-B)', () => {
+    const f = fixture();
+    const channels = new NotificationAdapterStore(f.board.db);
+    channels.save({ id: 'chan-me', version: 1, displayName: 'Mine', harness: 'anything', enabled: true, capabilities: ['durableDelivery', 'receipt'], members: [{ memberId: f.me.id, sessionRef: f.me.sessionRef, taskIds: [f.taskA] }] });
+    channels.recordIntent({ adapterId: 'chan-me', memberId: f.me.id, sequence: 1, entryIds: [10], createdAt: new Date(0).toISOString() });
+    // The caller polls [10]...
+    const polled = f.service.pending(f.me.id).items[0]!;
+    expect(polled.entryIds).toEqual([10]);
+    // ...then a busy merge appends entry 11 to the same sequence.
+    channels.appendEntries('chan-me', f.me.id, 1, [11]);
+    // Confirming only what it saw is refused instead of silently settling 11.
+    expect(() => f.service.receipt(f.me.id, 1, true, [10])).toThrow(/contents changed/);
+    // Re-polling shows the merged batch, and confirming that closes it.
+    expect(f.service.pending(f.me.id).items[0]!.entryIds).toEqual([10, 11]);
+    expect(f.service.receipt(f.me.id, 1, true, [10, 11])).toMatchObject({ consumed: true, entryIds: [10, 11] });
   });
 
   it('rejects malformed paging input', () => {

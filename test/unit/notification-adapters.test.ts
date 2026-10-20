@@ -144,6 +144,12 @@ describe('public idle reminder targeting', () => {
   it('recognises the runtime reminder as a public signal', () => {
     expect(isIdleReminder(reminder)).toBe(true);
     expect(isIdleReminder(entry({ kind: 'MESSAGE' }))).toBe(false);
+    // The structured marker wins even if the summary wording changes.
+    const structured = entry({ kind: 'MESSAGE', agentId: 'runtime-pool-1', summary: 'renamed wording', detail: '{"kind":"IDLE_RECOVERY"}' });
+    expect(isIdleReminder(structured)).toBe(true);
+    // A peer-authored runtime agent cannot appear (server-bound identity), but a
+    // plain runtime observation without the marker is not a reminder.
+    expect(isIdleReminder(entry({ kind: 'OBSERVED', agentId: 'runtime-pool-1', summary: 'OTHER' }))).toBe(false);
   });
 
   it('reaches every registered member without boardWide or a task subscription', () => {

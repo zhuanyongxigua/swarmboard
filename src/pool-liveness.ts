@@ -50,7 +50,7 @@ export class PoolLiveness {
         value = { ...value, attempts: value.attempts + 1, idleSince: null, state: 'nudged', pending: {
           agentId: 'runtime-' + pool.id, kind: 'MESSAGE',
           summary: 'IDLE_RECOVERY: inspect stranded human goals and continue useful work',
-          detail: JSON.stringify({ signalId: randomUUID(), unfinishedGoalCount: tasks.filter(t => ['todo', 'in_progress'].includes(t.status)).length,
+          detail: JSON.stringify({ kind: 'IDLE_RECOVERY', signalId: randomUUID(), unfinishedGoalCount: tasks.filter(t => ['todo', 'in_progress'].includes(t.status)).length,
             goalIds: tasks.filter(t => ['todo', 'in_progress'].includes(t.status)).slice(0, 20).map(t => t.id),
             goalIdsHasMore: tasks.filter(t => ['todo', 'in_progress'].includes(t.status)).length > 20,
             discovery: 'Use task_list pages to discover current goals; these IDs are only a bounded sample. This reminder assigns no goal or order.',
