@@ -87,7 +87,7 @@ export function overviewFacts(source?: OverviewSource, now = Date.now()): Overvi
   // Admissions include historical seats. A separate fact counts only the
   // externally reported cohort, without changing the legacy admission total.
   const nativeIds = new Set(workers.map(w => w.id));
-  const admissions = new Map((source?.collaborators ?? []).filter(c => c.enabled && !c.revokedAt).map(c => [c.id, c]));
+  const admissions = new Map((source?.collaborators ?? []).filter(c => c.enabled && !c.revokedAt && !nativeIds.has(c.id)).map(c => [c.id, c]));
   const reported = (source?.statusFacts ?? []).filter(row => admissions.has(row.memberId) && !nativeIds.has(row.memberId));
   const reportedBindings = new Set(reported.map(row => {
     const admitted = admissions.get(row.memberId)!;

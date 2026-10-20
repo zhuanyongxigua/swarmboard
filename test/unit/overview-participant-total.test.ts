@@ -26,6 +26,7 @@ describe('observed organization membership', () => {
     source.collaborators!.push(admission('alias', 'arbitrary-a', 'session-a'), admission('native'), { ...admission('revoked'), revokedAt: new Date(now).toISOString() });
     source.statusFacts!.push(row('alias'), row('native'), row('revoked'));
     expect(total(source)).toBe(3);
+    expect(total({ workers: source.workers, collaborators: [admission('native')], statusFacts: [row('native')] })).toBe(1);
   });
   it('does not turn unknown, expired or unreported external coverage into a complete total', () => {
     expect(total({ ...base(), statusFacts: [] })).toBeNull();
