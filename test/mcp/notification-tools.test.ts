@@ -68,6 +68,8 @@ it('refuses a receipt echo that does not match the current batch', async () => {
   channels.appendEntries('synthetic', me.id, 1, [11]);
   const mismatch = await call(client, 'notification_receipt', { sequence: 1, consumed: true, entryIds: [10] });
   expect(mismatch.isError).toBe(true);
+  // The machine-readable error code stays visible to programmatic consumers.
+  expect(String((mismatch.content as { type: string; text?: string }[] | undefined)?.[0]?.text ?? '')).toContain('STALE_DELIVERY_VIEW');
   const confirmed = await call(client, 'notification_receipt', { sequence: 1, consumed: true, entryIds: [10, 11] });
   expect(confirmed.isError).toBeFalsy();
 });

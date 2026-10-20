@@ -228,7 +228,17 @@ export class EventRuntime {
     try { await this.scanning; } finally { this.scanning = undefined; }
   }
   private async scanOnce() {
-    if (this.closed || !this.hasWorkers() || !this.workers.acquire(this.token, process.pid)) return;
+    // Ownership belongs to the live owner even on a board with no native
+    // workers: registered external channels still need their events dispatched.
+    if (this.closed || !this.workers.acquire(this.token, process.pid)) return;
+    if (!this.hasWorkers()) {
+      try {
+        this.notificationDispatcher.dispatchPending();
+      } catch {
+        this.lastError = 'Unable to dispatch notifications; next scan will retry';
+      }
+      return;
+    }
     clearTimeout(this.batchWake); this.nextBatchWakeAt = null;
     await this.ci.poll(this.options.now?.() ?? Date.now());
     if (this.closed || !this.workers.owns(this.token)) return;

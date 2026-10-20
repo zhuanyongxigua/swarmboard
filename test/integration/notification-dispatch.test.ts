@@ -41,6 +41,30 @@ const registration = (memberId: string, patch: Partial<NotificationAdapterRegist
   ...patch,
 });
 
+describe('external-only board (no native workers)', () => {
+  it('still dispatches registered channels during scan', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'swarmboard-notify-only-'));
+    const path = join(dir, 'board.sqlite');
+    const board = new Store(path);
+    const runtime = new EventRuntime(board, { notificationBatchMs: 0, databasePath: path, serverEntry: 'unused', now: () => 1000,
+      adapter: () => ({ open: async w => w.threadId ?? 'thread-' + w.id, run: async () => {}, close: async () => {} }) });
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }), () => board.close(), async () => { await runtime.close(); });
+    // No pool and no native workers: the board is external-collaboration only.
+    const goal = board.createTask({ title: 'External goal' });
+    board.registerAgent({ agentId: 'peer-x', name: 'Peer X' });
+    const me = runtime.collaborators.configure({ expectedVersion: 0, name: 'external', harness: 'anything', sessionRef: 'sess-1', taskIds: [goal.id], enabled: true }, board).collaborator;
+    board.registerAgent({ agentId: me.id, name: 'External' });
+    const channels = new NotificationAdapterStore(board.db);
+    channels.save({ id: 'synthetic', version: 1, displayName: 'Synthetic', harness: 'anything', enabled: true, capabilities: ['durableDelivery', 'receipt'], members: [{ memberId: me.id, sessionRef: 'sess-1', taskIds: [goal.id] }] });
+    const directed = board.publishEntry({ kind: 'MESSAGE', agentId: 'peer-x', summary: 'hello', detail: '', recipientId: me.id, taskId: goal.id });
+    expect(runtime.hasWorkers()).toBe(false);
+    await runtime.scan();
+    const unsettled = channels.unsettled();
+    expect(unsettled).toHaveLength(1);
+    expect(unsettled[0]!.intent.entryIds).toEqual([directed.id]);
+  });
+});
+
 describe('reminder dispatch to registered notification channels', () => {
   it('records one durable intent for the addressed member and skips disabled channels', async () => {
     const f = fixture(); await f.settle();
