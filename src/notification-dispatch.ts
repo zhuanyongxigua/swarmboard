@@ -21,6 +21,8 @@ export interface NotificationDispatcher {
   dispatch(entry: Entry): DeliveryResolution;
   /** Offer each channel the entries after its own floor (bounded). */
   dispatchPending(limit?: number): number;
+  /** Cancel a member's unsettled deliveries after revocation/disable. */
+  cancelMember(memberId: string, note: string): number;
   /** Currently registered channels, for status output. */
   adapters(): ReturnType<NotificationAdapterStore['list']>;
 }
@@ -110,6 +112,7 @@ export function createNotificationDispatcher(board: Store, collaborators?: Colla
 
   return {
     adapters: () => store.list(),
+    cancelMember: (memberId: string, note: string) => store.cancelMember(memberId, note),
     dispatchPending(limit = 200): number {
       const adapters = store.list();
       if (!adapters.length) return 0;

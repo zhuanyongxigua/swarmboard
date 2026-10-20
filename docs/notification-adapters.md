@@ -63,6 +63,11 @@
 
 三条都在服务层再次校验身份与范围（`NotificationService`），不信任入参：`memberId`/`sessionRef`/`taskIds` 一律与正式准入记录比对。注册不等于启动、通知到达不等于执行或完成。
 
+## 撤销与清理
+
+- **撤销/停用即取消排队**：运行时通过 host 路径 `configureCollaborator` 把身份置为 disabled 或 revoked 时，会将该成员所有**未结算**投递结算为 `abandoned`（附 `collaborator-revoked`/`collaborator-disabled` 备注）。之后既不会再投递，也无法再被 `notification_receipt` 确认；重新准入的身份从下一个序号开始。
+- 旧的全局水位表 `notification_dispatch_progress` 在发布前即被 per-adapter `notification_adapter_floor` 取代，打开数据库时会 `DROP IF EXISTS` 清理，不留无人读取的残表。
+
 ## 持久路径
 
 `src/notification-adapter-store.ts` 把上述状态落到看板同一 SQLite 文件（`notification_adapters`、`notification_deliveries` 两张表）：

@@ -26,6 +26,8 @@ export class NotificationAdapterStore {
       CREATE TABLE IF NOT EXISTS notification_deliveries(adapterId TEXT NOT NULL, memberId TEXT NOT NULL, sequence INTEGER NOT NULL, intent TEXT NOT NULL, receipt TEXT, PRIMARY KEY(adapterId, memberId, sequence));
       CREATE TABLE IF NOT EXISTS notification_dispatched(entryId INTEGER NOT NULL, adapterId TEXT NOT NULL, memberId TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(entryId, adapterId, memberId));
       CREATE TABLE IF NOT EXISTS notification_adapter_floor(adapterId TEXT PRIMARY KEY, through INTEGER NOT NULL);
+      -- Superseded by per-adapter floors before release; safe to drop on open.
+      DROP TABLE IF EXISTS notification_dispatch_progress;
     `);
   }
 
@@ -120,6 +122,22 @@ export class NotificationAdapterStore {
   /** Advance one adapter floor; never moves backwards. */
   advanceAdapterFloor(adapterId: string, through: number): void {
     this.db.prepare('INSERT INTO notification_adapter_floor(adapterId, through) VALUES(?,?) ON CONFLICT(adapterId) DO UPDATE SET through=MAX(through, excluded.through)').run(adapterId, through);
+  }
+
+  /**
+   * Cancel every unsettled delivery for one member, e.g. when the collaborator
+   * is revoked or disabled. Cancelled deliveries are settled as abandoned so
+   * they can never be confirmed or replayed afterwards.
+   */
+  cancelMember(memberId: string, note: string): number {
+    const rows = this.db.prepare('SELECT adapterId, sequence FROM notification_deliveries WHERE memberId=? AND receipt IS NULL')
+      .all(memberId) as unknown as { adapterId: string; sequence: number }[];
+    for (const row of rows) {
+      const receipt: AdapterReceipt & { note?: string } = { sequence: row.sequence, consumed: false, abandoned: true, note };
+      this.db.prepare('UPDATE notification_deliveries SET receipt=? WHERE adapterId=? AND memberId=? AND sequence=?')
+        .run(JSON.stringify(receipt), row.adapterId, memberId, row.sequence);
+    }
+    return rows.length;
   }
 
   /** Drop a claim so a failed dispatch can be retried instead of wedging it. */

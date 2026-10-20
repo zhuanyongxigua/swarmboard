@@ -142,6 +142,11 @@ export class EventRuntime {
   // their scoped record for the collaborator MCP role.
   configureCollaborator(input: unknown) {
     const { collaborator } = this.collaborators.configure(input, this.board);
+    // Revocation/disable cancels queued notifications instead of leaving them to
+    // be delivered (or confirmed) after the identity lost its admission.
+    if (!collaborator.enabled || collaborator.revokedAt) {
+      this.notificationDispatcher.cancelMember(collaborator.id, collaborator.revokedAt ? 'collaborator-revoked' : 'collaborator-disabled');
+    }
     // The sidecar commit and the board registration are separate stores. If an
     // earlier attempt committed the record but failed before registering, any
     // later successful configure — including a same-id retry after a restart —

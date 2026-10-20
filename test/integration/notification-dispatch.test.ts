@@ -41,6 +41,30 @@ const registration = (memberId: string, patch: Partial<NotificationAdapterRegist
   ...patch,
 });
 
+describe('collaborator revocation cancels queued notifications', () => {
+  it('drops unsettled deliveries when the admitted identity is revoked', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'swarmboard-notify-revoke-'));
+    const path = join(dir, 'board.sqlite');
+    const board = new Store(path);
+    const runtime = new EventRuntime(board, { notificationBatchMs: 0, databasePath: path, serverEntry: 'unused', now: () => 1000,
+      adapter: () => ({ open: async w => w.threadId ?? 'thread-' + w.id, run: async () => {}, close: async () => {} }) });
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }), () => board.close(), async () => { await runtime.close(); });
+    const goal = board.createTask({ title: 'Revocation goal' });
+    board.registerAgent({ agentId: 'peer-x', name: 'Peer X' });
+    const me = runtime.collaborators.configure({ expectedVersion: 0, name: 'external', harness: 'anything', sessionRef: 'sess-1', taskIds: [goal.id], enabled: true }, board).collaborator;
+    board.registerAgent({ agentId: me.id, name: 'External' });
+    const channels = new NotificationAdapterStore(board.db);
+    channels.save({ id: 'synthetic', version: 1, displayName: 'Synthetic', harness: 'anything', enabled: true, capabilities: ['durableDelivery', 'receipt'], members: [{ memberId: me.id, sessionRef: 'sess-1', taskIds: [goal.id] }] });
+    board.publishEntry({ kind: 'MESSAGE', agentId: 'peer-x', summary: 'queued', detail: '', recipientId: me.id, taskId: goal.id });
+    await runtime.scan();
+    expect(channels.unsettled()).toHaveLength(1);
+    // Revocation through the runtime host path cancels what is still queued.
+    runtime.configureCollaborator({ id: me.id, expectedVersion: me.version, name: 'external', harness: 'anything', sessionRef: 'sess-1', taskIds: [goal.id], enabled: false });
+    expect(channels.unsettled()).toHaveLength(0);
+    expect(channels.pendingIntent('synthetic', me.id)).toBeNull();
+  });
+});
+
 describe('external-only board (no native workers)', () => {
   it('still dispatches registered channels during scan', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'swarmboard-notify-only-'));

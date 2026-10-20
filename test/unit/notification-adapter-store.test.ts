@@ -118,3 +118,19 @@ describe('durable notification channel state', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
+
+describe('revocation cancellation', () => {
+  it('settles a member pending deliveries as abandoned so they cannot be confirmed', () => {
+    const store = new NotificationAdapterStore(new DatabaseSync(':memory:'));
+    store.recordIntent(intent(1));
+    expect(store.pendingIntent('synthetic-alpha', 'member-1')).not.toBeNull();
+    expect(store.cancelMember('member-1', 'collaborator-revoked')).toBe(1);
+    // Nothing stays pending, and a confirmation has nothing to act on.
+    expect(store.pendingIntent('synthetic-alpha', 'member-1')).toBeNull();
+    expect(store.unsettled()).toHaveLength(0);
+    expect(store.reconcile('synthetic-alpha', 'member-1').state).toEqual({ state: 'abandoned', sequence: 1 });
+    // The next sequence is free again for a re-admitted identity.
+    expect(store.nextSequence('synthetic-alpha', 'member-1')).toBe(2);
+    expect(store.cancelMember('member-1', 'again')).toBe(0);
+  });
+});
