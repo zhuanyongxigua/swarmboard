@@ -40,18 +40,79 @@ describe('collaboration overview', () => {
   for (const status of ['stale', 'unavailable'] as const) it(`marks the whole report as previous with its own values when ${status}`,  () => {
     const value = snapshot(); value.status = status; value.facts.items[0]!.value = 9;
     const html = render(value); expect(html).toContain('Start with the source');
-    expect(html).toContain('上次概览'); expect(html).toContain('>3<'); expect(html).not.toContain('>9<');
+    expect(html).not.toContain('上次概览'); expect(html).not.toContain('Previous overview');
+    expect(html).toContain(`data-overview-state="${status}"`);
+    expect(html).toContain('title="协作概览不是最新"');
+    expect(html).not.toContain('title="协作概览已过期"');
+    expect(html).toContain('>3<'); expect(html).not.toContain('>9<');
     expect(html.includes('role="alert"')).toBe(status === 'unavailable');
   });
   it('marks expired claims as previous before the next transport read without hiding useful context', () => {
     const value = snapshot(); value.record!.expiresAt = new Date(Date.now() - 1).toISOString();
-    expect(render(value)).toContain('Start with the source'); expect(render(value)).toContain('上次概览');
-    expect(render(value)).toContain('>3<'); expect(render(value)).not.toContain('正常工作回合');
+    const html = render(value); expect(html).toContain('Start with the source');
+    expect(html).not.toContain('上次概览'); expect(html).toContain('data-overview-state="expired"');
+    expect(html).toContain('title="协作概览已过期"');
+    expect(html).toContain('>3<'); expect(html).not.toContain('正常工作回合');
+  });
+  it('separates missing, unavailable-without-record, future-dated stale/unavailable and malformed expiry', () => {
+    const missing = snapshot(); missing.record = null; missing.status = 'missing'; missing.facts.available = false;
+    let html = render(missing);
+    expect(html).toContain('data-overview-state="missing"');
+    expect(html).toContain('title="协作情况未知"');
+    expect(html).not.toContain('title="协作概览已过期"'); expect(html).not.toContain('title="协作概览不是最新"');
+
+    const unavailable = snapshot(); unavailable.record = null; unavailable.status = 'unavailable';
+    html = render(unavailable);
+    expect(html).toContain('data-overview-state="unavailable"');
+    expect(html).toContain('title="协作情况未知"');
+    expect(html).toContain('role="alert"');
+
+    for (const status of ['stale', 'unavailable'] as const) {
+      const value = snapshot(); value.status = status;
+      value.record!.expiresAt = new Date(Date.now() + 60000).toISOString();
+      html = render(value);
+      expect(html).toContain(`data-overview-state="${status}"`);
+      expect(html).toContain('title="协作概览不是最新"');
+      expect(html).not.toContain('title="协作概览已过期"');
+    }
+
+    const malformed = snapshot(); malformed.status = 'stale'; malformed.record!.expiresAt = 'not-a-date';
+    html = render(malformed);
+    expect(html).toContain('data-overview-state="stale"');
+    expect(html).toContain('title="协作概览不是最新"');
+    expect(html).not.toContain('title="协作概览已过期"');
+  });
+  it('never promotes a current snapshot with an invalid expiry to current', () => {
+    const value = snapshot(); value.status = 'current'; value.facts.available = true;
+    value.facts.items[0]!.value = 9; value.record!.expiresAt = 'not-a-date';
+    const html = render(value);
+    expect(html).toContain('data-overview-state="stale"');
+    expect(html).not.toContain('data-overview-state="current"');
+    expect(html).toContain('>3<'); expect(html).not.toContain('>9<');
+    expect(html).toContain('title="协作概览不是最新"');
+    expect(html).not.toContain('title="协作概览已过期"');
+  });
+  it('renders a null snapshot conservatively without a fixed prefix', () => {
+    const html = render(null);
+    expect(html).toContain('data-overview-state="missing"');
+    expect(html).toContain('协作情况未知');
+    expect(html).not.toContain('上次概览'); expect(html).not.toContain('Previous overview');
   });
   it('does not reconstruct missing legacy historical values from current facts', () => {
     const value = snapshot(); value.status = 'stale'; delete value.record!.factSnapshot;
-    const html = render(value); expect(html).toContain('上次概览'); expect(html).toContain('Start with the source');
+    const html = render(value); expect(html).not.toContain('上次概览'); expect(html).toContain('data-overview-state="stale"');
+    expect(html).toContain('Start with the source');
     expect(html.match(/未知/g)).toHaveLength(2); expect(html).not.toContain('>3<');
+  });
+  it('never renders the removed fixed previous-overview prefix in any freshness state', () => {
+    const value = snapshot();
+    for (const status of ['current', 'stale', 'unavailable', 'missing'] as const) {
+      value.status = status;
+      const html = render(value);
+      expect(html).not.toContain('上次概览'); expect(html).not.toContain('Previous overview');
+    }
+    expect(render(snapshot())).toContain('data-overview-state="current"');
+    expect(render(snapshot())).not.toContain('title="协作概览已过期"');
   });
   it('has no fallback organization template or personal sample when no overview exists', () => {
     const value = snapshot(); value.status = 'missing'; value.record = null; value.facts.available = false;

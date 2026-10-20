@@ -84,7 +84,8 @@ test('progress, preferences and capacity controls coexist without losing each ot
     await page.getByRole('button', { name: '保存偏好', exact: true }).click();
     await expect(page.getByLabel('当前保存的偏好')).toContainText('v1');
     await expect(overview).toContainText('Synthetic overview chosen for this fixture');
-    await expect(overview).toContainText('上次概览');
+    await expect(overview).not.toHaveAttribute('data-overview-state', 'current');
+    await expect(overview).not.toContainText('上次概览');
     await expect(overview.locator('strong')).toHaveText(['2', '未知']);
     const preferences = await (await request.get(`${server.url}/api/preferences`)).json();
     expect(preferences).toMatchObject({ text: 'Synthetic user expectation', source: 'main-chat-relay', version: 1 });
@@ -119,7 +120,8 @@ test('progress, preferences and capacity controls coexist without losing each ot
     await expect(page.getByLabel('Preference text', { exact: true })).toHaveValue('');
     const previousOverview = page.getByRole('region', { name: 'Collaboration overview', exact: true });
     await expect(previousOverview).toContainText('Synthetic overview chosen for this fixture');
-    await expect(previousOverview).toContainText('Previous overview:');
+    await expect(previousOverview).not.toHaveAttribute('data-overview-state', 'current');
+    await expect(previousOverview).not.toContainText('Previous overview:');
     await expect(previousOverview.locator('strong')).toHaveText(['2', 'Unknown']);
     expect(await (await request.get(`${server.url}/api/preferences`)).json()).toMatchObject({ text: '', version: 2 });
     expect((await readTask()).progress).toEqual(originalProgress);
