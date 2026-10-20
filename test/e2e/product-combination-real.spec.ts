@@ -30,9 +30,7 @@ test('progress, preferences and capacity controls coexist without losing each ot
   runtime.workers.savePool({ ...pool, memberIds });
   const server = await startServer({ port: 0, store, runtime });
   try {
-    const resourceResponse = await request.post(`${server.url}/api/resources`, { data: { name: 'Synthetic combined resource', accessNotes: 'Synthetic sharing agreement' } });
-    expect(resourceResponse.ok()).toBe(true);
-    const resource = await resourceResponse.json();
+    const resource = store.createResource({ name: 'Synthetic combined resource', accessNotes: 'Synthetic sharing agreement' });
     const taskResponse = await request.post(`${server.url}/api/tasks`, { data: { title: 'Synthetic combined task' } });
     expect(taskResponse.ok()).toBe(true);
     let task = await taskResponse.json();

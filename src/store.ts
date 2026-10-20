@@ -49,6 +49,11 @@ export type TaskSummary = Omit<Task, 'description' | 'acceptanceCriteria' | 'pro
 export interface Resource { id: string; name: string; kind: string; description: string; capabilities: string[]; accessNotes: string; version: number; createdAt: string; updatedAt: string }
 export interface Agent { id: string; name: string; lastSeenAt: string }
 export interface Preferences { boardId: string; text: string; source: typeof preferenceSources[number] | null; version: number; updatedAt: string | null }
+// Keep archived rows readable without treating them as current configuration.
+export const resourceDefinitions = { source: 'userPrompt', legacyFields: ['resources', 'usages'], coordination: 'context_publish' } as const;
+export function rejectLegacyResourceWrite(): never {
+  throw new AppError('LEGACY_RESOURCE_READ_ONLY', 'Resource definitions are in user_prompt_read/user_prompt_write; coordinate usage with context_publish. Legacy records are read-only except resource_release cleanup.', 410);
+}
 export interface PromptSettings { systemPrompt: Preferences; userPrompt: Preferences }
 export interface Entry { id: number; kind: typeof entryKinds[number]; agentId: string; summary: string; detail: string; taskId?: string; resourceId?: string; recipientId?: string; createdAt: string }
 export interface Usage { id: string; resourceId: string; agentId: string; purpose: string; scope: string; sharing: string; taskId?: string; active: boolean; version: number; createdAt: string; updatedAt: string }
@@ -181,7 +186,7 @@ export class Store {
   private checkVersion(actual: number, expected: number) { if (actual !== expected) throw new AppError('VERSION_CONFLICT', 'State changed; read the latest version before retrying', 409); }
   private touch(agentId: string) { this.db.prepare('UPDATE agents SET lastSeenAt = ? WHERE id = ?').run(new Date().toISOString(), agentId); }
   board() {
-    return this.transaction(() => ({ preferences: this.readPreferences(), userPrompt: this.readUserPrompt(), tasks: this.list<Task>('tasks'), resources: this.list<Resource>('resources'), usages: this.list<Usage>('usages'), agents: this.list<Agent>('agents'), entries: this.db.prepare('SELECT * FROM (SELECT * FROM entries ORDER BY id DESC LIMIT 100) ORDER BY id').all().map(row => this.decode('entries', row) as unknown as Entry), cursor: Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor) }));
+    return this.transaction(() => ({ preferences: this.readPreferences(), userPrompt: this.readUserPrompt(), resourceDefinitions, tasks: this.list<Task>('tasks'), resources: this.list<Resource>('resources'), usages: this.list<Usage>('usages'), agents: this.list<Agent>('agents'), entries: this.db.prepare('SELECT * FROM (SELECT * FROM entries ORDER BY id DESC LIMIT 100) ORDER BY id').all().map(row => this.decode('entries', row) as unknown as Entry), cursor: Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor) }));
   }
   readTask(taskId: string): Task { return this.get<Task>('tasks', taskId); }
   // Runtime lifecycle checks need states, never full human requirements or context.
@@ -229,7 +234,7 @@ export class Store {
     return this.transaction(() => {
       const page = this.taskPage({}, subscribedIds);
       const visibility = Store.historyScopeClause(history ?? {});
-      return { preferences: this.readPreferences(), userPrompt: this.readUserPrompt(), tasks: page.items, taskPage: { cursor: page.cursor, hasMore: page.hasMore },
+      return { preferences: this.readPreferences(), userPrompt: this.readUserPrompt(), resourceDefinitions, tasks: page.items, taskPage: { cursor: page.cursor, hasMore: page.hasMore },
         resources: this.list<Resource>('resources'), usages: this.list<Usage>('usages'), agents: this.list<Agent>('agents'),
         entries: this.db.prepare(`SELECT id,kind,agentId,summary,substr(detail,1,1000) AS detail,length(detail)>1000 AS detailTruncated,taskId,resourceId,recipientId,createdAt FROM (SELECT * FROM entries ${visibility ? 'WHERE ' + visibility.clause : ''} ORDER BY id DESC LIMIT 20) ORDER BY id`).all(...(visibility?.values ?? [])).map(row => this.decode('entries', row)),
         cursor: Number((this.db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM entries').get() as {cursor:number}).cursor) };

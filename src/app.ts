@@ -2,7 +2,7 @@ import express, { type ErrorRequestHandler, type Request } from 'express';
 import { timingSafeEqual } from 'node:crypto';
 import type { Server } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { AppError, Store } from './store.js';
+import { AppError, Store, rejectLegacyResourceWrite } from './store.js';
 import { createMcpServer } from './mcp.js';
 import { defaultDatabasePath, defaultWidgetPath } from './paths.js';
 import type { EventRuntime } from './event-runtime.js';
@@ -70,14 +70,14 @@ export function createApp(options: AppOptions = {}) {
   route('patch','/api/tasks/:id/progress',req=>store.writeTaskProgress(String(req.params.id),req.body));
   route('post','/api/tasks/:id/claim',req=>store.claimTask(String(req.params.id),req.body));
   route('post','/api/tasks/:id/release',req=>store.releaseTask(String(req.params.id),req.body));
-  route('post','/api/resources',req=>store.createResource(req.body));
-  route('patch','/api/resources/:id',req=>store.updateResource(String(req.params.id),req.body));
+  route('post','/api/resources',()=>rejectLegacyResourceWrite());
+  route('patch','/api/resources/:id',()=>rejectLegacyResourceWrite());
   route('post','/api/agents',req=>store.registerAgent(req.body));
   route('post','/api/agents/:id/heartbeat',req=>store.heartbeat(String(req.params.id)));
   route('post','/api/entries',req=>store.publishEntry(req.body));
   app.get('/api/entries',(req,res,next)=>{try{res.json(store.readEntries(req.query));}catch(error){next(error);}});
-  route('post','/api/usages',req=>store.declareUsage(req.body));
-  route('patch','/api/usages/:id',req=>store.updateUsage(String(req.params.id),req.body));
+  route('post','/api/usages',()=>rejectLegacyResourceWrite());
+  route('patch','/api/usages/:id',()=>rejectLegacyResourceWrite());
   route('post','/api/usages/:id/release',req=>store.releaseUsage(String(req.params.id),req.body));
   app.post('/mcp',async(req,res,next)=>{
     const mcp = createMcpServer(store,widgetPath,options.runtime);
