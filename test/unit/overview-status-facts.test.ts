@@ -3,7 +3,7 @@
 // facts that keep known numbers when other groups are unknown.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Store } from '../../src/store.js';
-import { overviewFacts, readOverview, writeOverview, type OverviewSource } from '../../src/overview.js';
+import { overviewFacts, overviewPartSchema, readOverview, writeOverview, type OverviewSource } from '../../src/overview.js';
 import { aggregateStatusFacts, registerStatusFact, statusFactInputSchema, statusGroupKey, type StoredStatusFact } from '../../src/overview-status-facts.js';
 
 let store: Store;
@@ -11,6 +11,7 @@ beforeEach(() => { store = new Store(); });
 afterEach(() => { store.close(); });
 
 const NOW = Date.parse('2026-10-20T03:00:00.000Z');
+const overviewWriteText = overviewPartSchema.options[0].shape.text;
 const input = (over: Record<string, unknown> = {}) => ({
   harness: 'zcode', classification: 'fact', activity: 'turn-settled', modelId: 'GLM-5.3',
   asOf: '2026-10-20T02:59:00.000Z', ttlSeconds: 900, ...over,
@@ -180,6 +181,48 @@ describe('overview facts integration', () => {
   it('composes organization.total from native and admission evidence', () => {
     expect(overviewFacts(source(), NOW).items.find(f => f.id === 'organization.total')?.value).toBe(2);
     expect(overviewFacts({ workers: source().workers }, NOW).items.find(f => f.id === 'organization.total')?.value).toBeNull();
+  });
+  it('exposes verified digit-bearing model identities as string facts while text still forbids digits', () => {
+    const facts = overviewFacts(source([executing('a')]), NOW);
+    const nameFact = facts.items.find(f => f.id === 'external.harness.zcode.model-name.GLM-5.3');
+    expect(nameFact).toMatchObject({ kind: 'model', value: 'GLM-5.3' });
+    const countFact = facts.items.find(f => f.id === 'external.harness.zcode.model.GLM-5.3');
+    expect(countFact?.value).toBe(1);
+    // the numeric-text restriction stays: the name is only expressible via the fact
+    expect(() => overviewWriteText.parse('GLM-5.3：协作中')).toThrow();
+  });
+  it('distinct model identities that sanitize alike never collide', () => {
+    const facts = overviewFacts(source([
+      executing('a', { modelId: 'GPT 6.1' }),
+      executing('b', { modelId: 'GPT-6.1' }),
+    ]), NOW);
+    const names = facts.items.filter(f => f.id.startsWith('external.harness.zcode.model-name.')).map(f => f.value);
+    expect(new Set(names).size).toBe(2);
+    expect(names).toContain('GPT 6.1');
+    expect(names).toContain('GPT-6.1');
+  });
+  it('keeps a verified model identity when execution is unconfirmed, without counting it executing', () => {
+    const summary = aggregateStatusFacts([executing('a', { activity: undefined, executionEvidence: undefined, modelId: 'Verified-Model-7' })], NOW);
+    expect(summary.groups.zcode).toMatchObject({ membersTotal: 1, unknown: 1, executing: 0, modelsUnknown: 0 });
+    expect(summary.groups.zcode.models).toEqual([{ modelId: 'Verified-Model-7', count: 1, executing: 0 }]);
+    const facts = overviewFacts(source([executing('a', { activity: undefined, executionEvidence: undefined, modelId: 'Verified-Model-7' })]), NOW);
+    expect(facts.items.find(f => f.id === 'external.harness.zcode.model-name.Verified-Model-7')?.value).toBe('Verified-Model-7');
+    expect(facts.items.find(f => f.id === 'external.harness.zcode.model.Verified-Model-7')?.value).toBe(1);
+  });
+  it('unknown classifications and expired rows never produce verified model facts', () => {
+    const summary = aggregateStatusFacts([
+      executing('a', { classification: 'unknown', activity: undefined, modelId: 'Mystery' }),
+      executing('b', { modelId: 'Old-Model', expiresAt: '2026-10-20T02:00:00.000Z' }),
+    ], NOW);
+    expect(summary.groups.zcode.models).toEqual([]);
+    expect(summary.groups.zcode.modelsUnknown).toBe(0);
+  });
+  it('an AI overview can reference the identity fact end to end', () => {
+    const src = source([executing('a')]);
+    const view = readOverview(store, src, NOW);
+    const written = writeOverview(store, { expectedVersion: 0, factsRevision: view.facts.revision, preferencesVersion: store.readPreferences().version,
+      parts: [{ kind: 'text', text: '正在协作的模型是' }, { kind: 'fact', factId: 'external.harness.zcode.model-name.GLM-5.3' }] }, 'author', src, NOW);
+    expect(written.record?.factSnapshot?.find(f => f.id === 'external.harness.zcode.model-name.GLM-5.3')?.value).toBe('GLM-5.3');
   });
   it('marks an overview stale when a status fact changes after the write', () => {
     const before = readOverview(store, source([executing('a')]), NOW);

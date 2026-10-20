@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { AppError, parse, type Store } from './store.js';
 import { processAlive } from './worker-store.js';
-import { aggregateStatusFacts, statusGroupKey, type StoredStatusFact } from './overview-status-facts.js';
+import { aggregateStatusFacts, modelFactKey, statusGroupKey, type StoredStatusFact } from './overview-status-facts.js';
 
 const explanation = z.string().min(1).max(240).refine(value => !/[\p{N}\p{Cc}\p{Cf}]/u.test(value), 'Use verified fact references for numeric values; explanation cannot contain numbers or control characters');
 export const overviewPartSchema = z.discriminatedUnion('kind', [
@@ -96,7 +96,14 @@ export function overviewFacts(source?: OverviewSource, now = Date.now()): Overvi
       count(`${key}.models-unknown`, g.modelsUnknown, 'Current fact-classified registrations without a model identity; never fabricated', 'overview_status_facts');
       const models = g.models.sort((a, b) => (a.modelId < b.modelId ? -1 : 1)).slice(0, 8);
       truncated = truncated || g.models.length > 8;
-      for (const m of models) items.push({ id: `${key}.model.${m.modelId.replace(/[^A-Za-z0-9_.:-]+/g, '-').slice(0, 60)}`, kind: 'model', value: m.count, source: 'overview_status_facts', scope: `Registered seats reporting this model; currently executing: ${m.executing}` });
+      for (const m of models) {
+        const modelKey = modelFactKey(m.modelId);
+        items.push({ id: `${key}.model.${modelKey}`, kind: 'model', value: m.count, source: 'overview_status_facts', scope: `Registered seats reporting this model; currently executing: ${m.executing}` });
+        // Verified model identities may contain digits (GLM-5.3, GPT-6.1), which
+        // explanation text may not carry: this identity fact is the one legal way
+        // to display the name, keeping the numeric-text restriction intact.
+        items.push({ id: `${key}.model-name.${modelKey}`, kind: 'model', value: m.modelId, source: 'overview_status_facts', scope: 'Verified model identity from current registrations; reference this fact to display the name' });
+      }
     }
     if (groups.length > 12) truncated = true;
     if (truncated) items.push({ id: 'external.status.limits', kind: 'state', value: 'truncated', source: 'overview_status_facts', scope: 'Only the first harness groups and models are listed; unlisted registrations still count in external.running' });

@@ -86,8 +86,11 @@ export function aggregateStatusFacts(rows: StoredStatusFact[], now: number): Sta
       ? evidenceAt !== null && Number.isFinite(evidenceAt) && evidenceAt <= now + CLOCK_SKEW_MS && now - evidenceAt <= EVIDENCE_HARD_BOUND_MS
       : true;
     const activity = evidenceCurrent && row.activity !== undefined && (ACTIVITIES as readonly string[]).includes(row.activity) ? row.activity : null;
-    if (activity === null) { group.unknown++; continue; }
-    if (activity === 'executing') { group.executing++; executing++; }
+    // Execution may be unconfirmed while the model identity is still verified:
+    // model presence is tracked independently of the activity outcome so a
+    // known model is never erased just because execution is unknown.
+    if (activity === null) group.unknown++;
+    else if (activity === 'executing') { group.executing++; executing++; }
     else if (activity === 'turn-settled') group.turnSettled++;
     else group.failed++;
     if (typeof row.modelId === 'string' && row.modelId.length > 0) {
@@ -100,6 +103,15 @@ export function aggregateStatusFacts(rows: StoredStatusFact[], now: number): Sta
   const canonical = rows.map(row => [row.memberId, row.harness, row.classification, row.activity ?? null, row.modelId, row.asOf, row.executionEvidence ? [row.executionEvidence.kind, row.executionEvidence.at] : null, row.evidence ? row.evidence.record : null, row.observedAt, row.expiresAt]).sort();
   return { groups: Object.fromEntries(groups) as Record<string, StatusFactsGroup>, registered: rows.length, executing,
     fingerprint: createHash('sha256').update(JSON.stringify(canonical)).digest('hex') };
+}
+
+/** factId-safe model key: verified model identities can contain digits, dots
+ * and slashes, so sanitization must stay injective the same way group keys
+ * are; two distinct model identities never collide on one factId. */
+export function modelFactKey(modelId: string): string {
+  const sanitized = modelId.replace(/[^A-Za-z0-9_.:-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'model';
+  if (sanitized === modelId && modelId.length <= 60) return sanitized;
+  return `${sanitized}-${createHash('sha256').update(modelId).digest('hex').slice(0, 8)}`;
 }
 
 /** factId-safe group key: groups are data-driven, never a vendor list. Lossy
