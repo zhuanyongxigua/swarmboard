@@ -36,6 +36,7 @@ describe('observed organization membership', () => {
   });
   it('reports a native-only total when the external admission and status channels explicitly contain no members', () => {
     expect(total({ ...base(), collaborators: [], statusFacts: [] })).toBe(1);
+    expect(total({ ...base(), collaborators: [], statusFacts: undefined })).toBe(1);
   });
   it('changes the facts revision when current membership expires', () => {
     expect(overviewFacts(base(), now).revision).not.toBe(overviewFacts(base(), now + 60_000).revision);

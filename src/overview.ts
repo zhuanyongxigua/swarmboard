@@ -95,8 +95,8 @@ export function overviewFacts(source?: OverviewSource, now = Date.now()): Overvi
   }));
   const reportedSummary = aggregateStatusFacts(reported, now);
   const reportsCertain = Object.values(reportedSummary.groups).every(g => g.unknown === 0 && g.stale === 0);
-  const hasCoverage = source?.statusFacts !== undefined && source.collaborators !== undefined
-    && (reported.length > 0 || admissions.size === 0);
+  const hasCoverage = source?.collaborators !== undefined
+    && (admissions.size === 0 || (source.statusFacts !== undefined && reported.length > 0));
   count('organization.observed-members', nativeTotal !== null && hasCoverage && reportsCertain ? nativeTotal + reportedBindings.size : null,
     'Non-retired native bindings plus current fact-classified external reports with active admissions; deduplicated by identity and harness/session. Unreported admissions excluded; this is the observed cohort, not a complete census or proof of health. Any unknown or stale report makes this total unknown',
     'runtime.workers + overview_status_facts + runtime.collaborators.admission');
