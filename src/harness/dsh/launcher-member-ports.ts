@@ -109,6 +109,7 @@ interface BoundPortsOptions {
  * events; isolated tests can supply synthetic authoritative replies and wakes. */
 export function createDshLauncherMemberPorts(options: BoundPortsOptions): DshLauncherMemberPorts {
   const identity = structuredClone(options.identity), goals = structuredClone(options.goalBindings);
+  const { management, member, subscribe, close } = options;
   validate(identity, goals);
   let closed = false, failed = false, epoch = 0;
   let snapshot: { epoch: number; binding: NotificationBinding } | undefined, closing: Promise<void> | undefined;
@@ -117,12 +118,12 @@ export function createDshLauncherMemberPorts(options: BoundPortsOptions): DshLau
     epoch++; snapshot = undefined; failed ||= error;
     for (const listener of listeners) { try { listener(); } catch { failed = true; snapshot = undefined; } }
   };
-  const stop = options.subscribe(() => invalidate(), () => invalidate(true));
+  const stop = subscribe(() => invalidate(), () => invalidate(true));
   if (typeof stop !== 'function') fail('WAKE_UNSUBSCRIBE_REQUIRED');
   const callTool = async (request: { name: string; arguments: Record<string, unknown> }) => {
     if (closed || failed) fail('MEMBER_PORTS_CLOSED');
     if (!request || !tools.has(request.name) || !record(request.arguments)) fail('TOOL_OUTSIDE_MEMBER_PORTS');
-    try { return await options.member.callTool(request); } catch (cause) { invalidate(true); throw cause; }
+    try { return await member.callTool(request); } catch (cause) { invalidate(true); throw cause; }
   };
   const read = async () => readDshLauncherToolResult(await callTool({ name: 'notification_binding_read',
     arguments: { adapterId: identity.adapterId } })).binding;
@@ -158,13 +159,13 @@ export function createDshLauncherMemberPorts(options: BoundPortsOptions): DshLau
       const before = epoch;
       try {
         const first = await read(); if (!valid(first, identity)) return;
-        const initial = authority(await options.management.call('runtime_read'), first); if (!initial) return;
+        const initial = authority(await management.call('runtime_read'), first); if (!initial) return;
         const allowed: string[] = [];
         for (const goal of initial.scope) {
-          const task = await options.management.call('task_read', { id: goal.taskId, limit: 1 });
+          const task = await management.call('task_read', { id: goal.taskId, limit: 1 });
           if (task.id === goal.taskId && ['todo', 'in_progress', 'in_review', 'blocked'].includes(String(task.status))) allowed.push(goal.taskId);
         }
-        const final = authority(await options.management.call('runtime_read'), first);
+        const final = authority(await management.call('runtime_read'), first);
         const second = await read();
         if (!valid(second, identity) || stamp(first) !== stamp(second) || !final || initial.stamp !== final.stamp
           || closed || failed || !allowed.length) return;
@@ -197,21 +198,22 @@ export function createDshLauncherMemberPorts(options: BoundPortsOptions): DshLau
     readPreferences: async () => readDshLauncherToolResult(await callTool({ name: 'preferences_read', arguments: {} })),
     readUserPrompt: async () => readDshLauncherToolResult(await callTool({ name: 'user_prompt_read', arguments: {} })),
     close() { closed = true; epoch++; snapshot = undefined; listeners.clear();
-      closing ??= (async () => { stop(); await options.close(); })(); return closing; },
+      closing ??= (async () => { stop(); await close(); })(); return closing; },
   };
 }
 
 export async function openDshLauncherMemberPorts(options: DshLauncherMemberPortsOptions): Promise<DshLauncherMemberPorts> {
   const identity = structuredClone(options.identity), goals = structuredClone(options.goalBindings);
+  const { channels, boardDatabasePath } = options;
   validate(identity, goals);
-  if (!absolute(options.boardDatabasePath) || options.boardDatabasePath !== options.channels.boardDatabasePath) fail('CHANNEL_BOARD_MISMATCH');
+  if (!absolute(boardDatabasePath) || boardDatabasePath !== channels.boardDatabasePath) fail('CHANNEL_BOARD_MISMATCH');
   let management: DshLauncherToolClient | undefined, member: DshLauncherToolClient | undefined, ports: DshLauncherMemberPorts | undefined;
   try {
-    management = await options.channels.openManagement(); member = await options.channels.openMember(identity.memberId);
+    management = await channels.openManagement(); member = await channels.openMember(identity.memberId);
     ports = createDshLauncherMemberPorts({ identity, goalBindings: goals, management, member,
       subscribe(onWake, onError) {
         const watches: { close(): void }[] = [];
-        try { for (const file of [options.boardDatabasePath, options.boardDatabasePath + '.runtime.sqlite'])
+        try { for (const file of [boardDatabasePath, boardDatabasePath + '.runtime.sqlite'])
           watches.push(watchDshLauncherBoard(file, onWake, onError)); }
         catch (cause) { for (const watcher of watches) watcher.close(); throw cause; }
         return () => { for (const watcher of watches) watcher.close(); };
