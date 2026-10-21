@@ -272,3 +272,23 @@ Cordis 正式插件的 `apply` 返回异步 cleanup effect，不依赖不存在�
 端口逐页读取 pending，并逐个 ID 用完整 `context_read` 精确读取正文；缺失、不可见、截断、重复 ID、异常分页和过期检查信封均停止该批。MCP 的第一段 JSON／`structuredContent` 才是返回值，后附同伴消息不参与解析。所有周期检查都核对当前绑定与目标交集；批次携带可序列化的 `notificationBinding`，异步读取前后均检查绑定。`isCurrent(batch)` 在提交前重新读取当前 pending 和引用事件，允许 driver 已完成覆盖后的合法差量子集；它不提供跨网络 await 与 SDK send 的原子保证，宿主仍必须在实际 send 前同步核对授权并持续持有单写租约。
 
 服务端 `unknown` 直接冻结该 pass，不能因宿主 journal 缺失而当成新工作。`confirm` 仅发送 `consumed: true` 及本批精确完整 ID 集合，保留服务端 `STALE_DELIVERY_VIEW` 等拒绝；已成功回执的响应丢失仍可精确重试。`release` 仅本地延后，不发送负回执、不弃用、不删除未知证据。当前回执 API 的序号不带通道，读到非绑定通道时拒绝，服务端多通道歧义仍须对账，不能猜通道或绕开正式接口。测试 `test/mcp/dsh-notification-port.test.ts` 使用真实 MCP Client/Server 和隔离服务；单独合成分页探针不代表当前服务允许同通道多个未结算序号，亦不代替真实 SDK／宿主安装验收。
+
+### 单一受信宿主组合
+
+`createDshHostPlugin(options)` 是实际交接入口：自动组合正式 `createDshNotificationPort`、事件驱动 runner、SDK plugin，以及宿主 sidecar 中的 session 级 lease（可显式传入已有等价 lease）。它返回可交给官方宿主的 `plugin`、`ready()`、`drain()` 和 `ownedHandles()`。个人配置不再需要自己重写三端口组装代码。
+
+最小外部插件文件由现场操作者放在原受信宿主的插件位置，使用**该次已验收构建**的导出。`privateOptions` 只能由原宿主配置提供，包含原身份／session／cwd、持久 sidecar `db`、官方类型构造、原 model/permission/setup、绑定成员的 `callTool`、当前准入 `getCurrentBinding`、最终同步授权 `isAuthorized`、指令准备、既有通知订阅和错误报告；不能从共享任务文本反序列化这些能力。
+
+```js
+// Mount the reviewed adapter in the existing trusted DSH host without a second scheduler.
+import { createDshHostPlugin } from './verified-plugin/server/harness/dsh/index.mjs';
+import { privateOptions } from './existing-private-host-options.mjs';
+
+const entry = createDshHostPlugin(privateOptions);
+export const { name, inject, apply } = entry.plugin;
+export { entry };
+```
+
+这里只声明挂载入口，不替换原官方 overlay 或 setup。原宿主按既有正式插件加载机制挂载此文件；初始化以 `entry.ready()` 结果为准，不能仅凭进程存活判断成功。停用先停止新通知准入，保留原 SDK、历史和 journal，调用官方卸载或保留的 cleanup；`DSH_HOST_NOT_QUIESCENT` 必须保锁等待安全边界，不能删锁强推迁移。崩溃遗留 owner 必须先对账原 SDK 和 journal，由操作方明确恢复，适配器不会超时抢占。
+
+安装交接顺序为：核精确包及逐文件收据；再核旧宿主在途／unknown 与原会话；保留旧配置及账本备份；在安全边界关闭旧通知准入并挂载新入口；核注册版本、能力及原 session 不变；最后分别观察自然到期、SDK 消费、本回合完成、精确回执和有用贡献。安装、未知对账、注册配置更新和四席实际迁移仍属于现场操作，合成全链测试不会代替这些步骤。

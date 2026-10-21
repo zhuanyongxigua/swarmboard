@@ -18,7 +18,7 @@ it('loads the shipped DSH module independently of the core and source checkout',
     const names = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e',
       'console.log(JSON.stringify(Object.keys(await import(process.argv[1]))))', moduleUrl],
     { cwd: root, encoding: 'utf8' })) as string[];
-    expect(names).toEqual(expect.arrayContaining(['DshLifecycle', 'renderInstructions', 'createDshInstructionBoundary', 'createDshSdkFacade', 'createDshSdkSessionPort', 'driveOnce', 'createDshJournals', 'createDshHostLease', 'createDshHostRunner']));
+    expect(names).toEqual(expect.arrayContaining(['DshLifecycle', 'renderInstructions', 'createDshInstructionBoundary', 'createDshSdkFacade', 'createDshSdkSessionPort', 'driveOnce', 'createDshJournals', 'createDshHostLease', 'createDshHostRunner', 'createDshHostPlugin', 'createDshSdkPlugin', 'createDshNotificationPort']));
     const protocolUrl = pathToFileURL(join(unpacked, 'server/harness/protocol/index.mjs')).href;
     const protocol = execFileSync(process.execPath, ['--input-type=module', '-e',
       'process.stdout.write((await import(process.argv[1])).workerProtocol())', protocolUrl],
