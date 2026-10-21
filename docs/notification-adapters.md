@@ -6,6 +6,68 @@
 
 模块：`src/notification-adapters.ts`（纯函数，无 I/O、不启动进程、不调用模型）。
 
+## DSH 启动控制通道
+
+独立的 `src/harness/dsh/launcher-channels.ts` 导出
+`createDshLauncherChannels({nodeCommand,server:{path,sha256},boardDatabasePath,runtimeDirectory})`。
+构造不连接、不读文件；显式 `openManagement()`、`openMember(memberId)` 才核对
+入口普通文件、规范路径和摘要，并通过官方 MCP SDK 打开 stdio。它是稳定启动入口
+使用的组件，本身不编排人数、创建 session、选择模型或声称实际接入。
+
+- 管理通道仅允许 runtime_read、collaborator_configure、双提示词读取和 task_read。
+  它显式使用 MANAGEMENT_ONLY=1、DISABLE_RUNTIME=0，清空 pool/worker/collaborator
+  选择器；正式服务构造管理接口，但不启动事件运行时、watcher 或 owner。
+  普通成员通道的 DISABLE_RUNTIME=1 不提供正式准入管理工具，不能混用。
+- 成员通道固定当前 memberId，清空 worker 选择器并禁用事件运行时；只开放内部
+  通知接线所需的读取、注册及回执工具。`memberMcpConfig(memberId)` 返回独立
+  官方 MCP plugin config，供模型侧正常加载完整 caller-bound 工具；严格启动，
+  禁止自动重连。管理通道不交给模型。
+- node、服务入口、board 和专属 runtime 路径均显式给出；HOME 指向该 runtime，
+  不复制父环境或凭据。官方 SDK 自己的常规环境继承仍存在；模型 MCP 插件另有
+  官方父环境筛选，不能把显式配置称作完整环境隔离。HARNESS/WIDGET 空覆盖选择
+  core 官方默认及包内资产，避免继承陈旧选择器。
+- 每条连接提供 callTool、解析首个结果信封的 call 和 close；通道只执行调用者
+  明确请求的一次 RPC，不自动准入、注册、创建身份或重试。`collaborator_configure`
+  新建时不接受预分配 memberId；服务返回正式 id，后续绑定按版本更新。
+  编排者必须在写调用之前耐久保存意图，保存回证；未知结果交对账处理。
+- close 拒绝新调用并等待已发出的 RPC 结算，然后关闭自己打开的传输，不释放
+  其他事件 owner、不清历史。工具回执、身份登记、真实 session、进程、ready、
+  消费与有效贡献仍须分别验收。
+
+`test/integration/dsh-launcher-channels.test.ts` 使用本次源码打包的真实 stdio
+服务、隔离 SQLite 和官方客户端核对管理/成员角色、正式新建与注册读回、入口
+pin 变化拒绝、已有 live owner 保持及结果解析；不启动 SDK Agent 或模型。
+
+`openDshLauncherMemberPorts({channels,identity:{memberId,sessionRef,adapterId,cwd},
+boardDatabasePath,goalBindings})` 将该通道组合成实际 child 通知端口，不依赖个人
+legacy config、外置 authority 模块或固定 nativeWorkerId。board 路径必须与
+channels 内固定路径一致；goalBindings 由受信配置显式提供精确 task/pool/
+project/workspace 绑定，cwd 必须落在其中一个授权工作区。多目标可以绑定不同
+工作区；这项启动检查不要求 cwd 同时落在每个目标目录，也不把任一目标的
+目录授权扩展到其他目标。执行具体目标时仍须遵守该目标自己的当前 grant 和
+executionWorkspace，不能仅凭通知范围或会话 cwd 推定其他目录可写。
+身份、目标、board 路径和通道引用在首次 await 前固定，调用者随后改写配置对象
+不会替换正在建立的权限或文件事件来源。
+
+每次读取都重新取得 caller 的 notification_binding_read，并通过管理
+runtime_read 核 pool、正式准入及 grants，通过 task_read 核当前任务状态，随后
+再次核 runtime 和 caller binding。只有双版本、身份、能力、精确 grant 和两次
+范围一致且文件 epoch 稳定时才建立发送快照；合法但期间 epoch 变化最多完整
+重读一次。权限查询不用成员 preferences/task 的共享更新附加块，减少查询自身
+推进协作游标造成的文件失效；它仍不是与远端权限写入原子提交的许可。
+
+正式双提示词通过成员 caller 的 readPreferences/readUserPrompt 读取；这些
+正式读取可能推进共享更新游标，不宣称数据库零写。现有 board/runtime 文件及
+WAL 事件先同步失效发送快照再通知宿主，替换后重绑；错误、撤销、close 或持续
+变化均拒绝，不自动重试发送或回执。isAuthorized 仅作当前快照的同步本地拒绝
+检查，SDK 层仍须核原 Agent 对象和同一单写 lease。close 只关闭本端口打开的
+两个连接和 watcher，须在宿主安全退出后调用。
+
+当前仍沿用硬拒绝语义：持续失效可能让宿主记录 post-ready failed，启动 ready
+不能代表持续健康；不通过吞掉 STALE、无界重查或新增轮询来假装已消费。真实
+接入、消费与有效贡献另行留证。专项测试覆盖双读失效/撤销/范围更改、真实文件
+事件和关闭；不借合成范围结果宣称现场迁移完成。
+
 ## 注册
 
 `NotificationAdapterRegistration`：

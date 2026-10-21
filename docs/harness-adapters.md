@@ -2,6 +2,8 @@
 
 [返回架构说明](architecture.md) · [事件工作会话](event-workers.md)
 
+DSH 的显式可重复启动、人数配置和逐席状态见[DSH cohort 启动入口](dsh-cohort-launcher.md)。
+
 Swarmboard 的协作内核（共享目标/上下文、事件投递、稳定身份、持久检查点、生命周期、容量、空闲恢复、执行授权）不依赖任何具体 harness。会话创建/续接、回合执行、状态核查、审批信号等宿主差异全部放在适配层：内核只面向 `src/harness/contract.ts` 定义的通用契约，正式运行入口通过 `src/harness/registry.ts` 这一唯一装配缝选择后端。
 
 ## 可复用适配器与个人配置边界
@@ -292,3 +294,7 @@ export { entry };
 这里只声明挂载入口，不替换原官方 overlay 或 setup。原宿主按既有正式插件加载机制挂载此文件；初始化以 `entry.ready()` 结果为准，不能仅凭进程存活判断成功。停用先停止新通知准入，保留原 SDK、历史和 journal，调用官方卸载或保留的 cleanup；`DSH_HOST_NOT_QUIESCENT` 必须保锁等待安全边界，不能删锁强推迁移。崩溃遗留 owner 必须先对账原 SDK 和 journal，由操作方明确恢复，适配器不会超时抢占。
 
 安装交接顺序为：核精确包及逐文件收据；再核旧宿主在途／unknown 与原会话；保留旧配置及账本备份；在安全边界关闭旧通知准入并挂载新入口；核注册版本、能力及原 session 不变；最后分别观察自然到期、SDK 消费、本回合完成、精确回执和有用贡献。安装、未知对账、注册配置更新和四席实际迁移仍属于现场操作，合成全链测试不会代替这些步骤。
+
+## DSH 启动时的官方 session 与配置
+
+可复用启动组合使用 [官方 session 准备边界](dsh-session-preparation.md) 中的 create/select、固定收据和 void setup；这些低层函数不代表成员已注册、启动或消费通知，完整入口的编排与现场结果须分别核实。

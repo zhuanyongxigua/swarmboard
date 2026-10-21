@@ -17,10 +17,16 @@ export async function buildHarnessModules(root, destination) {
     if (!info.isFile() || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(entry.name)) {
       throw new Error('Invalid checked-in harness module entry');
     }
+    // Optional public operator/Loader entries use the same portable-source gate
+    // as the module surface; the core service never imports or starts them.
+    for (const [source, output] of [['index.ts', 'index.mjs'], ['launch-cli.ts', 'launch.mjs'], ['launch-child.ts', 'child.mjs']]) {
+    const sourcePath = path.join(directory, entry.name, source);
+    try { if (!(await lstat(sourcePath)).isFile()) throw new Error('Invalid harness public entry'); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
     results.push(await build({
       absWorkingDir: root,
-      entryPoints: [input],
-      outfile: path.join(destination, 'server/harness', entry.name, 'index.mjs'),
+      entryPoints: [sourcePath],
+      outfile: path.join(destination, 'server/harness', entry.name, output),
       bundle: true,
       platform: 'node',
       target: 'node24',
@@ -43,6 +49,7 @@ export async function buildHarnessModules(root, destination) {
         });
       } }],
     }));
+    }
   }
   return results;
 }
