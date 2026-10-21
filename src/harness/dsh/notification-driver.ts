@@ -191,7 +191,7 @@ export async function driveOnce(
     // Work out whether this delivery still owes a model turn: entries that never got an
     // authoritative completion (a later ordinary merge grows the delivery, p2 7237).
     let workBatch: DeliveryBatch = batch;
-    let covered = intent ? coveredOf(intent) : new Set<number>();
+    const covered = intent ? coveredOf(intent) : new Set<number>();
     let deltaOf: DeliveryBatch | undefined;
     // (the enqueued branch below may also set workBatch to a delta and fall through)
     if (intent?.state === 'completedUnacked' || intent?.state === 'acceptedUnacked') {
