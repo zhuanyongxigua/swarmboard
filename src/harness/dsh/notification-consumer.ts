@@ -271,7 +271,14 @@ export async function runPass(input: {
         actions.push({ seat: key, action: 'unknown-delivery', sequence: target.sequence, state: 'unknown' });
         continue;
       }
-      const binding = await input.board.binding(seat);
+      // A port that throws (an async MCP facade rejecting, for example) must not
+      // abort the other seats of this pass: one failing channel stays isolated
+      // (acceptance: a channel failure never stops another channel).
+      let binding: FormalBinding;
+      try { binding = await input.board.binding(seat); } catch (error) {
+        errors.push({ seat: key, step: 'binding', error: String((error as Error)?.message ?? error) });
+        continue;
+      }
       if (!binding.ok) {
         errors.push({ seat: key, step: 'binding', error: `stale-binding:${binding.reason}` });
         continue;
@@ -288,7 +295,11 @@ export async function runPass(input: {
         errors.push({ seat: key, step: 'intent-scope', error: `stale-intent:registration-version:${target.registrationVersion}!=${binding.registrationVersion}` });
         continue;
       }
-      const scope = await input.board.intentCurrent(seat, target);
+      let scope: { ok: boolean; reason?: string };
+      try { scope = await input.board.intentCurrent(seat, target); } catch (error) {
+        errors.push({ seat: key, step: 'intent-scope', error: String((error as Error)?.message ?? error) });
+        continue;
+      }
       if (!scope.ok) {
         errors.push({ seat: key, step: 'intent-scope', error: `stale-scope:${scope.reason ?? 'unknown'}` });
         continue;
@@ -319,7 +330,11 @@ export async function runPass(input: {
       }
       // The round trip crosses an async boundary: re-read authority and scope, then
       // the manual writer, before recording a new send.
-      const hostAfter = await input.board.binding(seat);
+      let hostAfter: FormalBinding;
+      try { hostAfter = await input.board.binding(seat); } catch (error) {
+        errors.push({ seat: key, step: 'host-authz', error: String((error as Error)?.message ?? error) });
+        continue;
+      }
       if (!hostAfter.ok) {
         errors.push({ seat: key, step: 'host-authz', error: `host-authz:changed-during-describe:${hostAfter.reason}` });
         continue;
@@ -330,7 +345,11 @@ export async function runPass(input: {
         errors.push({ seat: key, step: 'host-authz', error: `host-authz:generation-changed:${binding.registrationVersion}->${hostAfter.registrationVersion}` });
         continue;
       }
-      const scopeAfter = await input.board.intentCurrent(seat, target);
+      let scopeAfter: { ok: boolean; reason?: string };
+      try { scopeAfter = await input.board.intentCurrent(seat, target); } catch (error) {
+        errors.push({ seat: key, step: 'intent-scope', error: String((error as Error)?.message ?? error) });
+        continue;
+      }
       if (!scopeAfter.ok) {
         errors.push({ seat: key, step: 'intent-scope', error: `stale-scope:changed-during-describe:${scopeAfter.reason ?? 'unknown'}` });
         continue;
