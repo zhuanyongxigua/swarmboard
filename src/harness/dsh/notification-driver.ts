@@ -48,7 +48,7 @@ export interface DeliveryBatch {
 }
 
 export type SubmitOutcome =
-  | { status: 'enqueued'; detail?: string }
+  | { status: 'enqueued'; messageId?: string; detail?: string }
   | { status: 'completed'; turnId: string; detail?: string }
   | { status: 'unknown'; detail?: string }
   | { status: 'rejected'; detail?: string };
@@ -65,7 +65,8 @@ export interface SessionPort {
   isCurrent(batch: DeliveryBatch): Promise<boolean>;
   isBusy(batch: DeliveryBatch): Promise<boolean>;
   submit(batch: DeliveryBatch, text: string): Promise<SubmitOutcome>;
-  settlement(batch: DeliveryBatch, turnId: string): Promise<DeliverySettlement>;
+  /** Prove that the turn which consumed `messageId` (returned by submit) has completed. */
+  settlement(batch: DeliveryBatch, messageId: string): Promise<DeliverySettlement>;
 }
 
 export type IntentState = 'submitting' | 'unknown' | 'enqueued' | 'completedUnacked' | 'acceptedUnacked';
@@ -227,7 +228,8 @@ export async function driveOnce(
       continue;
     }
     if (outcome.status === 'enqueued') {
-      await ports.journal.put({ key, state: 'enqueued', batch, detail: outcome.detail });
+      // The message/turn id the host will use to prove completion; kept verbatim for settlement.
+      await ports.journal.put({ key, state: 'enqueued', batch, detail: outcome.messageId ?? outcome.detail });
       result.awaitingCompletion.push(key);
       continue;
     }
