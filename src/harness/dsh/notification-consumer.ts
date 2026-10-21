@@ -1,0 +1,413 @@
+// Wake the resident official DSH web session when the board has an unsettled
+// delivery for that channel member.
+//
+// This module is the last hop of the product's own five-minute reminder chain:
+// the board already schedules a per-seat check, publishes a SESSION_TASK_CHECK
+// entry and records a durable delivery. What remains is to deliver that batch
+// into the SAME original session through the official local web API, without
+// creating a session, replaying unknown deliveries or waking a stopped pool.
+//
+// Everything personal (member ids, session refs, ports, database paths, state
+// path) is supplied by an external config. The module has no vendor-specific
+// branch in the core runtime, no timer of its own beyond the delivery poll, and
+// never confirms a receipt on the member's behalf.
+
+import { mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync, closeSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
+
+export const STATE_SCHEMA = 1;
+export const DEFAULT_POLL_MS = 10_000;
+
+export type SeatState = 'sending' | 'accepted' | 'unknown' | 'settled';
+
+export interface SeatConfig {
+  /** The member's registered channel adapter id. */
+  readonly adapterId: string;
+  readonly memberId: string;
+  /** The original session that must be continued, never replaced. */
+  readonly sessionRef: string;
+  /** Local port of the resident official DSH web server for that session. */
+  readonly port: number;
+  /** A manual continuation writer's own record; when unsettled the waker skips. */
+  readonly manualWriterStatePath?: string;
+}
+
+export interface ConsumerConfig {
+  readonly boardDatabasePath: string;
+  readonly runtimeDatabasePath: string;
+  readonly statePath: string;
+  readonly intervalMs?: number;
+  readonly seats: readonly SeatConfig[];
+}
+
+export interface UnsettledDelivery {
+  readonly sequence: number;
+  readonly entryIds: readonly number[];
+  readonly adapterId?: string;
+  readonly sessionRef?: string;
+  readonly registrationVersion?: number;
+}
+
+export interface EntryView {
+  readonly id: number;
+  readonly detail?: string;
+}
+
+export type FormalBinding =
+  | {
+      readonly ok: true;
+      readonly adapterId: string;
+      readonly registrationVersion: number;
+      /** Current member scope (registered generation). */
+      readonly memberTaskIds: readonly string[];
+      /** Current admission scope; undefined means "not restricted by pool tasks". */
+      readonly admissionTaskIds: readonly string[] | undefined;
+    }
+  | { readonly ok: false; readonly reason: string };
+
+export interface BoardPort {
+  unsettled(seat: SeatConfig): readonly UnsettledDelivery[];
+  binding(seat: SeatConfig): FormalBinding;
+  /** Mirrors the delivered NotificationService.currentIntent() predicate. */
+  intentCurrent(seat: SeatConfig, delivery: UnsettledDelivery): { ok: boolean; reason?: string };
+  entries(ids: readonly number[]): readonly EntryView[];
+}
+
+export interface SessionView {
+  readonly found: boolean;
+  readonly running: boolean;
+  readonly asOfSeq: number | null;
+}
+
+export interface TransportPort {
+  describe(seat: SeatConfig): Promise<SessionView>;
+  prompt(seat: SeatConfig, input: { readonly sequence: number; readonly text: string; readonly rpcId: string }): Promise<{ accepted: boolean; rpcId: string }>;
+}
+
+export interface SeatRecord {
+  readonly sequence: number;
+  readonly entryIds: readonly number[];
+  readonly rpcId: string;
+  readonly adapterId: string;
+  readonly registrationVersion: number;
+  readonly sessionRef: string;
+  readonly asOfSeq: number | null;
+  readonly nextSeq: number | null;
+  readonly state: SeatState;
+  readonly at?: string;
+  readonly acceptedAt?: string;
+  readonly settledAt?: string;
+  readonly error?: string;
+}
+
+export interface PassAction {
+  readonly seat?: string;
+  readonly action: string;
+  readonly sequence?: number;
+  readonly rpcId?: string | null;
+  readonly state?: string;
+  readonly manual?: string;
+  readonly adapterId?: string;
+}
+
+export interface PassError {
+  readonly seat: string;
+  readonly step: string;
+  readonly error: string;
+  readonly rpcId?: string;
+}
+
+export interface PassResult {
+  readonly actions: readonly PassAction[];
+  readonly errors: readonly PassError[];
+}
+
+export interface WakerStateShape {
+  schema: number;
+  seats: Record<string, SeatRecord | null>;
+}
+
+const seatKey = (seat: SeatConfig): string => `${seat.memberId}|${seat.sessionRef}`;
+
+const APPLICABLE_STATUSES = ['todo', 'in_progress', 'in_review'] as const;
+
+/** The prompt carries the product instruction that this delivery actually holds. */
+export function promptTextFor({ sequence, entries }: { readonly sequence: number; readonly entries: readonly EntryView[] }): string {
+  const check = entries
+    .map((entry) => {
+      try { return JSON.parse(entry.detail ?? 'null') as { kind?: string; instruction?: string } | null; } catch { return null; }
+    })
+    .find((detail) => detail?.kind === 'SESSION_TASK_CHECK' && typeof detail.instruction === 'string');
+  const ids = entries.map((entry) => entry.id).filter((id) => Number.isSafeInteger(id));
+  if (check) {
+    return `Swarmboard five-minute check (delivery sequence ${sequence}${ids.length ? `, entries ${ids.join(', ')}` : ''}).\n\n${check.instruction}`;
+  }
+  return [
+    'Swarmboard product notice: this session channel has one unsettled delivery.',
+    `Delivery sequence ${sequence}${ids.length ? `, entries ${ids.join(', ')}` : ''}.`,
+    'Read the referenced shared entries (context_read) and act on the authorized goals',
+    'you can progress, then settle this batch with notification_receipt, echoing exactly',
+    'the entryIds you actually processed. Do not merely acknowledge; do not replay unknown.',
+  ].join('\n');
+}
+
+/** Process-wide single-flight guard so two passes cannot race the same session. */
+let passInFlight = false;
+
+/**
+ * One waker pass. Durable intent (including rpcId and the pre-send watermark) is
+ * written before the prompt; a failed prompt becomes unknown and is never retried.
+ */
+export async function runPass(input: {
+  readonly seats: readonly SeatConfig[];
+  readonly board: BoardPort;
+  readonly transport: TransportPort;
+  readonly state: WakerStateShape;
+  readonly now: () => string;
+  readonly persist?: () => void;
+  readonly newRpcId?: () => string;
+  readonly dryRun?: boolean;
+  readonly promptText?: (input: { sequence: number; entries: readonly EntryView[] }) => string;
+}): Promise<PassResult> {
+  if (passInFlight) return { actions: [{ action: 'pass-in-flight' }], errors: [] };
+  passInFlight = true;
+  const actions: PassAction[] = [];
+  const errors: PassError[] = [];
+  const persist = input.persist ?? (() => {});
+  const rpcIdOf = input.newRpcId ?? (() => randomUUID());
+  const textFor = input.promptText ?? promptTextFor;
+  try {
+    for (const seat of input.seats) {
+      const key = seatKey(seat);
+      if (!Object.prototype.hasOwnProperty.call(input.state.seats, key)) input.state.seats[key] = null;
+      const record = input.state.seats[key] ?? null;
+      let rows: readonly UnsettledDelivery[];
+      try { rows = input.board.unsettled(seat); } catch (error) {
+        errors.push({ seat: key, step: 'board', error: String((error as Error)?.message ?? error) });
+        continue;
+      }
+      const unsettled = rows.filter((row) => Number.isSafeInteger(row?.sequence) && row.sequence >= 1);
+      if (unsettled.length === 0) {
+        if (record && record.state !== 'settled') {
+          input.state.seats[key] = { ...record, state: 'settled', settledAt: input.now() };
+          actions.push({ seat: key, action: 'settled', sequence: record.sequence });
+        }
+        continue;
+      }
+      const target = unsettled.reduce((a, b) => (a.sequence > b.sequence ? a : b));
+      if (record && record.sequence === target.sequence && ['sending', 'accepted', 'unknown'].includes(record.state)) {
+        actions.push({ seat: key, action: 'awaiting-member', sequence: target.sequence, state: record.state, rpcId: record.rpcId ?? null });
+        continue;
+      }
+      const binding = input.board.binding(seat);
+      if (!binding.ok) {
+        errors.push({ seat: key, step: 'binding', error: `stale-binding:${binding.reason}` });
+        continue;
+      }
+      if (target.adapterId !== undefined && target.adapterId !== seat.adapterId) {
+        errors.push({ seat: key, step: 'intent-scope', error: 'stale-intent:adapter-mismatch' });
+        continue;
+      }
+      if (target.sessionRef !== undefined && target.sessionRef !== seat.sessionRef) {
+        errors.push({ seat: key, step: 'intent-scope', error: 'stale-intent:session-mismatch' });
+        continue;
+      }
+      if (target.registrationVersion !== undefined && target.registrationVersion !== binding.registrationVersion) {
+        errors.push({ seat: key, step: 'intent-scope', error: `stale-intent:registration-version:${target.registrationVersion}!=${binding.registrationVersion}` });
+        continue;
+      }
+      const scope = input.board.intentCurrent(seat, target);
+      if (!scope.ok) {
+        errors.push({ seat: key, step: 'intent-scope', error: `stale-scope:${scope.reason ?? 'unknown'}` });
+        continue;
+      }
+      if (seat.manualWriterStatePath) {
+        let manual: { state?: string } | null;
+        try { manual = readManualWriterState(seat.manualWriterStatePath); } catch (error) {
+          errors.push({ seat: key, step: 'manual-writer-state', error: String((error as Error)?.message ?? error) });
+          continue;
+        }
+        if (manual && ['sending', 'accepted', 'unknown'].includes(manual.state ?? '')) {
+          actions.push({ seat: key, action: 'manual-writer-active', sequence: target.sequence, manual: manual.state });
+          continue;
+        }
+      }
+      let session: SessionView;
+      try { session = await input.transport.describe(seat); } catch (error) {
+        errors.push({ seat: key, step: 'session.list', error: String((error as Error)?.message ?? error) });
+        continue;
+      }
+      if (!session.found) {
+        errors.push({ seat: key, step: 'session.list', error: 'original-session-not-found; no session will be created' });
+        continue;
+      }
+      if (session.running) {
+        actions.push({ seat: key, action: 'busy-skip', sequence: target.sequence });
+        continue;
+      }
+      // The round trip crosses an async boundary: re-read authority and scope, then
+      // the manual writer, before recording a new send.
+      const hostAfter = input.board.binding(seat);
+      if (!hostAfter.ok) {
+        errors.push({ seat: key, step: 'host-authz', error: `host-authz:changed-during-describe:${hostAfter.reason}` });
+        continue;
+      }
+      const scopeAfter = input.board.intentCurrent(seat, target);
+      if (!scopeAfter.ok) {
+        errors.push({ seat: key, step: 'intent-scope', error: `stale-scope:changed-during-describe:${scopeAfter.reason ?? 'unknown'}` });
+        continue;
+      }
+      if (seat.manualWriterStatePath) {
+        let after: { state?: string } | null;
+        try { after = readManualWriterState(seat.manualWriterStatePath); } catch (error) {
+          errors.push({ seat: key, step: 'manual-writer-state', error: String((error as Error)?.message ?? error) });
+          continue;
+        }
+        if (after && ['sending', 'accepted', 'unknown'].includes(after.state ?? '')) {
+          actions.push({ seat: key, action: 'manual-writer-active', sequence: target.sequence, manual: `${after.state}-changed-during-describe` });
+          continue;
+        }
+      }
+      if (input.dryRun) {
+        actions.push({ seat: key, action: 'would-prompt', sequence: target.sequence, adapterId: binding.adapterId });
+        continue;
+      }
+      let entries: readonly EntryView[] = [];
+      try { entries = input.board.entries(target.entryIds ?? []); } catch { entries = []; }
+      const rpcId = rpcIdOf();
+      const asOfSeq = Number.isSafeInteger(session.asOfSeq) ? session.asOfSeq : null;
+      input.state.seats[key] = {
+        sequence: target.sequence,
+        entryIds: target.entryIds ?? [],
+        rpcId,
+        adapterId: binding.adapterId,
+        registrationVersion: binding.registrationVersion,
+        sessionRef: seat.sessionRef,
+        asOfSeq,
+        nextSeq: asOfSeq === null ? null : asOfSeq + 1,
+        state: 'sending',
+        at: input.now(),
+      };
+      persist();
+      try {
+        const outcome = await input.transport.prompt(seat, { sequence: target.sequence, text: textFor({ sequence: target.sequence, entries }), rpcId });
+        input.state.seats[key] = { ...(input.state.seats[key] as SeatRecord), state: outcome.accepted ? 'accepted' : 'unknown', acceptedAt: input.now() };
+        persist();
+        actions.push({ seat: key, action: outcome.accepted ? 'prompted' : 'prompt-unknown', sequence: target.sequence, rpcId });
+      } catch (error) {
+        input.state.seats[key] = { ...(input.state.seats[key] as SeatRecord), state: 'unknown', error: String((error as Error)?.message ?? error) };
+        persist();
+        errors.push({ seat: key, step: 'session.prompt', error: String((error as Error)?.message ?? error), rpcId });
+      }
+    }
+    return { actions, errors };
+  } finally {
+    passInFlight = false;
+  }
+}
+
+function readManualWriterState(path: string): { state?: string } | null {
+  let text: string;
+  try { text = readFileSync(path, 'utf8'); } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+    throw error;
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { throw new Error('MANUAL_WRITER_STATE_CORRUPT'); }
+  return parsed && typeof parsed === 'object' ? (parsed as { state?: string }) : null;
+}
+
+/** Persisted consumer ledger; corrupt or unsupported files fail closed. */
+export class WakerState {
+  readonly file: string;
+  state: WakerStateShape;
+
+  constructor(file: string, seats: readonly SeatConfig[] = []) {
+    this.file = file;
+    this.state = { schema: STATE_SCHEMA, seats: {} };
+    let text: string | null = null;
+    try { text = readFileSync(file, 'utf8'); } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw new Error(`CONSUMER_STATE_UNREADABLE:${(error as NodeJS.ErrnoException)?.code ?? 'unknown'}`);
+    }
+    if (text !== null) {
+      let parsed: unknown;
+      try { parsed = JSON.parse(text); } catch { throw new Error('CONSUMER_STATE_CORRUPT'); }
+      const shape = parsed as WakerStateShape | null;
+      if (!shape || typeof shape !== 'object' || shape.schema !== STATE_SCHEMA || !shape.seats || typeof shape.seats !== 'object') {
+        throw new Error('CONSUMER_STATE_SCHEMA_UNSUPPORTED');
+      }
+      this.state = { schema: STATE_SCHEMA, seats: shape.seats };
+    }
+    for (const seat of seats) {
+      const key = seatKey(seat);
+      if (!Object.prototype.hasOwnProperty.call(this.state.seats, key)) this.state.seats[key] = null;
+    }
+  }
+
+  save(): void {
+    mkdirSync(dirname(this.file), { recursive: true });
+    const tmp = `${this.file}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const fd = openSync(tmp, 'w', 0o600);
+    try { writeSync(fd, JSON.stringify(this.state, null, 2)); } finally { closeSync(fd); }
+    renameSync(tmp, this.file);
+  }
+}
+
+export interface WriterLock { release(): void }
+
+/**
+ * Exclusive writer lock (O_EXCL). A stale lock is never broken automatically:
+ * two writers must never both send, so an operator decides.
+ */
+export function acquireWriterLock(lockPath: string): WriterLock {
+  try {
+    const fd = openSync(lockPath, 'wx', 0o600);
+    try { writeSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() })); } finally { closeSync(fd); }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'EEXIST') throw new Error('CONSUMER_WRITER_LOCK_HELD');
+    throw error;
+  }
+  return { release: () => { try { unlinkSync(lockPath); } catch { /* already gone */ } } };
+}
+
+/**
+ * Run the consumer loop with an exclusive writer lock. The first pass runs
+ * immediately; `once` is for controlled field acceptance.
+ */
+export async function startNotificationConsumer(options: {
+  readonly config: ConsumerConfig;
+  readonly board: BoardPort;
+  readonly transport: TransportPort;
+  readonly now?: () => string;
+  readonly once?: boolean;
+}): Promise<{ stop(): void; first: PassResult }> {
+  const now = options.now ?? (() => new Date().toISOString());
+  const state = new WakerState(options.config.statePath, options.config.seats);
+  const lock = acquireWriterLock(`${options.config.statePath}.lock`);
+  const pass = async (dryRun = false): Promise<PassResult> => {
+    const result = await runPass({
+      seats: options.config.seats,
+      board: options.board,
+      transport: options.transport,
+      state: state.state,
+      now,
+      persist: () => state.save(),
+      dryRun,
+    });
+    state.save();
+    return result;
+  };
+  const first = await pass(false);
+  let timer: ReturnType<typeof setInterval> | undefined;
+  if (!options.once) {
+    timer = setInterval(() => { void pass(false).catch(() => { /* surfaced by the next pass */ }); }, options.config.intervalMs ?? DEFAULT_POLL_MS);
+  }
+  return {
+    first,
+    stop() {
+      if (timer) clearInterval(timer);
+      lock.release();
+    },
+  };
+}
