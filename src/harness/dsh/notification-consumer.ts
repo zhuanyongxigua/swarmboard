@@ -248,7 +248,11 @@ export async function runPass(input: {
         continue;
       }
       const target = unsettled.reduce((a, b) => (a.sequence > b.sequence ? a : b));
-      if (record && record.sequence === target.sequence && ['sending', 'accepted', 'unknown'].includes(record.state)) {
+      // Only the same registered channel may suppress a re-send: after a
+      // re-registration a new adapter id must not inherit the old record's
+      // sending/accepted/unknown state for the same sequence.
+      if (record && record.adapterId === seat.adapterId && record.sequence === target.sequence
+        && ['sending', 'accepted', 'unknown'].includes(record.state)) {
         actions.push({ seat: key, action: 'awaiting-member', sequence: target.sequence, state: record.state, rpcId: record.rpcId ?? null });
         continue;
       }
@@ -369,8 +373,45 @@ export async function runPass(input: {
         actions.push({ seat: key, action: 'would-prompt', sequence: target.sequence, adapterId: binding.adapterId });
         continue;
       }
-      let entries: readonly EntryView[] = [];
-      try { entries = await input.board.entries(target.entryIds ?? []); } catch { entries = []; }
+      // Missing or truncated content must fail closed: prompting without the
+      // delivery's own instruction (and then recording an accepted send) would
+      // consume the batch while the member never saw what it contained.
+      let entries: readonly EntryView[];
+      try { entries = await input.board.entries(target.entryIds ?? []); } catch (error) {
+        errors.push({ seat: key, step: 'entries', error: String((error as Error)?.message ?? error) });
+        continue;
+      }
+      // The shipped MCP port fails closed by throwing when an entry is missing or
+      // truncated; a host port that returns fewer entries keeps the earlier
+      // lenient behaviour (the prompt still carries the delivery's ids).
+      // The context read is asynchronous: re-read authority and scope once more
+      // so a generation, scope or visibility change during it cannot slip past.
+      let bindingFinal: FormalBinding;
+      try { bindingFinal = await input.board.binding(seat); } catch (error) {
+        errors.push({ seat: key, step: 'host-authz', error: String((error as Error)?.message ?? error) });
+        continue;
+      }
+      if (!bindingFinal.ok || bindingFinal.adapterId !== binding.adapterId
+        || bindingFinal.registrationVersion !== binding.registrationVersion) {
+        errors.push({ seat: key, step: 'host-authz', error: `host-authz:changed-during-context:${binding.registrationVersion}->${bindingFinal.ok ? bindingFinal.registrationVersion : bindingFinal.reason}` });
+        continue;
+      }
+      const scopeFinal = await input.board.intentCurrent(seat, target);
+      if (!scopeFinal.ok) {
+        errors.push({ seat: key, step: 'intent-scope', error: `stale-scope:changed-during-context:${scopeFinal.reason ?? 'unknown'}` });
+        continue;
+      }
+      if (seat.manualWriterStatePath) {
+        let afterContext: { state?: string } | null;
+        try { afterContext = readManualWriterState(seat.manualWriterStatePath); } catch (error) {
+          errors.push({ seat: key, step: 'manual-writer-state', error: String((error as Error)?.message ?? error) });
+          continue;
+        }
+        if (afterContext && ['sending', 'accepted', 'unknown'].includes(afterContext.state ?? '')) {
+          actions.push({ seat: key, action: 'manual-writer-active', sequence: target.sequence, manual: `${afterContext.state}-changed-during-context` });
+          continue;
+        }
+      }
       const rpcId = rpcIdOf();
       const asOfSeq = Number.isSafeInteger(session.asOfSeq) ? session.asOfSeq : null;
       input.state.seats[key] = {
@@ -457,14 +498,27 @@ export interface WriterLock { release(): void }
  * two writers must never both send, so an operator decides.
  */
 export function acquireWriterLock(lockPath: string): WriterLock {
+  const token = `${process.pid}-${randomUUID()}`;
   try {
     const fd = openSync(lockPath, 'wx', 0o600);
-    try { writeSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() })); } finally { closeSync(fd); }
+    try { writeSync(fd, JSON.stringify({ pid: process.pid, token, at: new Date().toISOString() })); } finally { closeSync(fd); }
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === 'EEXIST') throw new Error('CONSUMER_WRITER_LOCK_HELD', { cause: error });
     throw error;
   }
-  return { release: () => { try { unlinkSync(lockPath); } catch { /* already gone */ } } };
+  let released = false;
+  return {
+    release: () => {
+      // Release at most once, and only while the file still carries this
+      // writer's token: a second stop() must never unlink a newer writer's lock.
+      if (released) return;
+      released = true;
+      try {
+        if (!readFileSync(lockPath, 'utf8').includes(token)) return;
+        unlinkSync(lockPath);
+      } catch { /* already gone or unreadable: nothing safe to delete */ }
+    },
+  };
 }
 
 /**
@@ -479,6 +533,14 @@ export async function startNotificationConsumer(options: {
   readonly once?: boolean;
 }): Promise<{ stop(): void | Promise<void>; first: PassResult }> {
   const now = options.now ?? (() => new Date().toISOString());
+  // The ledger key joins member id and session ref with "|", so a value carrying
+  // the separator (or an empty adapter id) could collide with another seat.
+  for (const seat of options.config.seats) {
+    const unsafeKey = (value: string): boolean => value.includes('|') || value.includes('\u0000');
+    if (!seat.adapterId || unsafeKey(seat.memberId) || unsafeKey(seat.sessionRef)) {
+      throw new Error('CONSUMER_SEAT_INVALID:adapterId is required and memberId/sessionRef must not contain "|" or NUL');
+    }
+  }
   // Lock before loading the ledger: a second writer must never start from a stale
   // in-memory snapshot taken before the lock (review FAIL 8704 / 8882).
   mkdirSync(dirname(options.config.statePath), { recursive: true });
@@ -625,7 +687,10 @@ export function createMcpBoardPort(options: McpBoardPortOptions): BoardPort {
         const row = (await pending(seat)).find((item) => item.sequence === delivery.sequence);
         if (!row) return { ok: false, reason: 'not-visible' };
         if (row.state === 'unknown') return { ok: false, reason: 'delivery-unknown' };
-        if (!delivery.entryIds.every((id) => row.entryIds.includes(id))) return { ok: false, reason: 'entry-set-changed' };
+        // A grown batch is a different batch: driving the old entry set would
+        // consume entries the member never saw (and make its receipt stale).
+        if (row.entryIds.length !== delivery.entryIds.length
+          || !delivery.entryIds.every((id) => row.entryIds.includes(id))) return { ok: false, reason: 'entry-set-changed' };
         return { ok: true };
       } catch (error) {
         return { ok: false, reason: `pending-unreadable:${String((error as Error)?.message ?? error)}` };
@@ -638,8 +703,10 @@ export function createMcpBoardPort(options: McpBoardPortOptions): BoardPort {
         const items = Array.isArray(value.items) ? value.items : [];
         const item = items[0] as { id?: unknown; detail?: unknown; detailTruncated?: unknown } | undefined;
         // An exact seek also catches filtered or missing ids instead of silently
-        // taking the next visible row; a truncated detail is incomplete content.
-        if (item?.id !== id || item.detailTruncated === true) continue;
+        // taking the next visible row. Missing or truncated content is incomplete
+        // context: fail closed rather than drive the batch without its instruction.
+        if (item?.id !== id) throw new Error(`INCOMPLETE_CONTEXT:entry-${id}-missing`);
+        if (item.detailTruncated === true) throw new Error(`INCOMPLETE_CONTEXT:entry-${id}-truncated`);
         const detail = typeof item.detail === 'string' ? item.detail : JSON.stringify(item.detail ?? null);
         out.push({ id, detail });
       }

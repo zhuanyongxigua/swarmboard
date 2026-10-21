@@ -32,15 +32,15 @@ interface ConsumerConfig {
 
 - `TransportPort`：随仓库交付官方实现 `createOfficialWebTransport({fetchImpl?, clientTimeZone?})`，只封装官方本地 `session.list` / `session.prompt`；厂商协议留在 DSH 适配模块，核心不感知。
 - 启动顺序：`startNotificationConsumer` 先 `mkdir` 状态目录、再取写锁、锁内加载账本；首轮失败释放锁，`stop()` 会等待在途 pass 结束再交锁。`describe()` 之后会复核 binding 的 adapter 与 registrationVersion，代次变化即 0 发送。
-- `BoardPort`：方法返回 `T | Promise<T>`（调度侧会 `await`），由宿主用**既有已绑定的 MCP 通知工具**实现。随模块提供 `createMcpBoardPort({callTool, pageSize?})`：标准 MCP 响应（`structuredContent`、首个 text 片段或已解包 payload）都经 `notification-port` 同一解码器解析，`isError` 直接失败关闭；`notification_pending` 的分页 `items` 带 `state`，`unknown` 投递只被记录为 unknown 并继续显示，绝不当作新投递重放；`intentCurrent` 在 `describe` 前后各重新轮询一次（服务端 `currentIntent()` 只保证读取当时可见），条目集合或可见性变化即 0 发送；`binding_read` 提供 adapter/member/版本/启用与 session 校验，`context_read` 精确 seek 批内条目（含 `SESSION_TASK_CHECK` 指令，截断条目视为不完整）。若宿主选择自建 SQL 读取，则必须自行完整镜像 `currentIntent()` 的语义，否则会出现“成员可见但不被唤醒”或“已失效仍唤醒”的偏差；临时 SQLite 直读不作为公开适配器契约。
+- `BoardPort`：方法返回 `T | Promise<T>`（调度侧会 `await`），由宿主用**既有已绑定的 MCP 通知工具**实现。随模块提供 `createMcpBoardPort({callTool, pageSize?})`：标准 MCP 响应（`structuredContent`、首个 text 片段或已解包 payload）都经 `notification-port` 同一解码器解析，`isError` 直接失败关闭；`notification_pending` 的分页 `items` 带 `state`，`unknown` 投递只被记录为 unknown 并继续显示，绝不当作新投递重放；`intentCurrent` 在 `describe` 前后各重新轮询一次，**且要求条目集合与其完全一致**（同一 sequence 上条目增长即视为另一批 → 0 发送，下轮按新集合重新判定）；`binding_read` 提供 adapter/member/版本/启用与 session 校验；`context_read` 精确 seek 批内条目，**某一 id 缺失或被截断时直接抛 `INCOMPLETE_CONTEXT` 失败关闭**（不驱动只含部分指令的批次）。若宿主选择自建 SQL 读取，则必须自行完整镜像 `currentIntent()` 的语义与“条目完整才可驱动”的约束，否则会出现“成员可见但不被唤醒”或“已失效/残缺仍唤醒”的偏差；临时 SQLite 直读不作为公开适配器契约。
 
 
 
-1. **先落盘后发送**：`{sequence, entryIds, rpcId, adapterId, registrationVersion, sessionRef, asOfSeq, nextSeq}` 在调用 `session.prompt` 之前持久化；`rpcId` 是完成投影唯一可关联本次投递的凭据（不是幂等键）。
-2. **未知不重放**：prompt 抛错或结果不明只记 `unknown`，下次 pass 只显示 `awaiting-member`，绝不自动重发。
+1. **先落盘后发送**：`{sequence, entryIds, rpcId, adapterId, registrationVersion, sessionRef, asOfSeq, nextSeq}` 在调用 `session.prompt` 之前持久化；`rpcId` 是完成投影唯一可关联本次投递的凭据（不是幂等键）。落盘前还会**再读一次** binding、投递可见性与人工 writer 记录：context 读取是异步的，其间任何代次/范围/可见性变化都导致 0 发送。
+2. **未知不重放**：prompt 抛错或结果不明只记 `unknown`，下次 pass 只显示 `awaiting-member`，绝不自动重发。该抑制**只对同一 adapterId 生效**：重新注册到新 adapter 后，同 sequence 不会被旧通道记录压住。账本键为 `memberId|sessionRef`，启动时校验两者不含 `|`/NUL 且 adapterId 非空，避免键碰撞。
 3. **原会话唯一**：`session.list` 精确匹配 `sessionRef`；找不到即报错，绝不创建新会话；`running` 时跳过（忙时合并由产品负责）。
 4. **正式授权**：发送前读当前 binding（adapter enabled、member 与准入 session 相符、poolActive 与 pool enabled/state）与投递 intent 的三元组；`scope === 'organization'` 时取 `pool.taskIds`（空则不限），`selected` 时取准入 ∩ pool；检查批还须有可适用目标（镜像 `NotificationService.currentIntent()`，普通批恒放行）。
-5. **单写者**：进程内 single-flight；跨进程 `statePath.lock`（O_EXCL，陈旧锁只人工处理）；`manualWriterStatePath` 未结算时跳过，并在 `describe` 之后再核一次（只收窄窗口，不声称跨 writer 互斥）。
+5. **单写者**：进程内 single-flight；跨进程 `statePath.lock`（O_EXCL，陈旧锁只人工处理）；锁文件写入本写者 token，`release()` **幂等且只删自己 token 的锁**——重复 `stop()` 不会误删新写者的锁。`manualWriterStatePath` 未结算时跳过，并在 `describe` 与 context 读取之后各核一次（只收窄窗口，不声称跨 writer 互斥）。
 6. **内容推送**：批内若含 `SESSION_TASK_CHECK`，prompt 携带该条目的产品指令正文，而不是只让成员“去拉取”。
 7. **不代回执**：消费确认仍由成员自己的 `notification_receipt` 完成；本模块只观测回执并推进本地账本状态。
 

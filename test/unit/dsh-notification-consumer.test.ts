@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -39,7 +39,7 @@ function boardFor(options: {
     unsettled: () => options.rows ?? [],
     binding: () => options.binding ? options.binding() : { ok: true, adapterId: 'synthetic-adapter', registrationVersion: 1, memberTaskIds: ['goal-1'], admissionTaskIds: ['goal-1'] },
     intentCurrent: () => options.scope ? options.scope() : { ok: true },
-    entries: () => options.entries ?? [],
+    entries: (ids) => options.entries ?? ids.map((id) => ({ id, detail: '{}' })),
   };
 }
 function transportFor(state: { prompts: unknown[]; describe?: () => Promise<{ found: boolean; running: boolean; asOfSeq: number | null }>; failPrompt?: boolean }): TransportPort {
@@ -244,7 +244,7 @@ describe('generation and startup boundaries', () => {
           : { ok: true, adapterId: 'synthetic-adapter', registrationVersion: 2, memberTaskIds: ['goal-1'], admissionTaskIds: ['goal-1'] };
       },
       intentCurrent: () => ({ ok: true }),
-      entries: () => [],
+      entries: (ids) => ids.map((id) => ({ id, detail: '{}' })),
     };
     const result = await runPass({
       seats: [seat], board, transport: transportFor({ prompts }), state: emptyState(), now,
@@ -260,7 +260,7 @@ describe('generation and startup boundaries', () => {
       unsettled: () => [{ sequence: 1, entryIds: [1] }],
       binding: () => ({ ok: true, adapterId: 'synthetic-adapter', registrationVersion: 1, memberTaskIds: [], admissionTaskIds: [] }),
       intentCurrent: () => ({ ok: true }),
-      entries: () => [],
+      entries: (ids) => ids.map((id) => ({ id, detail: '{}' })),
     };
     await expect(startNotificationConsumer({
       config: { statePath, seats: [seat] },
@@ -271,7 +271,7 @@ describe('generation and startup boundaries', () => {
     const lock = acquireWriterLock(`${statePath}.lock`);
     lock.release();
 
-    const ok: BoardPort = { unsettled: () => [], binding: () => ({ ok: true, adapterId: 'synthetic-adapter', registrationVersion: 1, memberTaskIds: [], admissionTaskIds: [] }), intentCurrent: () => ({ ok: true }), entries: () => [] };
+    const ok: BoardPort = { unsettled: () => [], binding: () => ({ ok: true, adapterId: 'synthetic-adapter', registrationVersion: 1, memberTaskIds: [], admissionTaskIds: [] }), intentCurrent: () => ({ ok: true }), entries: (ids) => ids.map((id) => ({ id, detail: '{}' })) };
     const consumer = await startNotificationConsumer({ config: { statePath, seats: [seat] }, board: ok, transport: transportFor({ prompts: [] }), once: true });
     await consumer.stop();
     expect(readFileSync(statePath, 'utf8')).toContain('"schema": 1');
@@ -280,11 +280,15 @@ describe('generation and startup boundaries', () => {
   it('builds a board port over the bound MCP notification tools', async () => {
     const toolCalls: string[] = [];
     const pendingRow = (state: 'pending' | 'unknown') => ({ adapterId: seat.adapterId, memberId: seat.memberId, sequence: 4, entryIds: [21, 22], state });
-    const respond = (state: 'pending' | 'unknown') => async ({ name }: { name: string }) => {
+    const respond = (state: 'pending' | 'unknown') => async ({ name, arguments: args }: { name: string; arguments?: Record<string, unknown> }) => {
       toolCalls.push(name);
       if (name === 'notification_pending') return { items: [pendingRow(state)], cursor: 4, hasMore: false };
       if (name === 'notification_binding_read') return { binding: { adapterId: seat.adapterId, memberId: seat.memberId, sessionRef: seat.sessionRef, registrationVersion: 1, enabled: true, taskIds: ['goal-1'] } };
-      if (name === 'context_read') return { items: [{ id: 21, detail: JSON.stringify({ kind: 'SESSION_TASK_CHECK', instruction: 'Check the authorized goals.' }) }, { id: 22, detail: '{}' }] };
+      if (name === 'context_read') {
+        const after = Number(args?.after ?? 0);
+        const id = after + 1;
+        return { items: [{ id, detail: id === 21 ? JSON.stringify({ kind: 'SESSION_TASK_CHECK', instruction: 'Check the authorized goals.' }) : '{}' }] };
+      }
       return {};
     };
     const board = createMcpBoardPort({ callTool: respond('pending') });
@@ -310,5 +314,95 @@ describe('generation and startup boundaries', () => {
 
     const missing = createMcpBoardPort({ callTool: async () => ({ binding: null }) });
     expect((await missing.binding(seat)).ok).toBe(false);
+  });
+});
+
+describe('delivery boundary regressions (PR review)', () => {
+  it('refuses to drive a batch whose entry set grew after the first read', async () => {
+    // The service can append entries to the same sequence between the initial
+    // pending read and the post-describe scope check; the old set must not pass.
+    let pendingReads = 0;
+    const board = createMcpBoardPort({
+      callTool: async ({ name }) => {
+        if (name === 'notification_pending') {
+          pendingReads += 1;
+          const entryIds = pendingReads === 1 ? [21] : [21, 22];
+          return { items: [{ adapterId: seat.adapterId, memberId: seat.memberId, sequence: 5, entryIds, state: 'pending' }], cursor: 5, hasMore: false };
+        }
+        if (name === 'notification_binding_read') return { binding: { adapterId: seat.adapterId, memberId: seat.memberId, sessionRef: seat.sessionRef, registrationVersion: 1, enabled: true, taskIds: ['goal-1'] } };
+        if (name === 'context_read') return { items: [{ id: 21, detail: '{}' }] };
+        return {};
+      },
+    });
+    const prompts: unknown[] = [];
+    const result = await runPass({ seats: [seat], board, transport: transportFor({ prompts }), state: { schema: 1, seats: {} }, now });
+    expect(prompts).toHaveLength(0);
+    expect(result.errors[0]?.error).toContain('entry-set-changed');
+  });
+
+  it('re-checks authority after the async context read', async () => {
+    let bindingCalls = 0;
+    const prompts: unknown[] = [];
+    const board: BoardPort = {
+      unsettled: () => [{ sequence: 1, entryIds: [7] }],
+      binding: () => {
+        bindingCalls += 1;
+        // Calls: 1 = describe前, 2 = describe后复核, 3 = context 后复核 → 第 3 次变更
+        const version = bindingCalls >= 3 ? 2 : 1;
+        return { ok: true, adapterId: 'synthetic-adapter', registrationVersion: version, memberTaskIds: ['goal-1'], admissionTaskIds: ['goal-1'] };
+      },
+      intentCurrent: () => ({ ok: true }),
+      entries: (ids) => ids.map((id) => ({ id, detail: '{}' })),
+    };
+    const result = await runPass({ seats: [seat], board, transport: transportFor({ prompts }), state: { schema: 1, seats: {} }, now });
+    expect(prompts).toHaveLength(0);
+    expect(result.errors[0]?.error).toContain('changed-during-context');
+  });
+
+  it('fails closed when the context is truncated instead of prompting', async () => {
+    const board = createMcpBoardPort({
+      callTool: async ({ name }) => {
+        if (name === 'notification_pending') return { items: [{ adapterId: seat.adapterId, memberId: seat.memberId, sequence: 9, entryIds: [31], state: 'pending' }], cursor: 9, hasMore: false };
+        if (name === 'notification_binding_read') return { binding: { adapterId: seat.adapterId, memberId: seat.memberId, sessionRef: seat.sessionRef, registrationVersion: 1, enabled: true, taskIds: ['goal-1'] } };
+        if (name === 'context_read') return { items: [{ id: 31, detail: 'partial', detailTruncated: true }] };
+        return {};
+      },
+    });
+    const prompts: unknown[] = [];
+    const result = await runPass({ seats: [seat], board, transport: transportFor({ prompts }), state: { schema: 1, seats: {} }, now });
+    expect(prompts).toHaveLength(0);
+    expect(result.errors[0]?.step).toBe('entries');
+    expect(result.errors[0]?.error).toContain('INCOMPLETE_CONTEXT');
+  });
+
+  it('does not let a re-registered adapter inherit the old channel record', async () => {
+    const otherSeat = { ...seat, adapterId: 'synthetic-adapter-2' };
+    const prompts: unknown[] = [];
+    const board: BoardPort = {
+      unsettled: () => [{ sequence: 3, entryIds: [5] }],
+      binding: () => ({ ok: true, adapterId: 'synthetic-adapter-2', registrationVersion: 1, memberTaskIds: ['goal-1'], admissionTaskIds: ['goal-1'] }),
+      intentCurrent: () => ({ ok: true }),
+      entries: (ids) => ids.map((id) => ({ id, detail: '{}' })),
+    };
+    const prior: WakerStateShape = {
+      schema: 1,
+      seats: { [`${seat.memberId}|${seat.sessionRef}`]: { sequence: 3, entryIds: [5], rpcId: 'old', adapterId: 'synthetic-adapter', registrationVersion: 1, sessionRef: seat.sessionRef, asOfSeq: 40, nextSeq: 41, state: 'accepted' } },
+    };
+    const result = await runPass({ seats: [otherSeat], board, transport: transportFor({ prompts }), state: prior, now });
+    expect(prompts).toHaveLength(1);
+    expect(result.actions[0]?.action).toBe('prompted');
+  });
+
+  it('releases the writer lock at most once and never a newer writer lock', () => {
+    const dir = tempDir();
+    const lockPath = join(dir, 'state.json.lock');
+    const first = acquireWriterLock(lockPath);
+    first.release();
+    first.release();  // idempotent: must not delete anything now
+    const second = acquireWriterLock(lockPath);
+    first.release();  // stale owner must not unlink the new writer's lock
+    expect(existsSync(lockPath)).toBe(true);
+    second.release();
+    expect(existsSync(lockPath)).toBe(false);
   });
 });
