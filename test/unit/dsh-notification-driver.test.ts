@@ -218,4 +218,15 @@ describe('driveOnce (whole delivery) ', () => {
     expect(rendered).toContain('Unique ordinary payload that must reach the session');
     expect(rendered).toContain('body truncated; read the full entry 2');
   });
+
+  it('fails closed when the journal cannot be read instead of resubmitting', async () => {
+    const f = harness();
+    const result = driveOnce({
+      ...f.ports,
+      journal: { ...f.ports.journal, get: async () => { throw new Error('JOURNAL_CORRUPT'); } },
+    });
+    await expect(result).rejects.toThrow(/JOURNAL_CORRUPT/);
+    expect(f.calls.submit).toBe(0);
+    expect(f.calls.confirm).toEqual([]);
+  });
 });

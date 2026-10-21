@@ -82,6 +82,12 @@ export interface Intent {
 }
 
 export interface Journal {
+  /**
+   * `undefined` means "this batch has no recorded intent". An unreadable or corrupt
+   * record MUST throw instead: mapping corruption to `undefined` would look like a fresh
+   * batch and re-submit a turn that may already have run (p3 7221). The driver never
+   * swallows the error, so a broken journal stops the pass before anything is sent.
+   */
   get(key: string): Promise<Intent | undefined>;
   put(intent: Intent): Promise<void>;
   del(key: string): Promise<void>;
