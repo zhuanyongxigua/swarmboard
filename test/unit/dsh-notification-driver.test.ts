@@ -248,7 +248,8 @@ describe('driveOnce (whole delivery) ', () => {
     await driveOnce(f.ports);
     const persisted = f.journal.get(intentKey(batch()));
     expect(persisted?.state).toBe('completedUnacked');
-    expect(persisted?.batch.delivery.entryIds).toEqual([1, 2]);
+    expect(persisted?.covered).toEqual([1, 2]);
+    expect(persisted?.batch.delivery.entryIds).toEqual([1, 2]);   // untouched, bijective
 
     // Simulate reopen: the same journal entry, a fresh run.
     f.setListed([batch({ delivery: { sequence: 7, entryIds: [1, 2] } })]);
@@ -280,7 +281,10 @@ describe('driveOnce (whole delivery) ', () => {
       },
     });
     expect(submits).toEqual([[99]]);               // only the late entry is sent
-    expect(f.journal.get(intentKey(batch()))?.batch.delivery.entryIds).toEqual([1, 2, 99]);
+    // The submitted batch stays bijective for the SDK; coverage is a separate field.
+    const persisted = f.journal.get(intentKey(batch()));
+    expect(persisted?.batch.delivery.entryIds).toEqual([99]);
+    expect(persisted?.covered).toEqual([1, 2, 99]);
     expect(confirms).toEqual([]);                  // still awaiting the delta's completion
   });
 });

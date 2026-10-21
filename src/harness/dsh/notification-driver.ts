@@ -155,8 +155,9 @@ export const defaultBatchText = (batch: DeliveryBatch): string => {
 };
 
 /**
- * Persist an intent so that the covered set survives hosts that only serialize
- * `{key,state,batch,detail}`: `batch.delivery.entryIds` is the monotonic covered list.
+ * Persist an intent. `batch` stays the EXACT snapshot that was submitted (the SDK checks
+ * `entries` against `delivery.entryIds` and binds its token to that digest), so the covered
+ * set travels in its own `covered` field — never by rewriting the batch (p1 7274, p8 7277).
  */
 const durableIntent = (
   key: string, state: IntentState, attempt: DeliveryBatch, covered: ReadonlySet<number>, detail?: string,
@@ -165,7 +166,7 @@ const durableIntent = (
   state,
   detail,
   covered: [...covered],
-  batch: { ...attempt, delivery: { sequence: attempt.delivery.sequence, entryIds: [...covered] } },
+  batch: attempt,
 });
 
 /** The covered entries recorded in a persisted intent (host-journal safe). */
