@@ -37,12 +37,12 @@ function fixture() {
       sessionRef: member.sessionRef, adapterId: item.adapterId, registrationVersion: 1, dueAt: 300000, goalIds: [goal.id],
       delivery: { sequence: item.sequence, entryIds: [...item.entryIds] } })),
     confirm: async (delivery: { sequence: number; entryIds: readonly number[] }) => { service.receipt(member.id, delivery.sequence, true, delivery.entryIds); },
-    release: async () => { throw new Error('Unexpected release'); },
+    release: async (): Promise<void> => { throw new Error('Unexpected release'); },
   };
   let submits = 0;
-  const ports = (submit: () => Promise<SubmitOutcome>) => ({ pending, journal, session: {
+  const ports = (submit: (check: PendingCheck) => Promise<SubmitOutcome>) => ({ pending, journal, session: {
     isCurrent: async () => true, isBusy: async () => false, settlement: async () => ({ settled: false as const }),
-    submit: async () => { submits++; return submit(); },
+    submit: async (check: PendingCheck) => { submits++; return submit(check); },
   } });
   return { board, member, service, dispatcher, records, ports, get submits() { return submits; },
     unsettled: () => new NotificationAdapterStore(board.db).unsettled() };
@@ -77,4 +77,28 @@ describe('DSH driver and durable notification consumption', () => {
     expect(f.unsettled()).toHaveLength(1);
     expect(f.records.size).toBe(1);
   });
+
+  it('does not settle a full delivery after only one of its checks completed', async () => {
+    const f = fixture();
+    const ports = f.ports(async check => check.dueAt === 300000
+      ? { status: 'completed', turnId: 'first-check-turn' } : { status: 'rejected' });
+    const first = (await ports.pending.list())[0]!;
+    const second = f.board.publishEntry({ agentId: 'runtime-driver-test', kind: 'MESSAGE', recipientId: f.member.id,
+      summary: 'SESSION_TASK_CHECK: second check in the same batch', detail: JSON.stringify({ kind: 'SESSION_TASK_CHECK',
+        memberId: f.member.id, sessionRef: f.member.sessionRef, adapterId: 'driver-channel', registrationVersion: 1,
+        dueAt: 600000, goalIds: first.goalIds }) });
+    f.dispatcher.dispatch(second);
+    const batch = f.service.pending(f.member.id).items[0]!;
+    expect(batch.entryIds).toHaveLength(2);
+    // The advertised per-check input can contain two checks sharing one receipt.
+    // Completing one must never authorize the other entry's consumption.
+    ports.pending.list = async () => [
+      { ...first, delivery: { sequence: batch.sequence, entryIds: [...batch.entryIds] } },
+      { ...first, dueAt: 600000, delivery: { sequence: batch.sequence, entryIds: [...batch.entryIds] } },
+    ];
+    ports.pending.release = async () => {};
+    await driveOnce(ports);
+    expect(f.unsettled()).toHaveLength(1);
+  });
+
 });
