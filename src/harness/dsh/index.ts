@@ -2,3 +2,4 @@
 export * from './instructions.js';
 export * from './lifecycle.js';
 export * from './sdk-facade.js';
+export * from './sdk-session.js';
