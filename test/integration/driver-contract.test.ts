@@ -57,14 +57,26 @@ function harness(over: {
 }
 
 describe('kernel envelope drives the DSH notification driver (batch API)', () => {
+  it('prevents collisions between an absent channel and a channel named native', () => {
+    const batch = batchFor();
+    expect(intentKey(batch)).not.toBe(intentKey({ ...batch, adapterId: 'native' }));
+  });
+
+  it('prevents delimiter collisions across valid channel and session fields', () => {
+    const batch = batchFor();
+    const first = { ...batch, adapterId: `channel|${batch.memberId}|shift`, sessionRef: 'session' };
+    const second = { ...batch, adapterId: 'channel', sessionRef: `shift|${batch.memberId}|session` };
+    expect(intentKey(first)).not.toBe(intentKey(second));
+  });
+
   it('keys the intent by adapter, member, session and sequence (no cross-seat collision)', () => {
     const native = batchFor();
-    expect(intentKey(native)).toBe('native|member-1|thread-9|7');
+    expect(intentKey(native)).toBe(JSON.stringify([null, 'member-1', 'thread-9', 7]));
     // Two seats can each own sequence 7; their keys must differ.
     const otherSeat = { ...native, memberId: 'member-2', sessionRef: 'thread-10' };
     expect(intentKey(otherSeat)).not.toBe(intentKey(native));
     const external = { ...native, adapterId: 'adapter-x' };
-    expect(intentKey(external)).toBe('adapter-x|member-1|thread-9|7');
+    expect(intentKey(external)).toBe(JSON.stringify(['adapter-x', 'member-1', 'thread-9', 7]));
   });
 
   it('renders every entry of the batch as untrusted reference data', () => {
@@ -79,7 +91,7 @@ describe('kernel envelope drives the DSH notification driver (batch API)', () =>
     const h = harness({ busy: true });
     h.batches.push(batchFor());
     const r = await driveOnce(h.ports);
-    expect(r.merged).toEqual(['native|member-1|thread-9|7']);
+    expect(r.merged).toEqual([JSON.stringify([null, 'member-1', 'thread-9', 7])]);
     expect(h.calls.submit).toBe(0);
   });
 
@@ -87,7 +99,7 @@ describe('kernel envelope drives the DSH notification driver (batch API)', () =>
     const h = harness({ current: [false] });
     h.batches.push(batchFor());
     const r = await driveOnce(h.ports);
-    expect(r.skipped).toEqual(['native|member-1|thread-9|7']);
+    expect(r.skipped).toEqual([JSON.stringify([null, 'member-1', 'thread-9', 7])]);
     expect(h.calls.release).toEqual(['stale-session']);
     expect(h.calls.submit).toBe(0);
   });
@@ -98,7 +110,7 @@ describe('kernel envelope drives the DSH notification driver (batch API)', () =>
     const r = await driveOnce(h.ports);
     expect(h.calls.journal).toEqual(['submitting', 'del']);
     expect(h.calls.release).toEqual(['stale-session']);
-    expect(r.skipped).toEqual(['native|member-1|thread-9|7']);
+    expect(r.skipped).toEqual([JSON.stringify([null, 'member-1', 'thread-9', 7])]);
     expect(h.calls.submit).toBe(0);
   });
 
@@ -106,10 +118,10 @@ describe('kernel envelope drives the DSH notification driver (batch API)', () =>
     const h = harness({ submit: { status: 'enqueued' } });
     h.batches.push(batchFor());
     const first = await driveOnce(h.ports);
-    expect(first.awaitingCompletion).toEqual(['native|member-1|thread-9|7']);
+    expect(first.awaitingCompletion).toEqual([JSON.stringify([null, 'member-1', 'thread-9', 7])]);
     expect(h.calls.confirm).toBe(0);
     const second = await driveOnce(h.ports);
-    expect(second.receiptsConfirmed).toEqual(['native|member-1|thread-9|7']);
+    expect(second.receiptsConfirmed).toEqual([JSON.stringify([null, 'member-1', 'thread-9', 7])]);
     expect(h.calls.confirm).toBe(1);
     expect(h.calls.submit).toBe(1);
     expect(h.journal.size).toBe(0);
@@ -118,17 +130,17 @@ describe('kernel envelope drives the DSH notification driver (batch API)', () =>
   it('keeps an unknown submission for reconciliation and never replays it', async () => {
     const h = harness({ submit: { status: 'unknown', detail: 'socket closed' } });
     h.batches.push(batchFor());
-    expect((await driveOnce(h.ports)).unknown).toEqual(['native|member-1|thread-9|7']);
-    expect((await driveOnce(h.ports)).unknown).toEqual(['native|member-1|thread-9|7']);
+    expect((await driveOnce(h.ports)).unknown).toEqual([JSON.stringify([null, 'member-1', 'thread-9', 7])]);
+    expect((await driveOnce(h.ports)).unknown).toEqual([JSON.stringify([null, 'member-1', 'thread-9', 7])]);
     expect(h.calls.submit).toBe(1);
-    expect(h.journal.get('native|member-1|thread-9|7')?.state).toBe('unknown');
+    expect(h.journal.get(JSON.stringify([null, 'member-1', 'thread-9', 7]))?.state).toBe('unknown');
   });
 
   it('confirms the whole batch once, echoing exactly the submitted snapshot', async () => {
     const h = harness({ submit: { status: 'completed', turnId: 'turn-x' } });
     h.batches.push(batchFor({ entryIds: [11, 12] }));
     const r = await driveOnce(h.ports);
-    expect(r.receiptsConfirmed).toEqual(['native|member-1|thread-9|7']);
+    expect(r.receiptsConfirmed).toEqual([JSON.stringify([null, 'member-1', 'thread-9', 7])]);
     expect(h.calls.confirm).toBe(1);
     expect(h.calls.submit).toBe(1);           // one turn for the whole batch
   });
@@ -137,7 +149,7 @@ describe('kernel envelope drives the DSH notification driver (batch API)', () =>
     const h = harness();
     h.batches.push(batchFor({ detail: kernelDetail({ goalIds: [] }) }));
     const r = await driveOnce(h.ports);
-    expect(r.skipped).toEqual(['native|member-1|thread-9|7']);
+    expect(r.skipped).toEqual([JSON.stringify([null, 'member-1', 'thread-9', 7])]);
     // The batch API reuses 'stale-session' for an unusable check envelope; the point that
     // matters is that nothing reached a model turn.
     expect(h.calls.release).toEqual(['stale-session']);
@@ -148,7 +160,7 @@ describe('kernel envelope drives the DSH notification driver (batch API)', () =>
     const h = harness({ submit: { status: 'completed', turnId: 'turn-1' } });
     h.batches.push(batchFor({ sequence: 7 }), batchFor({ sequence: 8 }));
     const r = await driveOnce(h.ports);
-    expect(r.receiptsConfirmed.sort()).toEqual(['native|member-1|thread-9|7', 'native|member-1|thread-9|8']);
+    expect(r.receiptsConfirmed.sort()).toEqual([JSON.stringify([null, 'member-1', 'thread-9', 7]), JSON.stringify([null, 'member-1', 'thread-9', 8])]);
     expect(h.calls.submit).toBe(2);
     expect(h.calls.confirm).toBe(2);
   });

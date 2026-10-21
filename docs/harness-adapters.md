@@ -227,3 +227,5 @@ DSH 的入口导出指令、生命周期、SDK 组合、会话发送、整批通
 | 真实 Codex 闭环 | 隔离看板实测记录（见 verification.md） | 官方登录下最小真实回合；不覆盖 DSH 或其他 harness |
 
 参考实现（echo）的一切证据都是确定性的；真实模型、真实 DSH Host、真实桌面宿主的行为必须另行实测并在 [verification.md](verification.md) 记录，不得用替身证据代替。
+
+通知意图键使用 JSON 四元组 `[adapterId ?? null, memberId, sessionRef, sequence]`，缺省通道与字面名称 `native` 明确区分，字段含分隔符也不会产生碰撞。发现旧拼接键意图时停止该投递并要求保留证据对账，不将它视为缺失而重新提交，也不提示清空 unknown。
