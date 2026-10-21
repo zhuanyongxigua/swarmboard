@@ -34,6 +34,18 @@ function fixture(adapter?: SessionAdapter) {
 const payload = (entry: Entry) => JSON.parse(entry.detail) as { goalIds: string[]; sessionRef: string; dueAt: number };
 
 describe('session task checks through the public runtime', () => {
+  it('does not enroll an admitted durable channel without timed reminder consent', async () => {
+    const f = fixture(), goal = f.board.createTask({ title: 'Optional timed checks' });
+    const member = f.runtime.configureCollaborator({ expectedVersion: 0, name: 'Ordinary updates only',
+      harness: 'synthetic-orchid', sessionRef: 'original-no-timer', taskIds: [goal.id], enabled: true });
+    new NotificationAdapterStore(f.board.db).save({ id: 'ordinary-only', version: 1, displayName: 'Ordinary only',
+      harness: 'synthetic-orchid', enabled: true, capabilities: ['durableDelivery', 'receipt'],
+      members: [{ memberId: member.id, sessionRef: member.sessionRef, taskIds: [goal.id] }] });
+    await f.runtime.scan();
+    for (let cycle = 0; cycle < 3; cycle++) { f.advance(); await f.runtime.scan(); }
+    expect(f.checks()).toEqual([]);
+  });
+
   it('does not turn a bare channel registration into a session admission', async () => {
     const f = fixture(), goal = f.board.createTask({ title: 'Needs formal admission' });
     new NotificationAdapterStore(f.board.db).save({ id: 'unadmitted', version: 1, displayName: 'Unadmitted',

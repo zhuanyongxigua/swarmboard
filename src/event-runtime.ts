@@ -176,7 +176,8 @@ export class EventRuntime {
         && (!worker.taskIds.length || worker.taskIds.includes(goal.id))).map(goal => goal.id));
     }
     for (const adapter of this.notificationDispatcher.adapters()) {
-      if (!adapter.enabled || !adapter.capabilities.includes('durableDelivery')) continue;
+      if (!adapter.enabled || !adapter.capabilities.includes('durableDelivery')
+        || !adapter.capabilities.includes('timedReminder')) continue;
       for (const member of adapter.members) {
         const admitted = (() => { try { return this.collaborators.get(member.memberId); } catch { return undefined; } })();
         const ids = admitted ? collaboratorTaskIds(admitted, this.workers) : [];

@@ -310,10 +310,11 @@ export function resolveSessionTaskCheckTargets(entry: Entry, adapters: readonly 
   if (!check || !check.adapterId || !Number.isSafeInteger(check.registrationVersion) || check.registrationVersion! < 1)
     return { targets: [], skipped: [] };
   const selected = adapters.filter(adapter => adapter?.id === check.adapterId && adapter?.version === check.registrationVersion);
-  const resolution = resolveNotificationTargets(entry, selected);
+  const resolution = resolveNotificationTargets(entry, selected, { capability: 'timedReminder' });
   resolution.targets = resolution.targets.filter(target => {
-    const member = selected.find(adapter => adapter.id === target.adapterId)?.members.find(member => member.memberId === target.memberId);
-    return target.sessionRef === check.sessionRef && member !== undefined
+    const adapter = selected.find(adapter => adapter.id === target.adapterId);
+    const member = adapter?.members.find(member => member.memberId === target.memberId);
+    return adapter?.capabilities.includes('durableDelivery') && target.sessionRef === check.sessionRef && member !== undefined
       && check.goalIds.some(id => member.taskIds.includes(id));
   });
   return resolution;

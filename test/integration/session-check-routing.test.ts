@@ -23,7 +23,7 @@ function fixture(path = ':memory:') {
   const member = collaborators.configure({ expectedVersion: 0, name: 'External', harness: 'arbitrary', sessionRef: 'session-a', taskIds: [goal.id], enabled: true }, board).collaborator;
   board.registerAgent({ agentId: member.id, name: 'External' });
   const store = new NotificationAdapterStore(board.db);
-  const registration: NotificationAdapterRegistration = { id: 'channel-a', version: 1, displayName: 'Arbitrary channel', harness: 'arbitrary', enabled: true, capabilities: ['durableDelivery', 'receipt'], members: [{ memberId: member.id, sessionRef: member.sessionRef, taskIds: [goal.id] }] };
+  const registration: NotificationAdapterRegistration = { id: 'channel-a', version: 1, displayName: 'Arbitrary channel', harness: 'arbitrary', enabled: true, capabilities: ['durableDelivery', 'receipt', 'timedReminder'], members: [{ memberId: member.id, sessionRef: member.sessionRef, taskIds: [goal.id] }] };
   store.save(registration);
   const dispatcher = createNotificationDispatcher(board, collaborators);
   const check = (patch: Record<string, unknown> = {}, entryPatch: Partial<Entry> = {}) => board.publishEntry({ agentId: 'runtime-synthetic', kind: 'MESSAGE', recipientId: member.id, summary: 'SESSION_TASK_CHECK: inspect current goals', detail: JSON.stringify({ kind: 'SESSION_TASK_CHECK', memberId: member.id, sessionRef: member.sessionRef, adapterId: registration.id, registrationVersion: 1, dueAt: 300000, goalIds: [goal.id], ...patch }), ...entryPatch });
@@ -31,6 +31,24 @@ function fixture(path = ':memory:') {
 }
 
 describe('session task-check notification routing', () => {
+  it('requires timed reminder consent while retaining ordinary durable delivery', () => {
+    const f = fixture();
+    f.store.save({ ...f.registration, version: 2, capabilities: ['durableDelivery', 'receipt'] });
+    f.dispatcher.dispatch(f.check({ registrationVersion: 2 }));
+    expect(f.store.unsettled()).toHaveLength(0);
+    const ordinary = f.board.publishEntry({ agentId: 'runtime-synthetic', kind: 'MESSAGE',
+      recipientId: f.member.id, summary: 'An ordinary shared update', detail: 'Reference data' });
+    f.dispatcher.dispatch(ordinary);
+    expect(f.store.unsettled()[0]!.intent.entryIds).toEqual([ordinary.id]);
+  });
+
+  it('also requires durable delivery when timed reminders are declared', () => {
+    const f = fixture();
+    expect(resolveSessionTaskCheckTargets(f.check(), [
+      { ...f.registration, capabilities: ['timedReminder'] },
+    ]).targets).toEqual([]);
+  });
+
   it('isolates malformed declarations before selecting a valid check channel', () => {
     const f = fixture();
     const declarations = [null, f.registration] as unknown as NotificationAdapterRegistration[];

@@ -91,7 +91,7 @@ describe('per-session five-minute checks (runtime wiring)', () => {
       harness: 'synthetic', sessionRef: 'external-session-1', taskIds: [goal.id], enabled: true });
     new NotificationAdapterStore(board.db).save({ id: 'adapter-synthetic', version: 1,
       displayName: 'Synthetic external channel', harness: 'synthetic', enabled: true,
-      capabilities: ['durableDelivery'],
+      capabilities: ['durableDelivery', 'timedReminder'],
       members: [{ memberId: member.id, sessionRef: member.sessionRef, taskIds: [goal.id] }] });
     await runtime.scan();                       // anchor
     now += 60_000;

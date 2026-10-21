@@ -133,7 +133,7 @@ function externalFixture() {
     const c = runtime.collaborators.configure({ expectedVersion: 0, name, harness: 'synthetic', sessionRef, taskIds: [goal.id], enabled: true }, board).collaborator;
     board.registerAgent({ agentId: c.id, name });
     channels.save({ id: 'adapter-' + name, version: 1, displayName: 'Synthetic ' + name, harness: 'synthetic', enabled: true,
-      capabilities: ['durableDelivery', 'receipt'], members: [{ memberId: c.id, sessionRef, taskIds: [goal.id] }] });
+      capabilities: ['durableDelivery', 'receipt', 'timedReminder'], members: [{ memberId: c.id, sessionRef, taskIds: [goal.id] }] });
     members.push(c);
   }
   const checks = () => board.readEntries({ query: 'SESSION_TASK_CHECK' }).items;
