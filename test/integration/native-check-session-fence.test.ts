@@ -32,10 +32,10 @@ async function fixture() {
   const worker = runtime.workers.list()[0]!;
   const agentId = 'runtime-fence-probe';
   board.registerAgent({ agentId, name: 'Synthetic runtime' });
-  const publish = () => board.publishEntry({ agentId, kind: 'MESSAGE', recipientId: worker.id,
+  const publish = (patch: Record<string, unknown> = {}, rawDetail?: string) => board.publishEntry({ agentId, kind: 'MESSAGE', recipientId: worker.id,
     summary: 'SESSION_TASK_CHECK: queued-period-probe',
-    detail: JSON.stringify({ kind: 'SESSION_TASK_CHECK', memberId: worker.id,
-      sessionRef: worker.threadId, dueAt: 900000, goalIds: [goal.id] }) });
+    detail: rawDetail ?? JSON.stringify({ kind: 'SESSION_TASK_CHECK', memberId: worker.id,
+      sessionRef: worker.threadId, dueAt: 900000, goalIds: [goal.id], ...patch }) });
   return { runtime, board, turns, worker, goal, publish, settle,
     holdOpen: () => {
       let entered = false, release!: () => void;
@@ -74,4 +74,22 @@ it('rechecks periodic goal scope after asynchronous session preparation', async 
   f.board.updateTask(f.goal.id, { expectedVersion: f.board.readTask(f.goal.id).version, status: 'blocked' });
   gate.release(); await f.settle();
   expect(f.turns.some(turn => turn.prompt.includes('queued-period-probe'))).toBe(false);
+});
+
+it('rejects a periodic check without any declared goal scope', async () => {
+  const f = await fixture(); f.publish({ goalIds: [] }); await f.settle();
+  expect(f.turns.some(turn => turn.prompt.includes('queued-period-probe'))).toBe(false);
+});
+
+it('does not fall back to an ordinary message for a malformed reserved check', async () => {
+  const f = await fixture(); f.publish({}, '{'); await f.settle();
+  expect(f.turns.some(turn => turn.prompt.includes('queued-period-probe'))).toBe(false);
+});
+
+it('keeps ordinary messages with valid JSON null detail deliverable', async () => {
+  const f = await fixture();
+  f.board.publishEntry({ agentId: 'runtime-fence-probe', kind: 'MESSAGE', recipientId: f.worker.id,
+    summary: 'ordinary-message-probe', detail: 'null' });
+  await f.settle();
+  expect(f.turns.some(turn => turn.prompt.includes('ordinary-message-probe'))).toBe(true);
 });
