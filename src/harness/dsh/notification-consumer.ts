@@ -66,12 +66,14 @@ export type FormalBinding =
     }
   | { readonly ok: false; readonly reason: string };
 
+export type MaybePromise<T> = T | Promise<T>;
+
 export interface BoardPort {
-  unsettled(seat: SeatConfig): readonly UnsettledDelivery[];
-  binding(seat: SeatConfig): FormalBinding;
+  unsettled(seat: SeatConfig): MaybePromise<readonly UnsettledDelivery[]>;
+  binding(seat: SeatConfig): MaybePromise<FormalBinding>;
   /** Mirrors the delivered NotificationService.currentIntent() predicate. */
-  intentCurrent(seat: SeatConfig, delivery: UnsettledDelivery): { ok: boolean; reason?: string };
-  entries(ids: readonly number[]): readonly EntryView[];
+  intentCurrent(seat: SeatConfig, delivery: UnsettledDelivery): MaybePromise<{ ok: boolean; reason?: string }>;
+  entries(ids: readonly number[]): MaybePromise<readonly EntryView[]>;
 }
 
 /**
@@ -234,7 +236,7 @@ export async function runPass(input: {
       if (!Object.prototype.hasOwnProperty.call(input.state.seats, key)) input.state.seats[key] = null;
       const record = input.state.seats[key] ?? null;
       let rows: readonly UnsettledDelivery[];
-      try { rows = input.board.unsettled(seat); } catch (error) {
+      try { rows = await input.board.unsettled(seat); } catch (error) {
         errors.push({ seat: key, step: 'board', error: String((error as Error)?.message ?? error) });
         continue;
       }
@@ -251,7 +253,7 @@ export async function runPass(input: {
         actions.push({ seat: key, action: 'awaiting-member', sequence: target.sequence, state: record.state, rpcId: record.rpcId ?? null });
         continue;
       }
-      const binding = input.board.binding(seat);
+      const binding = await input.board.binding(seat);
       if (!binding.ok) {
         errors.push({ seat: key, step: 'binding', error: `stale-binding:${binding.reason}` });
         continue;
@@ -268,7 +270,7 @@ export async function runPass(input: {
         errors.push({ seat: key, step: 'intent-scope', error: `stale-intent:registration-version:${target.registrationVersion}!=${binding.registrationVersion}` });
         continue;
       }
-      const scope = input.board.intentCurrent(seat, target);
+      const scope = await input.board.intentCurrent(seat, target);
       if (!scope.ok) {
         errors.push({ seat: key, step: 'intent-scope', error: `stale-scope:${scope.reason ?? 'unknown'}` });
         continue;
@@ -299,12 +301,18 @@ export async function runPass(input: {
       }
       // The round trip crosses an async boundary: re-read authority and scope, then
       // the manual writer, before recording a new send.
-      const hostAfter = input.board.binding(seat);
+      const hostAfter = await input.board.binding(seat);
       if (!hostAfter.ok) {
         errors.push({ seat: key, step: 'host-authz', error: `host-authz:changed-during-describe:${hostAfter.reason}` });
         continue;
       }
-      const scopeAfter = input.board.intentCurrent(seat, target);
+      // A generation bump invalidates the earlier binding snapshot even when the
+      // adapter remains enabled (review FAIL 8882 item 1).
+      if (hostAfter.adapterId !== binding.adapterId || hostAfter.registrationVersion !== binding.registrationVersion) {
+        errors.push({ seat: key, step: 'host-authz', error: `host-authz:generation-changed:${binding.registrationVersion}->${hostAfter.registrationVersion}` });
+        continue;
+      }
+      const scopeAfter = await input.board.intentCurrent(seat, target);
       if (!scopeAfter.ok) {
         errors.push({ seat: key, step: 'intent-scope', error: `stale-scope:changed-during-describe:${scopeAfter.reason ?? 'unknown'}` });
         continue;
@@ -325,7 +333,7 @@ export async function runPass(input: {
         continue;
       }
       let entries: readonly EntryView[] = [];
-      try { entries = input.board.entries(target.entryIds ?? []); } catch { entries = []; }
+      try { entries = await input.board.entries(target.entryIds ?? []); } catch { entries = []; }
       const rpcId = rpcIdOf();
       const asOfSeq = Number.isSafeInteger(session.asOfSeq) ? session.asOfSeq : null;
       input.state.seats[key] = {
@@ -432,33 +440,113 @@ export async function startNotificationConsumer(options: {
   readonly transport: TransportPort;
   readonly now?: () => string;
   readonly once?: boolean;
-}): Promise<{ stop(): void; first: PassResult }> {
+}): Promise<{ stop(): Promise<void>; first: PassResult }> {
   const now = options.now ?? (() => new Date().toISOString());
-  const state = new WakerState(options.config.statePath, options.config.seats);
+  // Lock before loading the ledger: a second writer must never start from a stale
+  // in-memory snapshot taken before the lock (review FAIL 8704 / 8882).
+  mkdirSync(dirname(options.config.statePath), { recursive: true });
   const lock = acquireWriterLock(`${options.config.statePath}.lock`);
+  let state: WakerState;
+  try {
+    state = new WakerState(options.config.statePath, options.config.seats);
+  } catch (error) {
+    lock.release();
+    throw error;
+  }
+  let inFlight: Promise<PassResult> | null = null;
   const pass = async (dryRun = false): Promise<PassResult> => {
-    const result = await runPass({
-      seats: options.config.seats,
-      board: options.board,
-      transport: options.transport,
-      state: state.state,
-      now,
-      persist: () => state.save(),
-      dryRun,
-    });
-    state.save();
-    return result;
+    const run = (async () => {
+      const result = await runPass({
+        seats: options.config.seats,
+        board: options.board,
+        transport: options.transport,
+        state: state.state,
+        now,
+        persist: () => state.save(),
+        dryRun,
+      });
+      state.save();
+      return result;
+    })();
+    inFlight = run;
+    try { return await run; } finally { if (inFlight === run) inFlight = null; }
   };
-  const first = await pass(false);
+  let first: PassResult;
+  try {
+    first = await pass(false);
+  } catch (error) {
+    await Promise.resolve(inFlight).catch(() => {});
+    lock.release();
+    throw error;
+  }
   let timer: ReturnType<typeof setInterval> | undefined;
   if (!options.once) {
     timer = setInterval(() => { void pass(false).catch(() => { /* surfaced by the next pass */ }); }, options.config.intervalMs ?? DEFAULT_POLL_MS);
   }
   return {
     first,
-    stop() {
+    async stop() {
       if (timer) clearInterval(timer);
+      // Hand the lock over only after the in-flight pass has finished writing.
+      await Promise.resolve(inFlight).catch(() => {});
       lock.release();
+    },
+  };
+}
+
+export interface McpCallTool {
+  (request: { name: string; arguments: Record<string, unknown> }): Promise<unknown>;
+}
+
+/**
+ * Board port backed by the caller-bound MCP notification tools. `notification_pending`
+ * returns deliveries already filtered by the service's `currentIntent()`, so the port
+ * can treat scope as server-guaranteed; binding_read supplies the current generation.
+ */
+export function createMcpBoardPort(options: { readonly callTool: McpCallTool }): BoardPort {
+  const call = async (name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const value = await options.callTool({ name, arguments: args });
+    return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  };
+  return {
+    async unsettled() {
+      const value = await call('notification_pending', { after: 0, limit: 50 });
+      const items = Array.isArray(value.items) ? value.items : [];
+      return items.flatMap((item) => {
+        const row = item as { sequence?: unknown; entryIds?: unknown };
+        if (!Number.isSafeInteger(row.sequence)) return [];
+        const entryIds = Array.isArray(row.entryIds) ? row.entryIds.filter((id): id is number => Number.isSafeInteger(id)) : [];
+        return [{ sequence: row.sequence as number, entryIds }];
+      });
+    },
+    async binding(seat) {
+      const value = await call('notification_binding_read', { adapterId: seat.adapterId });
+      const binding = value.binding as { adapterId?: unknown; memberId?: unknown; sessionRef?: unknown; registrationVersion?: unknown; enabled?: unknown; taskIds?: unknown } | null | undefined;
+      if (!binding) return { ok: false, reason: 'binding-missing' };
+      if (binding.enabled !== true) return { ok: false, reason: 'adapter-disabled' };
+      if (binding.sessionRef !== seat.sessionRef) return { ok: false, reason: 'session-mismatch' };
+      if (!Number.isSafeInteger(binding.registrationVersion)) return { ok: false, reason: 'generation-missing' };
+      const taskIds = Array.isArray(binding.taskIds) ? binding.taskIds.filter((id): id is string => typeof id === 'string') : [];
+      return {
+        ok: true,
+        adapterId: String(binding.adapterId ?? seat.adapterId),
+        registrationVersion: binding.registrationVersion as number,
+        memberTaskIds: taskIds,
+        admissionTaskIds: taskIds,
+      };
+    },
+    async intentCurrent() { return { ok: true }; },
+    async entries(ids) {
+      const out: EntryView[] = [];
+      for (const id of ids) {
+        const value = await call('context_read', { after: id - 1, limit: 1 });
+        const items = Array.isArray(value.items) ? value.items : [];
+        const item = items[0] as { id?: unknown; detail?: unknown } | undefined;
+        if (item?.id !== id) continue;
+        const detail = typeof item.detail === 'string' ? item.detail : JSON.stringify(item.detail ?? null);
+        out.push({ id, detail });
+      }
+      return out;
     },
   };
 }

@@ -13,6 +13,8 @@ import {
   type UnsettledDelivery,
   type WakerStateShape,
   createOfficialWebTransport,
+  startNotificationConsumer,
+  createMcpBoardPort,
 } from '../../src/harness/dsh/notification-consumer.js';
 
 const seat: SeatConfig = { adapterId: 'synthetic-adapter', memberId: 'member-1', sessionRef: 'session-1', port: 1 };
@@ -226,5 +228,74 @@ describe('official web transport port', () => {
     expect(await createOfficialWebTransport({ fetchImpl: emptyFetch }).describe(seat)).toEqual({ found: false, running: false, asOfSeq: null });
     const rejectFetch: typeof fetch = async () => new Response(JSON.stringify({ result: { ok: false, error: { code: 'rejected' } } }), { status: 200 });
     await expect(createOfficialWebTransport({ fetchImpl: rejectFetch }).describe(seat)).rejects.toThrow('official-web-api:rejected');
+  });
+});
+
+describe('generation and startup boundaries', () => {
+  it('refuses to send when the registration generation changes during describe', async () => {
+    let calls = 0;
+    const prompts: unknown[] = [];
+    const board: BoardPort = {
+      unsettled: () => [{ sequence: 1, entryIds: [7] }],
+      binding: () => {
+        calls += 1;
+        return calls === 1
+          ? { ok: true, adapterId: 'synthetic-adapter', registrationVersion: 1, memberTaskIds: ['goal-1'], admissionTaskIds: ['goal-1'] }
+          : { ok: true, adapterId: 'synthetic-adapter', registrationVersion: 2, memberTaskIds: ['goal-1'], admissionTaskIds: ['goal-1'] };
+      },
+      intentCurrent: () => ({ ok: true }),
+      entries: () => [],
+    };
+    const result = await runPass({
+      seats: [seat], board, transport: transportFor({ prompts }), state: emptyState(), now,
+    });
+    expect(prompts).toHaveLength(0);
+    expect(result.errors[0]?.error).toBe('host-authz:generation-changed:1->2');
+  });
+
+  it('creates a fresh nested state directory, locks before loading, and releases on first-pass failure', async () => {
+    const dir = tempDir();
+    const statePath = join(dir, 'nested', 'deeper', 'state.json');
+    const failing: BoardPort = {
+      unsettled: () => [{ sequence: 1, entryIds: [1] }],
+      binding: () => ({ ok: true, adapterId: 'synthetic-adapter', registrationVersion: 1, memberTaskIds: [], admissionTaskIds: [] }),
+      intentCurrent: () => ({ ok: true }),
+      entries: () => [],
+    };
+    await expect(startNotificationConsumer({
+      config: { boardDatabasePath: 'b', runtimeDatabasePath: 'r', statePath, seats: [seat] },
+      board: failing,
+      transport: transportFor({ prompts: [] }),
+      now: () => { throw new Error('NOW_BOOM'); },
+    })).rejects.toThrow('NOW_BOOM');
+    const lock = acquireWriterLock(`${statePath}.lock`);
+    lock.release();
+
+    const ok: BoardPort = { unsettled: () => [], binding: () => ({ ok: true, adapterId: 'synthetic-adapter', registrationVersion: 1, memberTaskIds: [], admissionTaskIds: [] }), intentCurrent: () => ({ ok: true }), entries: () => [] };
+    const consumer = await startNotificationConsumer({ config: { boardDatabasePath: 'b', runtimeDatabasePath: 'r', statePath, seats: [seat] }, board: ok, transport: transportFor({ prompts: [] }), once: true });
+    await consumer.stop();
+    expect(readFileSync(statePath, 'utf8')).toContain('"schema": 1');
+  });
+
+  it('builds a board port over the bound MCP notification tools', async () => {
+    const toolCalls: string[] = [];
+    const board = createMcpBoardPort({
+      callTool: async ({ name }) => {
+        toolCalls.push(name);
+        if (name === 'notification_pending') return { items: [{ sequence: 4, entryIds: [21, 22] }] };
+        if (name === 'notification_binding_read') return { binding: { adapterId: 'synthetic-adapter', sessionRef: seat.sessionRef, registrationVersion: 1, enabled: true, taskIds: ['goal-1'] } };
+        if (name === 'context_read') return { items: [{ id: 21, detail: JSON.stringify({ kind: 'SESSION_TASK_CHECK', instruction: 'Check the authorized goals.' }) }] };
+        return {};
+      },
+    });
+    const prompts: { text: string }[] = [];
+    const result = await runPass({ seats: [seat], board, transport: transportFor({ prompts }), state: emptyState(), now });
+    expect(result.actions[0]?.action).toBe('prompted');
+    expect(prompts[0]?.text).toContain('Check the authorized goals.');
+    expect(toolCalls).toContain('notification_pending');
+    expect(toolCalls).toContain('notification_binding_read');
+
+    const missing = createMcpBoardPort({ callTool: async () => ({ binding: null }) });
+    expect((await missing.binding(seat)).ok).toBe(false);
   });
 });
