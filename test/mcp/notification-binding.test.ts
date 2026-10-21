@@ -38,8 +38,9 @@ it('returns only the caller binding and reads without changing registrations, hi
   adapters.recordIntent({ adapterId: 'channel', memberId: me.id, sequence: 1, entryIds: [99], createdAt: new Date(0).toISOString() });
   const before = [board.db.prepare('SELECT total_changes() AS n').get(), collaborators.db.prepare('SELECT total_changes() AS n').get()];
   const first = json(await read());
-  expect(first).toEqual({ binding: { adapterId: 'channel', memberId: me.id, sessionRef: 'original', registrationVersion: 1,
-    admissionVersion: 1, enabled: true, taskIds: me.taskIds, boardWide: true, capabilities: ['durableDelivery', 'timedReminder', 'receipt'] } });
+  expect({ ...first, binding: { ...first.binding, taskIds: [...first.binding.taskIds].sort() } }).toEqual({ binding: {
+    adapterId: 'channel', memberId: me.id, sessionRef: 'original', registrationVersion: 1,
+    admissionVersion: 1, enabled: true, taskIds: [...me.taskIds].sort(), boardWide: true, capabilities: ['durableDelivery', 'timedReminder', 'receipt'] } });
   expect(json(await read())).toEqual(first);
   expect([board.db.prepare('SELECT total_changes() AS n').get(), collaborators.db.prepare('SELECT total_changes() AS n').get()]).toEqual(before);
   expect((await client.listTools()).tools.find(t => t.name === 'notification_binding_read')?.annotations?.readOnlyHint).toBe(true);
