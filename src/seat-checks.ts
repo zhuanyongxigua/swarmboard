@@ -36,6 +36,11 @@ export interface SeatSnapshot {
   adapterId?: string;
   /** Registration generation the seat snapshot was taken from; rechecked at dispatch. */
   registrationVersion?: number;
+  /**
+   * Goals this seat may act on (pool taskIds for a native worker, the member's
+   * taskIds for an external channel). Empty or absent means the whole board.
+   */
+  taskIds?: readonly string[];
 }
 
 export interface GoalView { id: string; status: string; taskIds?: readonly string[] }
@@ -122,6 +127,9 @@ export function tick(input: TickInput): TickResult {
   const changed: SeatRecord[] = [];
   const wake: TickResult['wake'] = [];
   const goals = applicableGoals(input.goals);
+  const scoped = (seat: SeatSnapshot) => (seat.taskIds && seat.taskIds.length
+    ? goals.filter(goal => seat.taskIds!.includes(goal.id))
+    : goals);
   const activeSeats = input.seats.filter(s => s.active);
 
   for (const seat of input.seats) {
@@ -144,7 +152,8 @@ export function tick(input: TickInput): TickResult {
     // Persist the baseline of a brand-new active seat so the interval is anchored.
     if (!existing) { changed.push({ ...next }); }
 
-    if (!input.organizationActive || goals.length === 0) {
+    const seatGoals = scoped(seat);
+    if (!input.organizationActive || seatGoals.length === 0) {
       // Cheap scope query only: nothing applicable, so no model wakeup is spent.
       // Re-anchor unconditionally so a goal that reappears later waits at most one
       // full interval; time that passed with nothing to do is never banked.
@@ -172,7 +181,8 @@ export function tick(input: TickInput): TickResult {
     }
 
     const dueAt = prior.nextDueAt;
-    const goalIds = goals.slice(0, 20).map(g => g.id);
+    // Never hand a seat ids from its own out-of-scope goals.
+    const goalIds = seatGoals.slice(0, 20).map(g => g.id);
     next = {
       ...next, pendingMerged: false, lastCheckAt: input.now,
       nextDueAt: input.now + intervalMs, checks: next.checks + 1, state: 'waiting',

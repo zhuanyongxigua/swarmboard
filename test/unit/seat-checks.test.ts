@@ -146,6 +146,21 @@ describe('per-session five-minute checks', () => {
     expect(rescan.wake).toEqual([]);
   });
 
+  it('never hands a seat goal ids outside its authorized task scope', () => {
+    const t0 = 1_000_000;
+    const goals = [goal('mine', 'todo'), goal('foreign', 'todo')];
+    const first = tick({ now: t0, organizationActive: true, goals, records: new Map(),
+      seats: [{ ...seat('a'), taskIds: ['mine'] }] });
+    const due = tick({ now: t0 + CHECK_INTERVAL_MS, organizationActive: true, goals,
+      records: merge(first.records), seats: [{ ...seat('a'), taskIds: ['mine'] }] });
+    expect(due.wake).toHaveLength(1);
+    expect(due.wake[0]!.goalIds).toEqual(['mine']);      // no foreign id leaks in
+    // A seat whose scope has nothing applicable is not woken at all.
+    const idleSeat = tick({ now: t0 + CHECK_INTERVAL_MS, organizationActive: true, goals,
+      records: new Map(), seats: [{ ...seat('b'), taskIds: ['other'] }] });
+    expect(idleSeat.wake).toEqual([]);
+  });
+
   it('restart replays at most one overdue check per seat', () => {
     const t0 = 1_000_000;
     // persisted record from long ago, now far overdue
