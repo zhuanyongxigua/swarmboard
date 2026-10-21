@@ -35,7 +35,7 @@ interface Attempt {
   state: 'intent' | 'confirmed';
   receipt?: DshLaunchRecord;
 }
-interface SeatState { key: string; sessionRef: string; attempts: Attempt[] }
+interface SeatState { key: string; sessionRef: string; attempts: Attempt[]; preflightBlocked?: boolean }
 interface State {
   schema: 'swarmboard-dsh-cohort/v1';
   cohortKey: string;
@@ -129,14 +129,14 @@ function status(request: DshCohortRequest, state: State | null, busy: boolean, b
   return {
     cohortKey: request.cohortKey, busy,
     claimPresent: busy,
-    seats: (state?.seats ?? Array.from({ length: request.count }, (_, index) => ({ key: `seat-${index + 1}`, sessionRef: '', attempts: [] }))).map(seat => {
+    seats: (state?.seats ?? Array.from({ length: request.count }, (_, index): SeatState => ({ key: `seat-${index + 1}`, sessionRef: '', attempts: [] }))).map(seat => {
       const pending = seat.attempts.find(attempt => attempt.state === 'intent');
       const complete = seat.attempts.length === DSH_COHORT_STAGES.length && !pending;
       return {
-        ...context(seat), phase: pending ? 'reconcile-required' : complete ? 'launched' : blocked.has(seat.key) ? 'preflight-blocked' : 'planned',
+        ...context(seat), phase: pending ? 'reconcile-required' : complete ? 'launched' : blocked.has(seat.key) || seat.preflightBlocked ? 'preflight-blocked' : 'planned',
         nextStep: pending ? `Reconcile ${pending.stage} operation ${pending.operationId} with authoritative evidence; do not replay.`
           : complete ? 'Read actual bootstrap readiness, completion receipts, and contribution evidence separately.'
-            : blocked.has(seat.key) ? 'Restore current formal authority or correct configuration before continuing.' : `Continue ${DSH_COHORT_STAGES[seat.attempts.length]}.`,
+            : blocked.has(seat.key) || seat.preflightBlocked ? 'Restore current formal authority or correct configuration before continuing.' : `Continue ${DSH_COHORT_STAGES[seat.attempts.length]}.`,
         ready: false, consumed: false,
       };
     }),
@@ -173,7 +173,8 @@ export async function runDshCohort(input: DshCohortRequest, ports: DshCohortPort
       for (let step = seat.attempts.length; step < DSH_COHORT_STAGES.length; step++) {
         const stage = DSH_COHORT_STAGES[step];
         try { await ports.preflight(stage, context(seat)); }
-        catch { blocked.add(seat.key); break; }
+        catch { blocked.add(seat.key); seat.preflightBlocked = true; save(request, state); break; }
+        delete seat.preflightBlocked;
         const attempt: Attempt = { stage, operationId: randomUUID(), state: 'intent' };
         seat.attempts.push(attempt);
         save(request, state);

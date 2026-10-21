@@ -97,6 +97,7 @@ test('current authority failure blocks before intent and does not prevent anothe
   ports.preflight = async (_stage, seat) => { if (seat.key === 'seat-1') throw new Error('revoked'); };
   const result = await runDshCohort(request, ports);
   expect(result.seats.map(seat => seat.phase)).toEqual(['preflight-blocked', 'launched']);
+  expect(inspectDshCohort(request).seats[0].phase).toBe('preflight-blocked');
   expect(calls.every(call => call.startsWith('seat-2:'))).toBe(true);
   expect(JSON.parse(readFileSync(path.join(request.stateDirectory, 'cohort.json'), 'utf8')).seats[0].attempts).toEqual([]);
 });

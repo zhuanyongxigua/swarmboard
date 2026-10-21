@@ -2,6 +2,8 @@
 
 [返回架构说明](architecture.md) · [事件工作会话](event-workers.md)
 
+DSH 的显式可重复启动、人数配置和逐席状态见[DSH cohort 启动入口](dsh-cohort-launcher.md)。
+
 Swarmboard 的协作内核（共享目标/上下文、事件投递、稳定身份、持久检查点、生命周期、容量、空闲恢复、执行授权）不依赖任何具体 harness。会话创建/续接、回合执行、状态核查、审批信号等宿主差异全部放在适配层：内核只面向 `src/harness/contract.ts` 定义的通用契约，正式运行入口通过 `src/harness/registry.ts` 这一唯一装配缝选择后端。
 
 ## 可复用适配器与个人配置边界
