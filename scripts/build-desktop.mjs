@@ -4,6 +4,7 @@ import { build } from 'esbuild';
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { buildHarnessModules } from './build-harness-modules.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const destination = path.join(root, 'dist/desktop');
@@ -22,6 +23,7 @@ const result = await build({
   sourcemap: false,
   metafile: true,
 });
+const harnessModules = await buildHarnessModules(root, destination);
 for (const name of ['plugin.json', 'mcp.json', 'LICENSE', 'README.md', 'README.zh-CN.md']) {
   await cp(path.join(root, name), path.join(destination, name));
 }
@@ -50,7 +52,7 @@ for (const language of ['en', 'zh-CN']) {
 }
 // Preserve dependency license notices without shipping development dependencies or their source trees.
 const packageDirectories = new Set();
-for (const input of Object.keys(result.metafile.inputs)) {
+for (const input of [result, ...harnessModules].flatMap(result => Object.keys(result.metafile.inputs))) {
   const match = input.match(/^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\//);
   if (match) packageDirectories.add(path.join(root, match[1]));
 }

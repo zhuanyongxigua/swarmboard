@@ -167,6 +167,14 @@ class DshSession implements SessionAdapter {
 
 ## 测试与证据边界
 
+### 独立模块的可移植交付
+
+源码中的独立模块必须显式提供 `src/harness/<module>/index.ts` 公共入口；桌面构建将这些受信仓库入口分别打包为 `server/harness/<module>/index.mjs`，不把它们导入主服务。辅助目录没有入口则不导出。模块自己的依赖许可与主服务一起进入 `THIRD_PARTY_NOTICES.txt`；个人 SDK 安装、认证、运行目录和配置不随包复制。
+
+DSH 的入口导出指令与生命周期边界，供已经授权的宿主显式 import 后组合。导出不等于注册、启用或启动，不提供任务文本加载本地模块的接口，也不恢复暂停的 harness。第三方可按相同目录入口约定交付独立模块，无需在构建脚本增加厂商分支。源码构建仍通过 TypeScript 输出对应模块；桌面 ZIP 的独立 bundle 可从与源码无关的目录加载。
+
+`test/unit/desktop-harness-modules.test.ts` 验证任意名合成模块打包后脱离源码加载、不执行构建期模块代码；`test/mcp/desktop-harness.test.ts` 对实际 ZIP 解包后加载 DSH 导出，并确认主服务没有嵌入这些实现。上述检查不连接官方宿主或模型，不能当作真实启用与迁移验收。
+
 ### DSH 会话生命周期边界模块
 
 `src/harness/dsh/lifecycle.ts` 提供独立的 `DshLifecycle`，由受信组合入口注入 registry 和耐久 journal。它是具体适配层的一个切片，尚不是完整的 `HarnessBackend`，不由核心默认加载。官方接口依据为本机公开安装的 `@deepseek-ai/dsh-agent@0.1.1-rc.2` 的 `AgentRegistry.get/create/resume`、`AgentHandle`，以及同版本 `dsh-session` 的 `Session.header`。实现为原创代码，不复制 SDK 源码，也不添加全局安装路径或个人运行配置依赖。
