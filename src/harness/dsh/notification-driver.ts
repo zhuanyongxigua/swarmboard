@@ -79,8 +79,12 @@ export interface Intent {
   state: IntentState;
   batch: DeliveryBatch;
   detail?: string;
-  /** Entry ids of this delivery that already have authoritative completion (p2 7237).
-   *  When the delivery grows by a later merge, only the missing entries are submitted. */
+  /**
+   * Entry ids of this delivery that already have authoritative completion (p2 7237).
+   * Host journals persist only `{key,state,batch,detail}` (p2 7250), so `covered` is ALSO
+   * mirrored into `batch.delivery.entryIds` on every write and read back from there; the
+   * optional field here is just the in-memory convenience copy.
+   */
   covered?: readonly number[];
 }
 
@@ -150,6 +154,24 @@ export const defaultBatchText = (batch: DeliveryBatch): string => {
   return parts.join('\n');
 };
 
+/**
+ * Persist an intent so that the covered set survives hosts that only serialize
+ * `{key,state,batch,detail}`: `batch.delivery.entryIds` is the monotonic covered list.
+ */
+const durableIntent = (
+  key: string, state: IntentState, attempt: DeliveryBatch, covered: ReadonlySet<number>, detail?: string,
+): Intent => ({
+  key,
+  state,
+  detail,
+  covered: [...covered],
+  batch: { ...attempt, delivery: { sequence: attempt.delivery.sequence, entryIds: [...covered] } },
+});
+
+/** The covered entries recorded in a persisted intent (host-journal safe). */
+const coveredOf = (intent: Intent): Set<number> =>
+  new Set<number>(intent.covered ?? intent.batch.delivery.entryIds);
+
 /** One pass over the pending deliveries. Callers own the single-flight guarantee. */
 export async function driveOnce(
   ports: { pending: PendingPort; session: SessionPort; journal: Journal },
@@ -168,7 +190,7 @@ export async function driveOnce(
     // Work out whether this delivery still owes a model turn: entries that never got an
     // authoritative completion (a later ordinary merge grows the delivery, p2 7237).
     let workBatch: DeliveryBatch = batch;
-    let covered = new Set<number>(intent?.covered ?? intent?.batch.delivery.entryIds ?? []);
+    let covered = intent ? coveredOf(intent) : new Set<number>();
     let deltaOf: DeliveryBatch | undefined;
     if (intent?.state === 'completedUnacked' || intent?.state === 'acceptedUnacked') {
       const missing = batch.delivery.entryIds.filter(id => !covered.has(id));
@@ -179,7 +201,7 @@ export async function driveOnce(
           await ports.journal.del(key);
           result.receiptsConfirmed.push(key);
         } catch {
-          await ports.journal.put({ ...intent, covered: [...covered] });
+          await ports.journal.put(durableIntent(key, intent.state, intent.batch, covered, intent.detail));
           result.receiptPending.push(key);
         }
         continue;
@@ -233,7 +255,10 @@ export async function driveOnce(
 
     if (await ports.session.isBusy(workBatch)) { result.merged.push(key); continue; }
 
-    await ports.journal.put({ key, state: 'submitting', batch: workBatch, covered: [...covered] });
+    // Record the attempted ids as consumed-for-scheduling BEFORE the side effect: the
+    // intent is durable, so a crash cannot make the same entry run twice (at-most-once).
+    for (const id of workBatch.delivery.entryIds) covered.add(id);
+    await ports.journal.put(durableIntent(key, 'submitting', workBatch, covered));
 
     // Committing fence: the durable write is asynchronous, so the binding that was current
     // before it may already be gone (p8 7140/7141). Nothing was sent, so drop the intent.
@@ -252,7 +277,7 @@ export async function driveOnce(
     }
 
     if (outcome.status === 'unknown') {
-      await ports.journal.put({ key, state: 'unknown', batch: workBatch, detail: outcome.detail, covered: [...covered] });
+      await ports.journal.put(durableIntent(key, 'unknown', workBatch, covered, outcome.detail));
       result.unknown.push(key);
       continue;
     }
@@ -264,16 +289,15 @@ export async function driveOnce(
     }
     if (outcome.status === 'enqueued') {
       // Opaque settlement token from the port; kept verbatim and replayed to `settlement`.
-      await ports.journal.put({ key, state: 'enqueued', batch: workBatch, detail: outcome.messageId ?? outcome.detail, covered: [...covered] });
+      await ports.journal.put(durableIntent(key, 'enqueued', workBatch, covered, outcome.messageId ?? outcome.detail));
       result.awaitingCompletion.push(key);
       continue;
     }
 
     result.submitted.push(key);
-    for (const id of workBatch.delivery.entryIds) covered.add(id);
     // Settle against the newest snapshot (a delta submit still settles the grown delivery).
     const settleTarget = deltaOf ?? batch;
-    await ports.journal.put({ key, state: 'completedUnacked', batch: settleTarget, detail: outcome.turnId, covered: [...covered] });
+    await ports.journal.put(durableIntent(key, 'completedUnacked', settleTarget, covered, outcome.turnId));
     try {
       await ports.pending.confirm(settleTarget);
       await ports.journal.del(key);

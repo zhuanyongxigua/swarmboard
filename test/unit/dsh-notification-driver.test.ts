@@ -240,4 +240,28 @@ describe('driveOnce (whole delivery) ', () => {
     expect(f.calls.confirm).toEqual([]);
   });
 
+
+  it('keeps the covered set in the persisted batch so a reopen can continue', async () => {
+    // A host journal serialises only {key,state,batch,detail}; the covered set must survive
+    // inside `batch.delivery.entryIds` or a reopen would resubmit already-consumed entries.
+    const f = harness({ confirmFails: true });
+    await driveOnce(f.ports);
+    const persisted = f.journal.get(intentKey(batch()));
+    expect(persisted?.state).toBe('completedUnacked');
+    expect(persisted?.batch.delivery.entryIds).toEqual([1, 2]);
+
+    // Simulate reopen: the same journal entry, a fresh run.
+    f.setListed([batch({ delivery: { sequence: 7, entryIds: [1, 2] } })]);
+    const submits: number[][] = [];
+    await driveOnce({
+      ...f.ports,
+      journal: { ...f.ports.journal, get: async () => ({ ...persisted! }) },
+      session: {
+        ...f.ports.session,
+        submit: async (b: DeliveryBatch) => { submits.push([...b.delivery.entryIds]); return { status: 'completed' as const, turnId: 't9' }; },
+      },
+      pending: { ...f.ports.pending, confirm: async () => {} },
+    });
+    expect(submits).toEqual([]);       // nothing to re-run after reopen
+  });
 });
