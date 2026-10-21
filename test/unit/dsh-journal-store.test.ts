@@ -59,3 +59,36 @@ describe('durable DSH host journal', () => {
     await expect(reopened.notification.get(unknown.key)).rejects.toThrow(/DSH_JOURNAL_CORRUPT/);
   });
 });
+
+
+describe('journal durability fences (p3 review)', () => {
+  it('rejects writes inside an outer transaction instead of deferring durability', async () => {
+    const f = fixture(); const j = f.open();
+    f.db.exec('BEGIN');
+    expect(() => j.lifecycle.write({ operation: 'start', sessionId: 'session-a', cwd: '/synthetic/workspace' })).toThrow(/OUTER_TRANSACTION/);
+    await expect(j.notification.put(intent())).rejects.toThrow(/OUTER_TRANSACTION/);
+    await expect(j.notification.del(intent().key)).rejects.toThrow(/OUTER_TRANSACTION/);
+    f.db.exec('ROLLBACK');
+    expect(j.lifecycle.read()).toBeNull();
+    await expect(j.notification.get(intent().key)).resolves.toBeUndefined();
+  });
+
+  it('rejects an unknown/omitted transaction view instead of assuming autocommit', () => {
+    const f = fixture();
+    const wrapper = { exec: (sql: string) => f.db.exec(sql), prepare: (sql: string) => f.db.prepare(sql) } as never;
+    const j = createDshJournals({ db: wrapper, sessionId: 'session-a' });
+    expect(() => j.lifecycle.write({ operation: 'start', sessionId: 'session-a', cwd: '/synthetic/workspace' })).toThrow(/OUTER_TRANSACTION/);
+  });
+
+  it('treats non-text stored data as corruption, never as a missing intent', async () => {
+    const f = fixture(); const j = f.open();
+    j.lifecycle.write({ operation: 'resume', sessionId: 'session-a', cwd: '/synthetic/workspace' });
+    f.db.prepare('UPDATE dsh_host_journal SET data=? WHERE slot=?').run(Buffer.from('not-json'), 'lifecycle:session-a');
+    expect(() => j.lifecycle.read()).toThrow(/DSH_JOURNAL_CORRUPT/);
+    await j.notification.put(intent());
+    f.db.prepare('UPDATE dsh_host_journal SET data=? WHERE slot=?').run(Buffer.from('not-json'), 'notification:' + intent().key);
+    await expect(j.notification.get(intent().key)).rejects.toThrow(/DSH_JOURNAL_CORRUPT/);
+    const row = f.db.prepare('SELECT data FROM dsh_host_journal WHERE slot=?').get('notification:' + intent().key) as { data: Uint8Array };
+    expect(row.data).toBeInstanceOf(Uint8Array);
+  });
+});

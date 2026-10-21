@@ -29,6 +29,11 @@ export interface SqliteStatement {
 export interface SqliteDatabase {
   exec(sql: string): void;
   prepare(sql: string): SqliteStatement;
+  /** Required true/false view of the host connection's transaction state. A
+   *  wrapper that omits it is treated as unknown and rejected: a journal write
+   *  must commit before returning, so an outer/unknown transaction must not be
+   *  silently treated as autocommit. */
+  readonly isTransaction: boolean;
 }
 
 export interface DshNotificationJournal<TBatch = unknown> {
@@ -48,7 +53,10 @@ const lifecycleSlot = (sessionId: string) => `lifecycle:${sessionId}`;
 const notificationSlot = (key: string) => `notification:${key}`;
 
 function parsedRecord(row: unknown, label: string): Record<string, unknown> | null {
-  if (!row || typeof row !== 'object' || typeof (row as { data?: unknown }).data !== 'string') return null;
+  if (!row) return null;
+  if (typeof row !== 'object' || typeof (row as { data?: unknown }).data !== 'string') {
+    throw new Error(`DSH_JOURNAL_CORRUPT: ${label} has non-text data`);
+  }
   try {
     const value: unknown = JSON.parse((row as { data: string }).data);
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('not an object');
@@ -80,6 +88,11 @@ export function createDshJournals<TBatch = unknown>(input: { db: SqliteDatabase;
     `INSERT INTO ${TABLE}(slot,data) VALUES(?,?) ON CONFLICT(slot) DO UPDATE SET data=excluded.data`,
   ).run(slot, data);
   const delRow = (slot: string) => db.prepare(`DELETE FROM ${TABLE} WHERE slot=?`).run(slot);
+  const assertAutocommit = () => {
+    // Only an explicit false is autocommit. undefined/omitted getters are
+    // unknown and must not be trusted as durable.
+    if (db.isTransaction !== false) throw new Error('DSH_JOURNAL_OUTER_TRANSACTION: journal writes must commit before returning');
+  };
 
   const lifecycle: DshLifecycleJournal = {
     read(): DshLifecycleIntent | null {
@@ -95,6 +108,7 @@ export function createDshJournals<TBatch = unknown>(input: { db: SqliteDatabase;
       return { operation: value.operation as DshLifecycleIntent['operation'], sessionId: value.sessionId, cwd: value.cwd };
     },
     write(intent: DshLifecycleIntent | null): void {
+      assertAutocommit();
       if (intent === null) { delRow(lifecycleSlot(sessionId)); return; }
       if (!intent || typeof intent !== 'object' || !['start', 'resume'].includes(intent.operation)
         || intent.sessionId !== sessionId || typeof intent.cwd !== 'string' || !intent.cwd) {
@@ -112,6 +126,7 @@ export function createDshJournals<TBatch = unknown>(input: { db: SqliteDatabase;
       return notificationIntent<TBatch>(key, parsedRecord(row, 'notification intent')!);
     },
     async put(intent: DshNotificationIntent<TBatch>): Promise<void> {
+      assertAutocommit();
       if (!intent || typeof intent !== 'object' || typeof intent.key !== 'string' || !intent.key.trim()
         || !STATES.has(intent.state) || !Object.prototype.hasOwnProperty.call(intent, 'batch')
         || (intent.detail !== undefined && typeof intent.detail !== 'string')) {
@@ -120,6 +135,7 @@ export function createDshJournals<TBatch = unknown>(input: { db: SqliteDatabase;
       putRow(notificationSlot(intent.key), JSON.stringify({ key: intent.key, state: intent.state, batch: intent.batch, ...(intent.detail !== undefined ? { detail: intent.detail } : {}) }));
     },
     async del(key: string): Promise<void> {
+      assertAutocommit();
       if (typeof key !== 'string' || !key.trim()) throw new Error('DSH_JOURNAL_INVALID: key');
       delRow(notificationSlot(key));
     },
