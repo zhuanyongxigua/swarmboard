@@ -9,7 +9,7 @@ import { CollaboratorStore } from '../../src/collaborators.js';
 import { NotificationAdapterStore } from '../../src/notification-adapter-store.js';
 import { NotificationService } from '../../src/notification-service.js';
 import { createNotificationDispatcher } from '../../src/notification-dispatch.js';
-import type { NotificationAdapterRegistration } from '../../src/notification-adapters.js';
+import { resolveSessionTaskCheckTargets, type NotificationAdapterRegistration } from '../../src/notification-adapters.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => { for (const close of cleanup.splice(0).reverse()) close(); });
@@ -31,6 +31,14 @@ function fixture(path = ':memory:') {
 }
 
 describe('session task-check notification routing', () => {
+  it('isolates malformed declarations before selecting a valid check channel', () => {
+    const f = fixture();
+    const declarations = [null, f.registration] as unknown as NotificationAdapterRegistration[];
+    expect(resolveSessionTaskCheckTargets(f.check(), declarations).targets).toEqual([
+      { adapterId: 'channel-a', memberId: f.member.id, sessionRef: 'session-a' },
+    ]);
+  });
+
   it('addresses one adapter generation and session, without broadcasting to a second channel', () => {
     const f = fixture();
     f.store.save({ ...f.registration, id: 'channel-b' });

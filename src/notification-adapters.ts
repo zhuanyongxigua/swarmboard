@@ -309,7 +309,7 @@ export function resolveSessionTaskCheckTargets(entry: Entry, adapters: readonly 
   const check = readSessionTaskCheck(entry);
   if (!check || !check.adapterId || !Number.isSafeInteger(check.registrationVersion) || check.registrationVersion! < 1)
     return { targets: [], skipped: [] };
-  const selected = adapters.filter(adapter => adapter.id === check.adapterId && adapter.version === check.registrationVersion);
+  const selected = adapters.filter(adapter => adapter?.id === check.adapterId && adapter?.version === check.registrationVersion);
   const resolution = resolveNotificationTargets(entry, selected);
   resolution.targets = resolution.targets.filter(target => {
     const member = selected.find(adapter => adapter.id === target.adapterId)?.members.find(member => member.memberId === target.memberId);
