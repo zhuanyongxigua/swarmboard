@@ -11,3 +11,4 @@ export * from './sdk-plugin.js';
 export * from './notification-port.js';
 export * from './host-plugin.js';
 export * from './launcher-channels.js';
+export * from './launcher-member-ports.js';

@@ -38,6 +38,31 @@
 服务、隔离 SQLite 和官方客户端核对管理/成员角色、正式新建与注册读回、入口
 pin 变化拒绝、已有 live owner 保持及结果解析；不启动 SDK Agent 或模型。
 
+`openDshLauncherMemberPorts({channels,identity:{memberId,sessionRef,adapterId,cwd},
+boardDatabasePath,goalBindings})` 将该通道组合成实际 child 通知端口，不依赖个人
+legacy config、外置 authority 模块或固定 nativeWorkerId。board 路径必须与
+channels 内固定路径一致；goalBindings 由受信配置显式提供精确 task/pool/
+project/workspace 绑定，cwd 必须落在其中一个授权工作区。
+
+每次读取都重新取得 caller 的 notification_binding_read，并通过管理
+runtime_read 核 pool、正式准入及 grants，通过 task_read 核当前任务状态，随后
+再次核 runtime 和 caller binding。只有双版本、身份、能力、精确 grant 和两次
+范围一致且文件 epoch 稳定时才建立发送快照；合法但期间 epoch 变化最多完整
+重读一次。权限查询不用成员 preferences/task 的共享更新附加块，减少查询自身
+推进协作游标造成的文件失效；它仍不是与远端权限写入原子提交的许可。
+
+正式双提示词通过成员 caller 的 readPreferences/readUserPrompt 读取；这些
+正式读取可能推进共享更新游标，不宣称数据库零写。现有 board/runtime 文件及
+WAL 事件先同步失效发送快照再通知宿主，替换后重绑；错误、撤销、close 或持续
+变化均拒绝，不自动重试发送或回执。isAuthorized 仅作当前快照的同步本地拒绝
+检查，SDK 层仍须核原 Agent 对象和同一单写 lease。close 只关闭本端口打开的
+两个连接和 watcher，须在宿主安全退出后调用。
+
+当前仍沿用硬拒绝语义：持续失效可能让宿主记录 post-ready failed，启动 ready
+不能代表持续健康；不通过吞掉 STALE、无界重查或新增轮询来假装已消费。真实
+接入、消费与有效贡献另行留证。专项测试覆盖双读失效/撤销/范围更改、真实文件
+事件和关闭；不借合成范围结果宣称现场迁移完成。
+
 ## 注册
 
 `NotificationAdapterRegistration`：
