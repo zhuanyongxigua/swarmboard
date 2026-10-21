@@ -258,7 +258,7 @@ export const { name, inject, apply } = entry.plugin;
 
 `createDshSdkPlugin` 与 `createDshHostRunner` 由受信宿主从已核验的适配模块导入。保留原官方 overlay、指令插件、setup、模型和权限配置，不用一个最小 `plugins` 对象替换原宿主配置。`prepareInstructions` 显式接入既有 `createDshInstructionBoundary(...).prepare()`，返回后原官方指令插件按既有工作区加载；入口不伪造 system/developer 消息，不在包内保存个人路径或内容。
 
-`apply(ctx)` 是唯一启动边界：先取得 lease，再准备指令并重核 lease，然后以显式模式连接原 session，组合 `ctx.agents`、`ctx.sessions.flush(agent.session)`、SDK SessionPort、耐久 journal 和 runner。缺失的 attach 目标不会降级 create/resume；连接异常保留生命周期意图及返回的完整 handle，不自动重试。`ready()` 让宿主观察初始化及首个 pass 的错误；`ownedHandles()` 保留所有权供人工对账，不自动 dispose。
+`apply(ctx)` 是唯一启动边界：先取得 lease，再准备指令并重核 lease，然后以显式模式连接原 session，组合 `ctx.agents`、`ctx.sessions.flush(agent.session)`、SDK SessionPort、耐久 journal 和 runner。PendingPort 必须额外实现异步 `isCurrent(batch)`，每次 driver 检查时都重读正式通知服务及绑定／范围，再核 SDK 本地原对象与同步授权；因此写入意图后的检查也会看到服务侧撤销。真正 `submit` 前仍保留同步 SDK 授权与 lease 围栏，异步查询不冒充原子提交。缺失的 attach 目标不会降级 create/resume；连接异常保留生命周期意图及返回的完整 handle，不自动重试。`ready()` 让宿主观察初始化及首个 pass 的错误；`ownedHandles()` 保留所有权供人工对账，不自动 dispose。
 
 入口订阅官方 `agent/status` 的原对象 idle 转换、同 session 的 `turn/end`，以及宿主显式提供的既有 `subscribeWake`。这些事件只触发本地合并后的 runner pass；`turn/end` 不是直接确认依据，确认仍由 SDK SessionPort 验证本 delivery 的消息、回合和耐久 checkpoint。其他 session 的事件不触发 pass，忙时突发通知合并为一次后续检查。没有新增轮询、五分钟计时链、守护进程或 session。
 

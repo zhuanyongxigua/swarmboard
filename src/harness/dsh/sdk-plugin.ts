@@ -9,6 +9,10 @@ import type { DeliveryBatch, DriveResult, Journal, PendingPort, SessionPort } fr
 
 export interface DshPluginLease { acquire(): boolean; owns(): boolean; release(): void }
 export interface DshPluginRunner { pass(): Promise<DriveResult>; stop(): Promise<void> }
+export interface DshPluginPendingPort extends PendingPort {
+  /** Re-read the caller-bound notification service and its current binding. */
+  isCurrent(batch: DeliveryBatch): Promise<boolean>;
+}
 export interface DshPluginRunnerInput {
   lease: DshPluginLease;
   ports: { pending: PendingPort; session: SessionPort; journal: Journal };
@@ -36,7 +40,7 @@ export interface DshSdkPluginOptions<S extends string, M extends string, A exten
   createOptions: Readonly<Record<string, unknown>>;
   resumeOptions: Readonly<Record<string, unknown>>;
   lease: DshPluginLease;
-  pending: PendingPort;
+  pending: DshPluginPendingPort;
   /** Current admission/scope, evaluated synchronously immediately before send. */
   isAuthorized(batch: DshSdkBatch, agent: A): boolean;
   /** Refresh the existing official instruction channel from formal snapshots.
@@ -120,11 +124,13 @@ export function createDshSdkPlugin<S extends string, M extends string, A extends
           return !failed && current === bound && current.status === 'idle' && !current.inbox.hasPending;
         };
         if (closed) return;
-        const session = createDshSdkSessionPort({ adapterId: options.adapterId, memberId: options.memberId,
+        const sdkSession = createDshSdkSessionPort({ adapterId: options.adapterId, memberId: options.memberId,
           sessionRef: options.sessionRef, cwd: options.cwd,
           getAgent: id => ctx.agents.get(options.sdkSessionId(id)), messageId: options.messageId,
           isAuthorized: (batch, agent) => !closed && !failed && options.lease.owns() === true && options.isAuthorized(batch, agent) === true,
           flush: agent => ctx.sessions.flush(agent.session) });
+        const session: SessionPort = { ...sdkSession,
+          isCurrent: async batch => await options.pending.isCurrent(batch) === true && await sdkSession.isCurrent(batch) === true };
         runner = options.createRunner({ lease: options.lease, ports: { pending: options.pending, session, journal: journals.notification },
           canRelease: () => quiescent() });
         subscriptions.push(ctx.on('agent/status', ({ agent, status }) => {

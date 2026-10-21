@@ -39,7 +39,7 @@ function fixture(overrides: Partial<DshSdkPluginOptions<string, string, DshSdkSe
   const options: DshSdkPluginOptions<string, string, DshSdkSessionAgent<string>> = {
     adapterId: 'test-channel', memberId: 'member', sessionRef: 'original', cwd: '/synthetic', mode: 'attach', db,
     sdkSessionId: s => s, messageId: s => s, createOptions: {}, resumeOptions: {}, lease,
-    pending: { list: async () => [], confirm: async () => {}, release: async () => {} },
+    pending: { list: async () => [], confirm: async () => {}, release: async () => {}, isCurrent: async () => true },
     isAuthorized: () => true, prepareInstructions,
     subscribeWake: listener => { signal = listener; return unsubscribe; },
     createRunner: vi.fn(() => ({ pass, stop })), onError, ...overrides,
@@ -177,5 +177,15 @@ describe('official SDK plugin entry', () => {
     const close = f.boundary.plugin.apply(f.ctx);
     await expect(f.boundary.ready()).rejects.toThrow('DSH_HOST_LEASE_REQUIRED');
     expect(f.sdk.get).not.toHaveBeenCalled(); await close();
+  });
+
+  it('rechecks the notification service after the durable intent and refuses a revoked scope before SDK send', async () => {
+    let checks = 0;
+    const f = fixture({ createRunner: ({ ports, lease }) => ({ pass: () => driveOnce(ports), stop: async () => { lease.release(); } }),
+      pending: { list: async () => [batch], confirm: async () => {}, release: async () => {},
+        isCurrent: async () => ++checks === 1 } });
+    const close = f.boundary.plugin.apply(f.ctx); await f.boundary.ready();
+    expect(checks).toBe(2); expect(f.agent.send).not.toHaveBeenCalled(); expect(f.flush).not.toHaveBeenCalled();
+    await close();
   });
 });
