@@ -39,7 +39,7 @@
 
 ## 与内核的最小接线
 
-`src/notification-dispatch.ts` 把"已注册通道"接到真实发布路径上：运行时每次发布**空闲恢复提醒**时，都会按注册表解析收件人，并为每个命中的 `(adapter, member)` 落一条 `sequence` 递增的持久意图。
+`src/notification-dispatch.ts` 把登记通道接到发布路径：普通任务／共享事件与逐会话定时检查共用持久意图、范围和回执体系。每席检查使用其稳定 member/session 身份，不借旧全局提醒广播唤醒其他席。
 
 - 内核只写看板数据库：**不投递、不拉起任何 harness、不启动模型回合**；已注册适配器自己消费意图并回执。
 - 未注册、停用、范围不符、参考型证据一律不产生意图（原因码同投递决策）。
@@ -59,7 +59,9 @@
 | `notification_pending` | 增量读取**自己**未结算的投递（`after`/`limit` 有界），只返回 `entryIds` 与状态；内容仍要通过 `context_read` 读取，由成员自行决定是否行动 |
 | `notification_receipt` | 只对自己某条 `sequence` 确认消费/未消费。**确认时必须回显 `entryIds`**：忙时合并可能在你读完后又追加条目，回显不一致会被拒（`STALE_DELIVERY_VIEW`），需重新 `notification_pending` 再确认——避免把没看见的条目静默记为已投递。未消费保持 `unknown` 且不得重放；弃用属宿主/操作者动作，不开放给成员 |
 
-**空闲恢复提醒是公开信号，不靠 `boardWide` 截获**：提醒条目上的 `recipientId` 只用于轮换内部池唤醒，不代表地址语义；`resolveReminderTargets` 会把它投给**每个已启用、已准入的登记成员**（无需 `boardWide`、无需订阅该任务）。反过来说，`boardWide` **永远不能绕过收件人隔离**：任何带 `recipientId` 且不是本人的事件，即使同任务或开了 `boardWide`，也一律不投。
+**逐会话检查具有真正的定向语义**：检查只送到其稳定 member/session 对应的当前启用通道，且目标必须在该席正式授权范围内。旧全局 `IDLE_RECOVERY` 轮换并向全部外部成员广播的周期路径由逐席机制替换，不能同时运行。`boardWide` 不绕过定向隔离或目标范围；历史注册、旧 session 或失效能力不代表实际接入。忙碌／已排队合并一次检查，unknown 保持待核而不重放。
+
+逐席检查 MESSAGE 的 `detail.kind` 为 `SESSION_TASK_CHECK`，携带 `memberId`、`sessionRef`、`dueAt` 与 `goalIds`；外部目标还携带 `adapterId` 和 `registrationVersion`。`dueAt` 表示计划到期点，而非临时派发时刻；稳定成员、session 和到期点共同标识一次检查。外部解析必须精确匹配当前适配器与注册代次，并在记录意图前再次核对正式准入和任务范围。原生检查不带外部适配器身份，不能因此被当作外部广播。范围、会话或注册代次变化须拒绝旧快照，不能为继续投递放宽授权。
 
 三条都在服务层再次校验身份与范围（`NotificationService`），不信任入参：`memberId`/`sessionRef`/`taskIds` 一律与正式准入记录比对。注册不等于启动、通知到达不等于执行或完成。
 
