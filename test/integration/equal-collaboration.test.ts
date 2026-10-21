@@ -40,7 +40,7 @@ it('requires an explicit organization choice, preserves legacy selected scope an
  expect(data(await call(selected,'task_list')).items.map((t:any)=>t.id)).toEqual([first.id]);
  for(const c of [native,external])expect(data(await call(c,'task_list')).items.map((t:any)=>t.id)).toEqual([first.id,second.id]);
  const n=(await native.listTools()).tools.map(t=>t.name).sort(),e=(await external.listTools()).tools.map(t=>t.name).sort();expect(e.filter(name => !name.startsWith('notification_'))).toEqual(n);
- expect(e.filter(name => name.startsWith('notification_'))).toEqual(['notification_pending', 'notification_receipt', 'notification_register']);
+ expect(e.filter(name => name.startsWith('notification_'))).toEqual(['notification_binding_read', 'notification_pending', 'notification_receipt', 'notification_register']);
  expect(e).toEqual(expect.arrayContaining(['peer_request','pipeline_watch','execution_grants_read']));expect(e).not.toContain('collaborator_configure');
  data(await call(external,'context_publish',{agentId:member.id,taskId:second.id,kind:'CLAIM',summary:'Independent contribution'}));
  const task=board.readTask(second.id);expect(task.participants).toContain(member.id);

@@ -13,6 +13,19 @@ import { AppError } from './store.js';
 import { readSessionTaskCheck, type DeliveryIntent, type NotificationAdapterRegistration } from './notification-adapters.js';
 import { NotificationAdapterStore } from './notification-adapter-store.js';
 
+/** Current self-only channel projection, not execution authorization. */
+export interface NotificationBinding {
+  adapterId: string;
+  memberId: string;
+  sessionRef: string;
+  registrationVersion: number;
+  admissionVersion: number;
+  enabled: boolean;
+  capabilities: NotificationAdapterRegistration['capabilities'];
+  taskIds: string[];
+  boardWide: boolean;
+}
+
 export interface NotificationPendingItem {
   adapterId: string;
   memberId: string;
@@ -69,6 +82,32 @@ export class NotificationService {
     // The durable store re-validates and enforces the version guard, which is
     // what stops a stale declaration from replacing a newer scope.
     return this.adapters.save({ ...declaration, members: [...declaration.members] } as unknown as NotificationAdapterRegistration);
+  }
+
+  /** Re-read the caller's current channel without registering or settling it. */
+  readBinding(collaboratorId: string, adapterId: string): { binding: NotificationBinding | null } {
+    if (typeof adapterId !== 'string' || !adapterId.trim() || adapterId.length > 128) {
+      throw new AppError('VALIDATION_ERROR', 'Invalid adapter id', 400);
+    }
+    const admitted = this.collaborators?.get(collaboratorId);
+    if (!admitted) throw new AppError('COLLABORATOR_NOT_ADMITTED', 'A bound collaborator identity is required', 403);
+    const adapter = this.adapters.list().find(item => item.id === adapterId);
+    const member = adapter?.members.find(item => item.memberId === collaboratorId);
+    // A foreign id and a missing id have the same result. Never expose its
+    // members, sessions, scopes, or whether that foreign channel exists.
+    if (!adapter || !member) return { binding: null };
+    const ids = collaboratorTaskIds(admitted, this.workers);
+    const pool = this.workers?.pool();
+    const poolActive = !admitted.poolId || pool?.id === admitted.poolId;
+    return { binding: {
+      adapterId: adapter.id, memberId: collaboratorId, sessionRef: member.sessionRef,
+      registrationVersion: adapter.version, admissionVersion: admitted.version,
+      enabled: adapter.enabled && admitted.enabled && !admitted.revokedAt && member.sessionRef === admitted.sessionRef
+        && poolActive && (!pool || pool.enabled && !['stopped', 'stopping'].includes(pool.state)),
+      capabilities: [...adapter.capabilities],
+      taskIds: member.taskIds.filter(id => ids === undefined || ids.includes(id)),
+      boardWide: member.boardWide === true,
+    } };
   }
 
   // Reads and receipts share the same current binding check. Historical or
