@@ -229,3 +229,66 @@ DSH 的入口导出指令、生命周期、SDK 组合、会话发送、整批通
 参考实现（echo）的一切证据都是确定性的；真实模型、真实 DSH Host、真实桌面宿主的行为必须另行实测并在 [verification.md](verification.md) 记录，不得用替身证据代替。
 
 通知意图键使用 JSON 四元组 `[adapterId ?? null, memberId, sessionRef, sequence]`，缺省通道与字面名称 `native` 明确区分，字段含分隔符也不会产生碰撞。发现旧拼接键意图时停止该投递并要求保留证据对账，不将它视为缺失而重新提交，也不提示清空 unknown。
+
+### 事件驱动宿主与单写所有权
+
+`createDshHostLease` 在宿主自己的 SQLite sidecar 中按实际 `sessionRef` 保持唯一所有者；不同成员或通道别名不能绕过同一会话锁。锁不按经过时间过期、不自动接管崩溃所有者。发现旧锁时须由现场操作者先核原进程、SDK 会话及未决意图，再安全恢复；禁止删锁后重放 unknown。各进程必须使用同一 sidecar，官方 SDK 自身的会话写锁仍保留。
+
+`createDshHostRunner` 把已有通知和 SDK 回合事件串到 `driveOnce`，不新增轮询定时器。并发事件合并为下一趟 pass，所有 pass 共用已持有的租约；异步读取后重新核所有权，SDK `isAuthorized` 仍须在实际发送点同步检查 `lease.owns()`。`stop()` 停止准入并等待在途 pass，只有宿主提供的 `canRelease()` 确认原 agent 空闲、inbox 无待执行消息且没有在途连接变更时才释放；忙碌时返回 `DSH_HOST_NOT_QUIESCENT` 并保留所有权。停止不 dispose 原 agent、不删除 journal，也不确认尚未完成的 delivery。
+
+受信宿主可从 `server/harness/protocol/index.mjs` 导入 `workerProtocol()`，取得与原生 worker 逐字相同的协议文本，再计算 SHA-256 注入指令 boundary；无需加载核心服务、依赖源码目录或手工复制旧协议。此通用入口只导出既有函数，不包含个人配置或具体厂商实现。
+### 官方 SDK 插件入口
+
+`src/harness/dsh/sdk-plugin.ts` 的 `createDshSdkPlugin` 把既有模块装配为官方 Cordis object plugin。受信宿主注入稳定成员／原 session／cwd、显式 `mode`、官方 `SessionId`／`MessageId` 构造、SDK create/resume options、持久 sidecar DB、单写 lease、整批 PendingPort、同步当前授权函数、指令准备函数、既有唤醒订阅及 runner factory。没有默认模型、权限、身份、目录、定时器或启动模式；任务文本不参与选择模块或配置。
+
+宿主自己的受信插件文件可使用官方加载器导出以下形状（`privateOptions` 来自宿主配置，不能从任务内容构造）：
+
+```ts
+import { SessionId } from '@deepseek-ai/dsh-session';
+import { MessageId } from '@deepseek-ai/dsh-llm';
+
+const entry = createDshSdkPlugin({
+  ...privateOptions,
+  sdkSessionId: SessionId,
+  messageId: MessageId,
+  createRunner: createDshHostRunner,
+});
+export const { name, inject, apply } = entry.plugin;
+```
+
+`createDshSdkPlugin` 与 `createDshHostRunner` 由受信宿主从已核验的适配模块导入。保留原官方 overlay、指令插件、setup、模型和权限配置，不用一个最小 `plugins` 对象替换原宿主配置。`prepareInstructions` 显式接入既有 `createDshInstructionBoundary(...).prepare()`，返回后原官方指令插件按既有工作区加载；入口不伪造 system/developer 消息，不在包内保存个人路径或内容。
+
+`apply(ctx)` 是唯一启动边界：先取得 lease，再准备指令并重核 lease，然后以显式模式连接原 session，组合 `ctx.agents`、`ctx.sessions.flush(agent.session)`、SDK SessionPort、耐久 journal 和 runner。PendingPort 必须额外实现异步 `isCurrent(batch)`，每次 driver 检查时都重读正式通知服务及绑定／范围，再核 SDK 本地原对象与同步授权；因此写入意图后的检查也会看到服务侧撤销。真正 `submit` 前仍保留同步 SDK 授权与 lease 围栏，异步查询不冒充原子提交。缺失的 attach 目标不会降级 create/resume；连接异常保留生命周期意图及返回的完整 handle，不自动重试。`ready()` 让宿主观察初始化及首个 pass 的错误；`ownedHandles()` 保留所有权供人工对账，不自动 dispose。
+
+入口订阅官方 `agent/status` 的原对象 idle 转换、同 session 的 `turn/end`，以及宿主显式提供的既有 `subscribeWake`。这些事件只触发本地合并后的 runner pass；`turn/end` 不是直接确认依据，确认仍由 SDK SessionPort 验证本 delivery 的消息、回合和耐久 checkpoint。其他 session 的事件不触发 pass，忙时突发通知合并为一次后续检查。没有新增轮询、五分钟计时链、守护进程或 session。
+
+Cordis 正式插件的 `apply` 返回异步 cleanup effect，不依赖不存在的 ready/dispose 事件。卸载先同步关闭发送授权，再取消本地订阅并等待初始化和 pass；runner 的 `canRelease` 只有在原 registry 对象仍一致、idle 且 inbox 为空时才允许释放 lease。忙碌、初始化未决或失败时保留 lease／意图／handle，要求对账；不能通过卸载强杀原会话或清 unknown。忙碌退出拒绝后，可由宿主在明确的安全空闲边界再次调用 cleanup，不自动等待定时器或重放连接。
+
+定向测试使用合成 SDK 服务和 SQLite 验证该装配；本机公开 SDK 类型及 Cordis 插件加载另作无模型兼容检查。它们不证明个人配置已安装、宿主已安全迁移或真实四席已经消费通知并继续贡献。
+### 受信 MCP 通知端口
+
+`createDshNotificationPort({ callTool, getCurrentBinding, pageSize? })` 将已经绑定调用者的正式 MCP 客户端接为 `PendingPort`，不打开看板数据库、不注册通道、不创建模型或 timer。`callTool({ name, arguments })` 只调用 `notification_pending`、`context_read`、`notification_receipt`；`getCurrentBinding` 由受信宿主提供当前启用状态、adapter/member/session、注册代次与任务范围，不能从事件正文推断，也不能仅返回失去撤销感知的启动缓存。
+
+端口逐页读取 pending，并逐个 ID 用完整 `context_read` 精确读取正文；缺失、不可见、截断、重复 ID、异常分页和过期检查信封均停止该批。MCP 的第一段 JSON／`structuredContent` 才是返回值，后附同伴消息不参与解析。所有周期检查都核对当前绑定与目标交集；批次携带可序列化的 `notificationBinding`，异步读取前后均检查绑定。`isCurrent(batch)` 在提交前重新读取当前 pending 和引用事件，允许 driver 已完成覆盖后的合法差量子集；它不提供跨网络 await 与 SDK send 的原子保证，宿主仍必须在实际 send 前同步核对授权并持续持有单写租约。
+
+服务端 `unknown` 直接冻结该 pass，不能因宿主 journal 缺失而当成新工作。`confirm` 仅发送 `consumed: true` 及本批精确完整 ID 集合，保留服务端 `STALE_DELIVERY_VIEW` 等拒绝；已成功回执的响应丢失仍可精确重试。`release` 仅本地延后，不发送负回执、不弃用、不删除未知证据。当前回执 API 的序号不带通道，读到非绑定通道时拒绝，服务端多通道歧义仍须对账，不能猜通道或绕开正式接口。测试 `test/mcp/dsh-notification-port.test.ts` 使用真实 MCP Client/Server 和隔离服务；单独合成分页探针不代表当前服务允许同通道多个未结算序号，亦不代替真实 SDK／宿主安装验收。
+
+### 单一受信宿主组合
+
+`createDshHostPlugin(options)` 是实际交接入口：自动组合正式 `createDshNotificationPort`、事件驱动 runner、SDK plugin，以及宿主 sidecar 中的 session 级 lease（可显式传入已有等价 lease）。它返回可交给官方宿主的 `plugin`、`ready()`、`drain()` 和 `ownedHandles()`。个人配置不再需要自己重写三端口组装代码。
+
+最小外部插件文件由现场操作者放在原受信宿主的插件位置，使用**该次已验收构建**的导出。`privateOptions` 只能由原宿主配置提供，包含原身份／session／cwd、持久 sidecar `db`、官方类型构造、原 model/permission/setup、绑定成员的 `callTool`、当前准入 `getCurrentBinding`、最终同步授权 `isAuthorized`、指令准备、既有通知订阅和错误报告；不能从共享任务文本反序列化这些能力。
+
+```js
+// Mount the reviewed adapter in the existing trusted DSH host without a second scheduler.
+import { createDshHostPlugin } from './verified-plugin/server/harness/dsh/index.mjs';
+import { privateOptions } from './existing-private-host-options.mjs';
+
+const entry = createDshHostPlugin(privateOptions);
+export const { name, inject, apply } = entry.plugin;
+export { entry };
+```
+
+这里只声明挂载入口，不替换原官方 overlay 或 setup。原宿主按既有正式插件加载机制挂载此文件；初始化以 `entry.ready()` 结果为准，不能仅凭进程存活判断成功。停用先停止新通知准入，保留原 SDK、历史和 journal，调用官方卸载或保留的 cleanup；`DSH_HOST_NOT_QUIESCENT` 必须保锁等待安全边界，不能删锁强推迁移。崩溃遗留 owner 必须先对账原 SDK 和 journal，由操作方明确恢复，适配器不会超时抢占。
+
+安装交接顺序为：核精确包及逐文件收据；再核旧宿主在途／unknown 与原会话；保留旧配置及账本备份；在安全边界关闭旧通知准入并挂载新入口；核注册版本、能力及原 session 不变；最后分别观察自然到期、SDK 消费、本回合完成、精确回执和有用贡献。安装、未知对账、注册配置更新和四席实际迁移仍属于现场操作，合成全链测试不会代替这些步骤。

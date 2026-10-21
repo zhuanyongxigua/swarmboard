@@ -312,4 +312,33 @@ describe('driveOnce (whole delivery) ', () => {
     await expect(result).rejects.toThrow(/LEGACY_INTENT_KEY/);
     expect(f.calls.submit).toBe(0);
   });
+
+  it('restores the prior intent when the fence fails mid-delta, so old entries never re-run', async () => {
+    const f = harness({ confirmFails: true });
+    await driveOnce(f.ports);                       // [1,2] completed, receipt rejected
+    f.setListed([batch({ delivery: { sequence: 7, entryIds: [1, 2, 99] } })]);
+    let current = true;
+    const submits: number[][] = [];
+    const ports = {
+      ...f.ports,
+      pending: { ...f.ports.pending, confirm: async () => {} },
+      session: {
+        ...f.ports.session,
+        isCurrent: async () => current,
+        submit: async (b: DeliveryBatch) => { submits.push([...b.delivery.entryIds]); return { status: 'completed' as const, turnId: 't2' }; },
+      },
+      journal: {
+        ...f.ports.journal,
+        // The binding drops while the durable intent is being written.
+        put: async (intent: Intent) => { await f.ports.journal.put(intent); current = false; },
+      },
+    };
+    await driveOnce(ports);                         // delta attempt loses the binding -> nothing sent
+    expect(submits).toEqual([]);
+    expect(f.journal.get(intentKey(batch()))?.covered).toEqual([1, 2]);
+
+    current = true;                                 // binding restored
+    await driveOnce({ ...ports, journal: f.ports.journal });
+    expect(submits).toEqual([[99]]);                // only the missing entry is sent
+  });
 });

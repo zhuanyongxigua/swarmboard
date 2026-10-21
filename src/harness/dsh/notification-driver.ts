@@ -292,7 +292,12 @@ export async function driveOnce(
     // Committing fence: the durable write is asynchronous, so the binding that was current
     // before it may already be gone (p8 7140/7141). Nothing was sent, so drop the intent.
     if (!(await ports.session.isCurrent(workBatch))) {
-      await ports.journal.del(key);
+      // Nothing was sent, so the fence outcome is "not attempted". If a prior intent
+      // existed (a delivery that already has authoritative completions), restore it
+      // verbatim: deleting it would forget which entries were already consumed and the
+      // next pass would re-run them (p1 7489/7490).
+      if (intent) await ports.journal.put(intent);
+      else await ports.journal.del(key);
       await ports.pending.release(batch, 'stale-session');
       result.skipped.push(key);
       continue;
