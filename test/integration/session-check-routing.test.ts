@@ -187,4 +187,50 @@ describe('session task-check notification routing', () => {
     f.dispatcher.dispatch(f.check({ dueAt: 600000 }));
     expect(f.store.unsettled()).toEqual(before);
   });
+
+  it.each(['session', 'registration', 'disabled', 'scope', 'blocked', 'done', 'canceled'] as const)(
+    'rejects a direct receipt after the periodic delivery loses its current %s binding', reason => {
+      const f = fixture(); f.dispatcher.dispatch(f.check());
+      const service = new NotificationService(f.board, f.collaborators);
+      const item = service.pending(f.member.id).items[0]!;
+      if (reason === 'registration' || reason === 'disabled') {
+        f.store.save({ ...f.registration, version: 2, enabled: reason !== 'disabled' });
+      } else if (reason === 'session' || reason === 'scope') {
+        const ids = reason === 'scope' ? [f.board.createTask({ title: 'Different scope' }).id] : [f.goal.id];
+        f.collaborators.configure({ id: f.member.id, expectedVersion: f.member.version, name: f.member.name,
+          harness: f.member.harness, sessionRef: reason === 'session' ? 'replacement-session' : f.member.sessionRef,
+          taskIds: ids, enabled: true }, f.board);
+      } else {
+        f.board.updateTask(f.goal.id, { expectedVersion: f.board.readTask(f.goal.id).version, status: reason });
+      }
+      expect(service.pending(f.member.id).items).toHaveLength(0);
+      const before = f.board.db.prepare('SELECT intent,receipt FROM notification_deliveries').all();
+      expect(() => service.receipt(f.member.id, item.sequence, true, item.entryIds)).toThrow();
+      expect(f.board.db.prepare('SELECT intent,receipt FROM notification_deliveries').all()).toEqual(before);
+    });
+
+  it('preserves an unknown check when a stale session attempts a negative receipt', () => {
+    const f = fixture(); f.dispatcher.dispatch(f.check());
+    const service = new NotificationService(f.board, f.collaborators);
+    const item = service.pending(f.member.id).items[0]!;
+    service.receipt(f.member.id, item.sequence, false);
+    f.collaborators.configure({ id: f.member.id, expectedVersion: f.member.version, name: f.member.name,
+      harness: f.member.harness, sessionRef: 'replacement-session', taskIds: [f.goal.id], enabled: true }, f.board);
+    const before = f.board.db.prepare('SELECT intent,receipt FROM notification_deliveries').all();
+    expect(() => service.receipt(f.member.id, item.sequence, false)).toThrow();
+    expect(f.board.db.prepare('SELECT intent,receipt FROM notification_deliveries').all()).toEqual(before);
+  });
+
+  it('retains exact delivered receipt retry semantics after a session replacement', () => {
+    const f = fixture(); f.dispatcher.dispatch(f.check());
+    const service = new NotificationService(f.board, f.collaborators);
+    const item = service.pending(f.member.id).items[0]!;
+    const receipt = service.receipt(f.member.id, item.sequence, true, item.entryIds);
+    f.collaborators.configure({ id: f.member.id, expectedVersion: f.member.version, name: f.member.name,
+      harness: f.member.harness, sessionRef: 'replacement-session', taskIds: [f.goal.id], enabled: true }, f.board);
+    const before = f.board.db.prepare('SELECT intent,receipt FROM notification_deliveries').all();
+    expect(service.receipt(f.member.id, item.sequence, true, item.entryIds)).toEqual(receipt);
+    expect(f.board.db.prepare('SELECT intent,receipt FROM notification_deliveries').all()).toEqual(before);
+    expect(() => service.receipt(f.member.id, item.sequence, false)).toThrow(/already confirmed consumed/);
+  });
 });
