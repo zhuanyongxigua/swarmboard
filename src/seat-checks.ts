@@ -169,6 +169,11 @@ export function tick(input: TickInput): TickResult {
       continue;
     }
 
+    // A check that fired but was never confirmed is still owed: publishing a second due for
+    // the same seat would either duplicate the instruction or replace the older due, so the
+    // record waits for confirmPending() instead of starting a new cycle (p1 7281).
+    if (next.pending) { continue; }
+
     const due = next.pendingMerged || input.now >= next.nextDueAt;
     if (!due) {
       if (next.state !== 'waiting') { next = { ...next, state: 'waiting' }; changed.push(next); }

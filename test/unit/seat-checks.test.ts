@@ -46,7 +46,9 @@ describe('per-session five-minute checks', () => {
     for (let i = 1; i <= 5; i++) {
       const r = tick({ now: t0 + i * CHECK_INTERVAL_MS, organizationActive: true,
         goals: [goal('g1', 'in_review')], records, seats: [seat('a')] });
-      records = merge([...records.values(), ...r.records]);
+      // The runtime confirms each published check; clearing pending here models that, so the
+      // loop keeps testing "no attempt cap" rather than the (intended) pending coalescing.
+      records = merge([...records.values(), ...r.records].map(record => ({ ...record, pending: undefined })));
       wakes += r.wake.length;
       if (i >= 2) expect(r.wake).toHaveLength(1);
     }
@@ -169,6 +171,27 @@ describe('per-session five-minute checks', () => {
       records: new Map(), seats: [{ ...seat('a'), sessionRef: 'worker:a', active: false }] });
     expect(r.wake).toEqual([]);
     expect(r.records[0]!.state).toBe('stopped');
+  });
+
+  it('keeps an unconfirmed check owed instead of firing a second due (p1 7281)', () => {
+    const t0 = 1_000_000;
+    const first = tick({ now: t0, organizationActive: true, goals: [goal('g1', 'todo')], records: new Map(), seats: [seat('a')] });
+    const fired = tick({ now: t0 + CHECK_INTERVAL_MS, organizationActive: true, goals: [goal('g1', 'todo')],
+      records: merge(first.records), seats: [seat('a')] });
+    expect(fired.wake).toHaveLength(1);
+    const owed = merge(fired.records);                    // crash before publishing: pending stays
+    expect(pendingWakes(owed)).toHaveLength(1);
+    // Two more intervals pass with no confirm: no new due may be published or overwrite it.
+    const late = tick({ now: t0 + 3 * CHECK_INTERVAL_MS, organizationActive: true, goals: [goal('g1', 'todo')],
+      records: owed, seats: [seat('a')] });
+    expect(late.wake).toHaveLength(0);
+    const after = merge([...owed.values(), ...late.records]);
+    expect(pendingWakes(after)).toHaveLength(1);
+    // After the runtime confirms it, the next cycle resumes normally.
+    const cleared = new Map([...after].map(([k, r]) => [k, { ...r, pending: undefined }]));
+    const resumed = tick({ now: t0 + 4 * CHECK_INTERVAL_MS, organizationActive: true, goals: [goal('g1', 'todo')],
+      records: cleared, seats: [seat('a')] });
+    expect(resumed.wake).toHaveLength(1);
   });
 
   it('restart replays at most one overdue check per seat', () => {
