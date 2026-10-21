@@ -69,6 +69,14 @@ export interface TickResult {
   idle: boolean;
 }
 
+// Anchoring rules (documented for integration):
+//  * a seat seen for the first time is due one full interval after it is observed,
+//    never immediately (a freshly started turn is not an overdue seat);
+//  * while no applicable goal exists, every tick re-anchors nextDueAt to now+interval,
+//    so when goals reappear a seat waits at most one interval, and never fires for
+//    time that passed while there was nothing to do;
+//  * a wakeup is only emitted for a persisted record, so a caller that fails to save
+//    `records` will re-emit rather than lose the check. Persist before dispatching.
 const fresh = (seat: SeatSnapshot, now: number, intervalMs: number): SeatRecord => ({
   memberId: seat.memberId, sessionRef: seat.sessionRef, nextDueAt: now + intervalMs,
   lastCheckAt: null, pendingMerged: false, checks: 0, state: 'waiting',
@@ -110,14 +118,17 @@ export function tick(input: TickInput): TickResult {
 
     if (!input.organizationActive || goals.length === 0) {
       // Cheap scope query only: nothing applicable, so no model wakeup is spent.
-      if (next.state !== 'waiting' || next.nextDueAt < input.now) {
-        next = { ...next, state: 'waiting', nextDueAt: input.now + intervalMs };
+      // Re-anchor unconditionally so a goal that reappears later waits at most one
+      // full interval; time that passed with nothing to do is never banked.
+      const anchor = input.now + intervalMs;
+      if (next.state !== 'waiting' || next.nextDueAt !== anchor) {
+        next = { ...next, state: 'waiting', nextDueAt: anchor };
         changed.push(next);
       }
       continue;
     }
 
-    const due = seat.busy ? next.pendingMerged || input.now >= next.nextDueAt : next.pendingMerged || input.now >= next.nextDueAt;
+    const due = next.pendingMerged || input.now >= next.nextDueAt;
     if (!due) {
       if (next.state !== 'waiting') { next = { ...next, state: 'waiting' }; changed.push(next); }
       continue;
@@ -145,5 +156,16 @@ export function tick(input: TickInput): TickResult {
     });
   }
 
-  return { records: changed, wake, idle: input.organizationActive && goals.length === 0 && activeSeats.length > 0 };
+  // One record per seat: callers persist this list directly, so a baseline push
+  // followed by a later mutation must collapse to the final value.
+  const byKey = new Map<string, SeatRecord>();
+  for (const r of changed) byKey.set(seatKey(r), r);
+  return {
+    records: [...byKey.values()],
+    wake,
+    // `idle` means "the scheduler examined seats and found nothing applicable to
+    // do", so the caller may skip model work. A disabled organization is not
+    // idle: it is stopped, which is a different state.
+    idle: input.organizationActive && goals.length === 0 && activeSeats.length > 0,
+  };
 }

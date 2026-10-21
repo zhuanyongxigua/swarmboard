@@ -93,6 +93,41 @@ describe('per-session five-minute checks', () => {
       adapterId: 'adapter-x', registrationVersion: 7 });
   });
 
+  it('ticking twice at the same instant emits one wakeup once records persist', () => {
+    const t0 = 1_000_000;
+    const first = tick({ now: t0, organizationActive: true, goals: [goal('g1', 'todo')], records: new Map(), seats: [seat('a')] });
+    const persisted = merge(first.records);
+    const dueTick = tick({ now: t0 + CHECK_INTERVAL_MS, organizationActive: true, goals: [goal('g1', 'todo')], records: persisted, seats: [seat('a')] });
+    expect(dueTick.wake).toHaveLength(1);
+    const again = tick({ now: t0 + CHECK_INTERVAL_MS, organizationActive: true, goals: [goal('g1', 'todo')],
+      records: merge([...persisted.values(), ...dueTick.records]), seats: [seat('a')] });
+    expect(again.wake).toHaveLength(0);   // same dueAt is not emitted twice
+  });
+
+  it('re-anchors while nothing applies, so a reappearing goal waits at most one interval', () => {
+    const t0 = 1_000_000;
+    const quiet = tick({ now: t0, organizationActive: true, goals: [goal('x', 'blocked')], records: new Map(), seats: [seat('a')] });
+    let records = merge(quiet.records);
+    for (let i = 1; i <= 3; i++) {
+      const r = tick({ now: t0 + i * CHECK_INTERVAL_MS, organizationActive: true, goals: [goal('x', 'blocked')], records, seats: [seat('a')] });
+      records = merge([...records.values(), ...r.records]);
+      expect(r.wake).toEqual([]);
+    }
+    const back = tick({ now: t0 + 3 * CHECK_INTERVAL_MS + 1000, organizationActive: true, goals: [goal('g1', 'todo')], records, seats: [seat('a')] });
+    expect(back.wake).toEqual([]);                                  // not immediately
+    const nextInterval = tick({ now: t0 + 4 * CHECK_INTERVAL_MS, organizationActive: true, goals: [goal('g1', 'todo')],
+      records: merge([...records.values(), ...back.records]), seats: [seat('a')] });
+    expect(nextInterval.wake).toHaveLength(1);                      // at most one interval later
+  });
+
+  it('returns one record per seat even when the baseline and a later write coincide', () => {
+    const t0 = 1_000_000;
+    const r = tick({ now: t0 + CHECK_INTERVAL_MS, organizationActive: true, goals: [goal('g1', 'todo')],
+      records: new Map(), seats: [seat('a')] });
+    expect(r.records).toHaveLength(1);
+    expect(new Set(r.records.map(x => `${x.memberId}|${x.sessionRef}`)).size).toBe(r.records.length);
+  });
+
   it('restart replays at most one overdue check per seat', () => {
     const t0 = 1_000_000;
     // persisted record from long ago, now far overdue
