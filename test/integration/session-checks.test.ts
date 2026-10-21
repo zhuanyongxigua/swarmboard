@@ -102,6 +102,24 @@ describe('per-session five-minute checks (runtime wiring)', () => {
     expect(detail.adapterId).toBe('adapter-synthetic');
   });
 
+  it('keeps the pending entry when the channel dispatch fails, and retries it', async () => {
+    const f = fixture(); await f.settle();
+    f.tick();
+    await f.runtime.scan();          // schedule the check
+    const dispatcher = (f.runtime as unknown as { notificationDispatcher: { dispatch: (entry: unknown) => unknown } }).notificationDispatcher;
+    const original = dispatcher.dispatch;
+    let attempts = 0;
+    dispatcher.dispatch = () => { attempts += 1; throw new Error('channel down'); };
+    // The check came due at the previous scan; force one more due by advancing.
+    f.tick(); await f.runtime.scan();
+    dispatcher.dispatch = original;
+    expect(attempts).toBeGreaterThan(0);
+    // With the channel restored, the next scan publishes instead of losing it.
+    await f.runtime.scan();
+    const published = f.checks().filter(e => e.summary.startsWith('SESSION_TASK_CHECK:'));
+    expect(published.length).toBeGreaterThan(0);
+  });
+
   it('survives a restart without losing the due check', async () => {
     const f = fixture(); await f.settle();
     f.tick();

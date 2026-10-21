@@ -196,8 +196,9 @@ export class EventRuntime {
     // Persist first, including the pending outbox entry, before anything is published.
     seatChecks.store.save(result.records);
     for (const wake of [...owed, ...result.wake]) {
-      if (!this.publishSeatCheck(wake, pool)) continue;
-      seatChecks.store.confirmPending(wake);
+      // A transient dispatch failure leaves the pending entry in place; it is
+      // retried on the next scan rather than lost.
+      if (this.publishSeatCheck(wake, pool)) seatChecks.store.confirmPending(wake);
     }
   }
 
@@ -226,8 +227,15 @@ export class EventRuntime {
       }),
       ...(wake.memberId ? { recipientId: wake.memberId } : {}),
     });
-    this.notificationDispatcher.dispatch(entry);
-    return true;
+    // A failed dispatch must keep the pending entry so the next scan retries the
+    // same due instead of silently dropping the check (p8 6969).
+    try {
+      this.notificationDispatcher.dispatch(entry);
+      return true;
+    } catch (error) {
+      this.lastError = `Unable to dispatch a session check: ${(error as Error).message}`;
+      return false;
+    }
   }
 
   status() {
