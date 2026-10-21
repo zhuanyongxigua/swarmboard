@@ -234,6 +234,12 @@ export class EventRuntime {
   /** Produce one directed SESSION_TASK_CHECK entry; the dispatcher decides delivery. */
   private publishSeatCheck(wake: SeatCheckWake, pool: ReturnType<WorkerStore['pool']>): boolean {
     const agentId = 'runtime-' + (pool?.id ?? 'session-checks');
+    // The due-period identity is stable even if the bounded goal sample or
+    // guidance changed after publication but before outbox acknowledgement.
+    const prior = this.board.db.prepare(`SELECT id FROM entries WHERE agentId=? AND recipientId=? AND kind='MESSAGE'
+      AND json_valid(detail) AND json_extract(detail,'$.kind')='SESSION_TASK_CHECK'
+      AND json_extract(detail,'$.sessionRef')=? AND json_extract(detail,'$.dueAt')=? ORDER BY id LIMIT 1`)
+      .get(agentId, wake.memberId, wake.sessionRef, wake.dueAt) as { id: number } | undefined;
     if (!this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(agentId)) {
       this.board.registerAgent({ agentId, name: 'Swarmboard runtime' });
     }
@@ -242,7 +248,8 @@ export class EventRuntime {
     if (!this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(wake.memberId)) {
       this.board.registerAgent({ agentId: wake.memberId, name: wake.memberId });
     }
-    const entry = this.board.publishSystemEntryOnce({
+    const entry = prior ? this.board.readEntries({ after: prior.id - 1, limit: 1 }).items[0]!
+      : this.board.publishSystemEntryOnce({
       agentId,
       kind: 'MESSAGE',
       summary: 'SESSION_TASK_CHECK: review your authorized goals and continue useful work',

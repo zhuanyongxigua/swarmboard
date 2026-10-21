@@ -8,6 +8,7 @@ import { Store, type Entry } from '../../src/store.js';
 import { EventRuntime } from '../../src/event-runtime.js';
 import type { SessionAdapter } from '../../src/harness/contract.js';
 import { NotificationAdapterStore } from '../../src/notification-adapter-store.js';
+import { SeatCheckStore } from '../../src/seat-check-store.js';
 
 const INTERVAL = 300_000;
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -30,9 +31,45 @@ function fixture(adapter?: SessionAdapter) {
   return { dir, path, board, runtime, entries, checks, advance: () => { now += INTERVAL; } };
 }
 
-const payload = (entry: Entry) => JSON.parse(entry.detail) as { goalIds: string[]; sessionRef: string };
+const payload = (entry: Entry) => JSON.parse(entry.detail) as { goalIds: string[]; sessionRef: string; dueAt: number };
 
 describe('session task checks through the public runtime', () => {
+  it('does not turn a bare channel registration into a session admission', async () => {
+    const f = fixture(), goal = f.board.createTask({ title: 'Needs formal admission' });
+    new NotificationAdapterStore(f.board.db).save({ id: 'unadmitted', version: 1, displayName: 'Unadmitted',
+      harness: 'synthetic-orchid', enabled: true, capabilities: ['durableDelivery'],
+      members: [{ memberId: 'not-admitted', sessionRef: 'not-authorized', taskIds: [goal.id] }] });
+    await f.runtime.scan();
+    for (let cycle = 0; cycle < 3; cycle++) { f.advance(); await f.runtime.scan(); }
+    expect(f.checks()).toEqual([]);
+    expect(f.board.db.prepare('SELECT id FROM agents WHERE id=?').get('not-admitted')).toBeUndefined();
+  });
+
+  it('does not republish a persisted due period when its current goal sample shrinks', async () => {
+    const f = fixture({ open: async worker => worker.threadId!, run: async () => {}, close: async () => {} });
+    const goals = ['Review A', 'Review B'].map(title => f.board.createTask({ title }));
+    for (const goal of goals) f.board.updateTask(goal.id, { expectedVersion: 1, status: 'in_review' });
+    // An existing original session is bound before its first periodic scan.
+    f.runtime.configurePool({ workspacePath: f.dir, taskIds: goals.map(g => g.id), size: 1, maxSize: 1 });
+    const pool = f.runtime.workers.pool()!;
+    f.runtime.workers.checkpointPool({ ...pool, state: 'active' });
+    f.runtime.pool.ensureMembers(f.runtime.workers.pool()!);
+    const worker = f.runtime.workers.list()[0]!;
+    f.runtime.workers.save({ ...worker, threadId: 'original-session', cursor: f.board.board().cursor });
+    await f.runtime.scan(); f.advance(); await f.runtime.scan();
+    await vi.waitFor(() => expect(f.runtime.workers.get(worker.id).status).toBe('idle'));
+    const first = f.checks()[0]!;
+    expect(first).toBeDefined();
+    const checks = new SeatCheckStore(f.runtime.workers.db);
+    const record = [...checks.list().values()].find(row => row.memberId === worker.id)!;
+    // Restore the durable checkpoint from a crash after board publication but
+    // before outbox acknowledgement. The goal list changes before recovery.
+    checks.save([{ ...record, pending: { dueAt: payload(first).dueAt, goalIds: payload(first).goalIds } }]);
+    f.board.updateTask(goals[0]!.id, { expectedVersion: f.board.readTask(goals[0]!.id).version, status: 'blocked' });
+    await f.runtime.scan();
+    expect(f.checks().filter(entry => payload(entry).dueAt === payload(first).dueAt)).toHaveLength(1);
+  });
+
   it('rediscovers a review goal after finishing another contribution in the original native session', async () => {
     const contributions: string[] = [], sessions: string[] = [];
     const adapter: SessionAdapter = {
