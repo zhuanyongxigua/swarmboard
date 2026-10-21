@@ -12,6 +12,7 @@ import { NotificationAdapterStore } from '../../src/notification-adapter-store.j
 import { createNotificationDispatcher } from '../../src/notification-dispatch.js';
 import { driveOnce, intentKey, type DeliveryBatch, type Intent, type SubmitOutcome } from '../../src/harness/dsh/notification-driver.js';
 import { createDshJournals } from '../../src/harness/dsh/journal-store.js';
+import { createDshSdkSessionPort, type DshSdkEvent, type DshSdkSessionAgent, type DshSdkUserMessage } from '../../src/harness/dsh/sdk-session.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => { for (const close of cleanup.splice(0).reverse()) close(); });
@@ -70,6 +71,20 @@ function durableJournal() {
       journal = createDshJournals<DeliveryBatch>({ db, sessionId: 'original-session' }).notification;
     },
   };
+}
+
+function sdkSession(member: ReturnType<typeof fixture>['member'], durableFlush = true) {
+  const events: DshSdkEvent[] = [];
+  const messages: DshSdkUserMessage<string>[] = [];
+  const agent: DshSdkSessionAgent<string> = {
+    id: member.sessionRef, session: { id: member.sessionRef, header: { cwd: '/synthetic/project' }, events },
+    status: 'idle', inbox: { hasPending: false },
+    send: message => { messages.push(structuredClone(message)); },
+  };
+  const port = createDshSdkSessionPort({ adapterId: 'driver-channel', memberId: member.id,
+    sessionRef: member.sessionRef, cwd: '/synthetic/project', getAgent: id => id === agent.id ? agent : undefined,
+    messageId: value => value, isAuthorized: () => true, flush: async () => durableFlush });
+  return { events, messages, port };
 }
 
 describe('DSH driver and durable notification consumption', () => {
@@ -213,6 +228,44 @@ describe('DSH driver and durable notification consumption', () => {
     expect(f.submits).toBe(1);
     expect((await durable.journal.get(intentKey(batch)))?.batch.delivery.entryIds).toEqual(batch.delivery.entryIds);
     expect(f.service.pending(f.member.id).items[0]!.entryIds).toHaveLength(2);
+  });
+
+
+  it('carries the SDK completion token through the driver and confirms only its own terminal turn', async () => {
+    const f = fixture(); const durable = durableJournal(); const sdk = sdkSession(f.member);
+    const ports = { pending: f.ports(async () => ({ status: 'rejected' })).pending,
+      journal: durable.journal, session: sdk.port };
+    await driveOnce(ports);
+    expect(sdk.messages).toHaveLength(1);
+    expect(f.service.pending(f.member.id).items).toHaveLength(1);
+    sdk.events.push({ type: 'turn/start', seq: 1, data: { turn: 1 } },
+      { type: 'turn/end', seq: 2, data: { turn: 1, reason: { kind: 'completed' } } });
+    const unrelated = await driveOnce(ports);
+    expect(unrelated.awaitingCompletion).toHaveLength(1);
+    expect(f.service.pending(f.member.id).items).toHaveLength(1);
+    sdk.events.push({ type: 'turn/start', seq: 3, data: { turn: 2 } },
+      { type: 'user/message', seq: 4, data: sdk.messages[0] },
+      { type: 'turn/end', seq: 5, data: { turn: 2, reason: { kind: 'completed' } } });
+    const completed = await driveOnce(ports);
+    expect(completed.receiptsConfirmed).toHaveLength(1);
+    expect(f.service.pending(f.member.id).items).toHaveLength(0);
+    expect(sdk.messages).toHaveLength(1);
+    expect(durable.rows()).toHaveLength(0);
+  });
+
+  it('keeps a non-durable SDK enqueue unknown across consumer reopen and never sends it twice', async () => {
+    const f = fixture(); const durable = durableJournal(); const sdk = sdkSession(f.member, false);
+    const ports = { pending: f.ports(async () => ({ status: 'rejected' })).pending,
+      journal: durable.journal, session: sdk.port };
+    const first = await driveOnce(ports);
+    expect(first.unknown).toHaveLength(1);
+    const before = durable.rows();
+    expect(before).toHaveLength(1);
+    durable.restart();
+    await driveOnce({ ...ports, journal: durable.journal });
+    expect(sdk.messages).toHaveLength(1);
+    expect(durable.rows()).toEqual(before);
+    expect(f.service.pending(f.member.id).items).toHaveLength(1);
   });
 
 });
