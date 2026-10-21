@@ -190,8 +190,8 @@ describe('driveOnce (whole delivery) ', () => {
     ]);
     const result = await driveOnce(f.ports);
     expect(result.submitted).toEqual([
-      intentKey(f.ports ? batch() : batch()),
-      'adapter-a|m2|s2|8',
+      intentKey(batch()),
+      JSON.stringify(['adapter-a', 'm2', 's2', 8]),
     ]);
     expect(f.calls.confirm).toEqual([[1, 2], [3]]);
   });
@@ -202,7 +202,7 @@ describe('driveOnce (whole delivery) ', () => {
     const c = batch({ memberId: 'm2' });
     expect(intentKey(a)).not.toBe(intentKey(b));
     expect(intentKey(a)).not.toBe(intentKey(c));
-    expect(intentKey(a)).toBe('adapter-a|m1|s1|7');
+    expect(intentKey(a)).toBe(JSON.stringify(['adapter-a', 'm1', 's1', 7]));
   });
 
   it('renders every entry of the delivery as untrusted reference data', async () => {
@@ -286,5 +286,30 @@ describe('driveOnce (whole delivery) ', () => {
     expect(persisted?.batch.delivery.entryIds).toEqual([99]);
     expect(persisted?.covered).toEqual([1, 2, 99]);
     expect(confirms).toEqual([]);                  // still awaiting the delta's completion
+  });
+
+  it('separates an omitted adapter from the literal "native" and from separators inside ids', async () => {
+    const omitted = batch({ adapterId: undefined });
+    const literal = batch({ adapterId: 'native' });
+    expect(intentKey(omitted)).not.toBe(intentKey(literal));
+
+    // A member id containing the old separator must not be able to forge another key.
+    const forged = batch({ adapterId: undefined, memberId: 'm1|s1', sessionRef: 'x' });
+    const honest = batch({ adapterId: undefined, memberId: 'm1', sessionRef: 's1|x' });
+    expect(intentKey(forged)).not.toBe(intentKey(honest));
+  });
+
+  it('fails closed when only a legacy joined-string record exists', async () => {
+    const f = harness();
+    const legacyKey = `adapter-a|m1|s1|7`;
+    const result = driveOnce({
+      ...f.ports,
+      journal: {
+        ...f.ports.journal,
+        get: async (k: string) => (k === legacyKey ? ({ key: k, state: 'enqueued', batch: batch() } as Intent) : undefined),
+      },
+    });
+    await expect(result).rejects.toThrow(/LEGACY_INTENT_KEY/);
+    expect(f.calls.submit).toBe(0);
   });
 });

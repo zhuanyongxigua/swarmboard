@@ -117,10 +117,15 @@ export interface DriveResult {
 
 /**
  * The batch key. A notification sequence is only unique inside its own
- * (adapter, member, session) scope, so the key must carry all of them; a bare
- * `delivery:<sequence>` would collide across seats and settle the wrong batch (p2 7180).
+ * (adapter, member, session) scope, so the key must carry all of them. It is a JSON tuple,
+ * not a joined string: `${adapterId ?? 'native'}|...` collided with an omitted adapter, and
+ * any field containing the separator could forge another seat's key (p8 7360 / PR24 P2).
  */
 export const intentKey = (batch: Pick<DeliveryBatch, 'delivery' | 'adapterId' | 'memberId' | 'sessionRef'>) =>
+  JSON.stringify([batch.adapterId ?? null, batch.memberId, batch.sessionRef, batch.delivery.sequence]);
+
+/** The v1 joined-string key, kept only to fail closed if a legacy record is ever found. */
+const legacyIntentKey = (batch: Pick<DeliveryBatch, 'delivery' | 'adapterId' | 'memberId' | 'sessionRef'>) =>
   `${batch.adapterId ?? 'native'}|${batch.memberId}|${batch.sessionRef}|${batch.delivery.sequence}`;
 
 /** A periodic check is addressable only with a real dueAt and at least one scoped goal. */
@@ -187,6 +192,14 @@ export async function driveOnce(
   for (const batch of await ports.pending.list()) {
     const key = intentKey(batch);
     const intent = await ports.journal.get(key);
+    if (!intent) {
+      // A record written under the old joined-string key must never be read as "no intent":
+      // that would re-run a delivery whose turn may already have happened (p8 7360).
+      const legacy = await ports.journal.get(legacyIntentKey(batch));
+      if (legacy) {
+        throw new Error(`LEGACY_INTENT_KEY: a v1 journal record exists for ${legacyIntentKey(batch)}; migrate or clear it before driving this delivery`);
+      }
+    }
 
     // Work out whether this delivery still owes a model turn: entries that never got an
     // authoritative completion (a later ordinary merge grows the delivery, p2 7237).
