@@ -1,6 +1,6 @@
 // Synthetic fault tests for the vendor-isolated turn driver (no model, no timer, no fs).
 import { describe, expect, it } from 'vitest';
-import { driveOnce, intentKey, type PendingCheck } from '../../src/harness/dsh/notification-driver.js';
+import { driveOnce, intentKey, isAddressable, type PendingCheck } from '../../src/harness/dsh/notification-driver.js';
 
 const check = (over: Partial<PendingCheck> = {}): PendingCheck => ({ memberId: 'm1', sessionRef: 's1', dueAt: 300_000, goalIds: ['g1'], ...over });
 
@@ -98,5 +98,20 @@ describe('driveOnce', () => {
     expect(result.unknown).toEqual([key]);
     expect(f.calls.submit).toBe(0);
     expect(f.journal.get(key)?.state).toBe('unknown');
+  });
+
+  it('releases a check with no scoped goal instead of spending a model turn', async () => {
+    const f = ports();
+    const result = await driveOnce({ ...f.ports, pending: { ...f.ports.pending, list: async () => [check({ goalIds: [] })] } });
+    expect(result.skipped).toEqual([intentKey(check())]);
+    expect(f.calls.submit).toBe(0);
+    expect(f.calls.release).toEqual(['scope-empty']);
+  });
+
+  it('rejects an unusable dueAt before submitting', async () => {
+    expect(isAddressable({ dueAt: Number.NaN, goalIds: ['g'] })).toBe(false);
+    expect(isAddressable({ dueAt: -1, goalIds: ['g'] })).toBe(false);
+    expect(isAddressable({ dueAt: 0, goalIds: ['g'] })).toBe(true);
+    expect(isAddressable({ dueAt: 1, goalIds: [] })).toBe(false);
   });
 });

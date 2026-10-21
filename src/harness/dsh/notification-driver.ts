@@ -97,6 +97,12 @@ export interface DriveResult {
 export const intentKey = (check: Pick<PendingCheck, 'memberId' | 'sessionRef' | 'dueAt'>) =>
   `${check.memberId}|${check.sessionRef}|${check.dueAt}`;
 
+
+/** A check is addressable only with a real dueAt and at least one scoped goal. */
+export const isAddressable = (check: Pick<PendingCheck, 'dueAt' | 'goalIds'>): boolean =>
+  Number.isSafeInteger(check.dueAt) && check.dueAt >= 0
+  && Array.isArray(check.goalIds) && check.goalIds.length > 0;
+
 export const defaultCheckText = (check: PendingCheck) =>
   'Check your authorized goal list. If any goal is unclaimed, in progress or awaiting review, '
   + 'continue useful work with peers and then look again; blocked and finished goals need nothing.';
@@ -114,6 +120,16 @@ export async function driveOnce(
 
   for (const check of await ports.pending.list()) {
     const key = intentKey(check);
+
+    // The envelope the dispatcher parsed must stay a valid idempotency key: a check with
+    // no scoped goal, or without a non-negative integer dueAt, must never reach a model
+    // turn (p2 7039 / e51d 7137). This is a guard, not a re-parse.
+    if (!isAddressable(check)) {
+      await ports.pending.release(check, 'scope-empty');
+      result.skipped.push(key);
+      continue;
+    }
+
     const intent = await ports.journal.get(key);
 
     // A delivery whose authoritative completion was seen but whose receipt failed: retry
