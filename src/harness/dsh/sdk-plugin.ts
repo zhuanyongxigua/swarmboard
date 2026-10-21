@@ -93,7 +93,18 @@ export function createDshSdkPlugin<S extends string, M extends string, A extends
           if (options.lease.owns() !== true) throw new Error('DSH_HOST_LEASE_LOST');
           await runner!.pass();
         }
-      }).finally(() => { pumping = undefined; });
+      }).then(async () => {
+        // A notification can arrive after the loop's final empty check but
+        // before this handoff. Clear only this pump, then transfer queued work
+        // to a new one; no old finally may erase the replacement promise.
+        pumping = undefined;
+        if (queued && !closed && !failed) await requestPass();
+      }, error => {
+        // Failure is not a wake source. Freeze before exposing an empty pump
+        // slot so a completion observer cannot accidentally retry the pass.
+        queued = false; fail(error); pumping = undefined;
+        throw error;
+      });
     }
     return pumping;
   };
