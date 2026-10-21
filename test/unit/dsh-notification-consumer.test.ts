@@ -376,6 +376,36 @@ describe('delivery boundary regressions (PR review)', () => {
     expect(result.errors[0]?.error).toContain('INCOMPLETE_CONTEXT');
   });
 
+  it('fails closed when an entry id cannot be read exactly', async () => {
+    const board = createMcpBoardPort({
+      callTool: async ({ name }) => {
+        if (name === 'notification_pending') return { items: [{ adapterId: seat.adapterId, memberId: seat.memberId, sequence: 11, entryIds: [33], state: 'pending' }], cursor: 11, hasMore: false };
+        if (name === 'notification_binding_read') return { binding: { adapterId: seat.adapterId, memberId: seat.memberId, sessionRef: seat.sessionRef, registrationVersion: 1, enabled: true, taskIds: ['goal-1'] } };
+        if (name === 'context_read') return { items: [{ id: 99, detail: '{}' }] };
+        return {};
+      },
+    });
+    const prompts: unknown[] = [];
+    const result = await runPass({ seats: [seat], board, transport: transportFor({ prompts }), state: { schema: 1, seats: {} }, now });
+    expect(prompts).toHaveLength(0);
+    expect(result.errors[0]?.step).toBe('entries');
+    expect(result.errors[0]?.error).toContain('INCOMPLETE_CONTEXT:entry-33-missing');
+  });
+
+  it('fails closed when the board cannot read the context at all', async () => {
+    const prompts: unknown[] = [];
+    const board: BoardPort = {
+      unsettled: () => [{ sequence: 12, entryIds: [44] }],
+      binding: () => ({ ok: true, adapterId: 'synthetic-adapter', registrationVersion: 1, memberTaskIds: ['goal-1'], admissionTaskIds: ['goal-1'] }),
+      intentCurrent: () => ({ ok: true }),
+      entries: () => { throw new Error('SYNTHETIC_CONTEXT_UNAVAILABLE'); },
+    };
+    const result = await runPass({ seats: [seat], board, transport: transportFor({ prompts }), state: { schema: 1, seats: {} }, now });
+    expect(prompts).toHaveLength(0);
+    expect(result.errors[0]?.step).toBe('entries');
+    expect(result.errors[0]?.error).toContain('SYNTHETIC_CONTEXT_UNAVAILABLE');
+  });
+
   it('does not let a re-registered adapter inherit the old channel record', async () => {
     const otherSeat = { ...seat, adapterId: 'synthetic-adapter-2' };
     const prompts: unknown[] = [];
