@@ -440,7 +440,7 @@ export async function startNotificationConsumer(options: {
   readonly transport: TransportPort;
   readonly now?: () => string;
   readonly once?: boolean;
-}): Promise<{ stop(): Promise<void>; first: PassResult }> {
+}): Promise<{ stop(): void | Promise<void>; first: PassResult }> {
   const now = options.now ?? (() => new Date().toISOString());
   // Lock before loading the ledger: a second writer must never start from a stale
   // in-memory snapshot taken before the lock (review FAIL 8704 / 8882).
@@ -485,11 +485,12 @@ export async function startNotificationConsumer(options: {
   }
   return {
     first,
-    async stop() {
+    stop() {
       if (timer) clearInterval(timer);
+      const pending: Promise<PassResult> | null = inFlight;
+      if (!pending) { lock.release(); return; }
       // Hand the lock over only after the in-flight pass has finished writing.
-      await Promise.resolve(inFlight).catch(() => {});
-      lock.release();
+      return Promise.resolve(pending).catch(() => {}).then(() => { lock.release(); });
     },
   };
 }
