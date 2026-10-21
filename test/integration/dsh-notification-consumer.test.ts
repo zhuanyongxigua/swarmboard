@@ -6,11 +6,11 @@ import { CollaboratorStore } from '../../src/collaborators.js';
 import { NotificationService } from '../../src/notification-service.js';
 import { NotificationAdapterStore } from '../../src/notification-adapter-store.js';
 import { createNotificationDispatcher } from '../../src/notification-dispatch.js';
-import { driveOnce, type PendingCheck, type Intent, type SubmitOutcome } from '../../src/harness/dsh/notification-driver.js';
+import { driveOnce, type DeliveryBatch, type Intent, type SubmitOutcome } from '../../src/harness/dsh/notification-driver.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => { for (const close of cleanup.splice(0).reverse()) close(); });
-type Batch = PendingCheck & { delivery: { sequence: number; entryIds: readonly number[] } };
+type Batch = DeliveryBatch & { adapterId: string };
 function fixture() {
   const board = new Store(':memory:');
   const collaborators = new CollaboratorStore(':memory:');
@@ -34,17 +34,19 @@ function fixture() {
     del: async (key: string) => { records.delete(key); } };
   const pending = {
     list: async (): Promise<Batch[]> => service.pending(member.id).items.map(item => ({ memberId: member.id,
-      sessionRef: member.sessionRef, adapterId: item.adapterId, registrationVersion: 1, dueAt: 300000, goalIds: [goal.id],
+      sessionRef: member.sessionRef, adapterId: item.adapterId,
+      check: { memberId: member.id, sessionRef: member.sessionRef, adapterId: item.adapterId, registrationVersion: 1, dueAt: 300000, goalIds: [goal.id] },
+      entries: item.entryIds.map(id => board.readEntries({ after: id - 1, limit: 1 }).items[0]!),
       delivery: { sequence: item.sequence, entryIds: [...item.entryIds] } })),
-    confirm: async (delivery: { sequence: number; entryIds: readonly number[] }) => { service.receipt(member.id, delivery.sequence, true, delivery.entryIds); },
+    confirm: async (batch: DeliveryBatch) => { service.receipt(batch.memberId, batch.delivery.sequence, true, batch.delivery.entryIds); },
     release: async (): Promise<void> => { throw new Error('Unexpected release'); },
   };
   let submits = 0;
-  const ports = (submit: (check: PendingCheck) => Promise<SubmitOutcome>) => ({ pending, journal, session: {
+  const ports = (submit: (batch: DeliveryBatch, text: string) => Promise<SubmitOutcome>) => ({ pending, journal, session: {
     isCurrent: async () => true, isBusy: async () => false, settlement: async () => ({ settled: false as const }),
-    submit: async (check: PendingCheck) => { submits++; return submit(check); },
+    submit: async (batch: DeliveryBatch, text: string) => { submits++; return submit(batch, text); },
   } });
-  return { board, member, service, dispatcher, records, ports, get submits() { return submits; },
+  return { board, member, collaborators, service, dispatcher, records, ports, get submits() { return submits; },
     unsettled: () => new NotificationAdapterStore(board.db).unsettled() };
 }
 
@@ -78,27 +80,62 @@ describe('DSH driver and durable notification consumption', () => {
     expect(f.records.size).toBe(1);
   });
 
-  it('does not settle a full delivery after only one of its checks completed', async () => {
+  it('processes two checks as one complete delivery and leaves a rejected batch unsettled', async () => {
     const f = fixture();
-    const ports = f.ports(async check => check.dueAt === 300000
-      ? { status: 'completed', turnId: 'first-check-turn' } : { status: 'rejected' });
+    let submitted: DeliveryBatch | undefined;
+    const ports = f.ports(async batch => { submitted = structuredClone(batch); return { status: 'rejected' }; });
     const first = (await ports.pending.list())[0]!;
     const second = f.board.publishEntry({ agentId: 'runtime-driver-test', kind: 'MESSAGE', recipientId: f.member.id,
       summary: 'SESSION_TASK_CHECK: second check in the same batch', detail: JSON.stringify({ kind: 'SESSION_TASK_CHECK',
         memberId: f.member.id, sessionRef: f.member.sessionRef, adapterId: 'driver-channel', registrationVersion: 1,
-        dueAt: 600000, goalIds: first.goalIds }) });
+        dueAt: 600000, goalIds: first.check!.goalIds }) });
     f.dispatcher.dispatch(second);
-    const batch = f.service.pending(f.member.id).items[0]!;
-    expect(batch.entryIds).toHaveLength(2);
-    // The advertised per-check input can contain two checks sharing one receipt.
-    // Completing one must never authorize the other entry's consumption.
-    ports.pending.list = async () => [
-      { ...first, delivery: { sequence: batch.sequence, entryIds: [...batch.entryIds] } },
-      { ...first, dueAt: 600000, delivery: { sequence: batch.sequence, entryIds: [...batch.entryIds] } },
-    ];
+    const original = f.service.pending(f.member.id).items[0]!;
+    expect(original.entryIds).toHaveLength(2);
     ports.pending.release = async () => {};
     await driveOnce(ports);
+    expect(f.submits).toBe(1);
+    expect(submitted?.entries.map(entry => entry.id)).toEqual(original.entryIds);
+    expect(submitted?.delivery.entryIds).toEqual(original.entryIds);
     expect(f.unsettled()).toHaveLength(1);
   });
 
+  it('includes every ordinary entry in the actual prompt before confirming the batch', async () => {
+    const f = fixture();
+    const late = f.board.publishEntry({ agentId: 'runtime-driver-test', kind: 'MESSAGE', recipientId: f.member.id,
+      summary: 'Do not lose this peer update', detail: 'Unique ordinary payload in the consumed delivery.' });
+    f.dispatcher.dispatch(late);
+    let prompt = '';
+    const ports = f.ports(async (_batch, text) => { prompt = text; return { status: 'completed', turnId: 'whole-batch-turn' }; });
+    await driveOnce(ports);
+    expect(prompt).toContain(late.summary);
+    expect(prompt).toContain(late.detail);
+    expect(f.submits).toBe(1);
+    expect(f.unsettled()).toHaveLength(0);
+  });
+
+  it('keeps equal local sequence numbers independent across admitted sessions', async () => {
+    const f = fixture();
+    const otherGoal = f.board.createTask({ title: 'Second consumer scope' });
+    const other = f.collaborators.configure({ expectedVersion: 0, name: 'Second consumer', harness: 'synthetic',
+      sessionRef: 'second-session', taskIds: [otherGoal.id], enabled: true }, f.board).collaborator;
+    f.board.registerAgent({ agentId: other.id, name: other.name });
+    f.service.register(other.id, { id: 'other-channel', version: 1, displayName: 'Second channel', harness: 'synthetic',
+      enabled: true, capabilities: ['durableDelivery', 'receipt'],
+      members: [{ memberId: other.id, sessionRef: other.sessionRef, taskIds: [otherGoal.id] }] });
+    const otherEntry = f.board.publishEntry({ agentId: 'runtime-driver-test', kind: 'MESSAGE', recipientId: other.id,
+      summary: 'Work for the second consumer', detail: 'Independent second delivery.' });
+    f.dispatcher.dispatch(otherEntry);
+    const item = f.service.pending(other.id).items[0]!;
+    const ports = f.ports(async batch => batch.memberId === f.member.id
+      ? { status: 'unknown' } : { status: 'completed', turnId: 'second-session-turn' });
+    const firstList = await ports.pending.list();
+    expect(firstList[0]!.delivery.sequence).toBe(item.sequence);
+    ports.pending.list = async () => [...firstList, { adapterId: item.adapterId, memberId: other.id,
+      sessionRef: other.sessionRef, delivery: { sequence: item.sequence, entryIds: [...item.entryIds] }, entries: [otherEntry] }];
+    await driveOnce(ports);
+    expect(f.submits).toBe(2);
+    expect(f.service.pending(other.id).items).toHaveLength(0);
+    expect(f.service.pending(f.member.id).items).toHaveLength(1);
+  });
 });
