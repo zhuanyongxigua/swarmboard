@@ -109,9 +109,10 @@ describe('DSH driver and durable notification consumption', () => {
     expect(first.receiptPending).toHaveLength(1);
     expect(f.unsettled()).toHaveLength(1);
     expect(f.service.pending(f.member.id).items[0]!.entryIds.length).toBeGreaterThan(original.entryIds.length);
+    ports.session.isBusy = async () => true;
     await driveOnce(ports);
     expect(f.submits).toBe(1);
-    // The first turn covered only the original snapshot. A fresh pending read
+    // While busy, the first turn covered only the original snapshot. A fresh pending read
     // cannot authorize the receipt-only retry to settle the appended entry.
     expect(f.unsettled()).toHaveLength(1);
     expect(f.records.size).toBe(1);
@@ -223,6 +224,7 @@ describe('DSH driver and durable notification consumption', () => {
     await driveOnce(ports);
     expect((await durable.journal.get(intentKey(batch)))?.batch.delivery.entryIds).toEqual(batch.delivery.entryIds);
     durable.restart();
+    ports.session.isBusy = async () => true;
     const second = await driveOnce({ ...ports, journal: durable.journal });
     expect(second.receiptPending).toHaveLength(1);
     expect(f.submits).toBe(1);
@@ -266,6 +268,32 @@ describe('DSH driver and durable notification consumption', () => {
     expect(sdk.messages).toHaveLength(1);
     expect(durable.rows()).toEqual(before);
     expect(f.service.pending(f.member.id).items).toHaveLength(1);
+  });
+
+
+  it('continues a normal late merge with only the new entries and eventually confirms the full delivery', async () => {
+    const f = fixture(); const durable = durableJournal();
+    const submittedIds: number[][] = [];
+    let lateId: number | undefined;
+    const ports = { ...f.ports(async batch => {
+      submittedIds.push([...batch.delivery.entryIds]);
+      if (lateId === undefined) {
+        const late = f.board.publishEntry({ agentId: 'runtime-driver-test', kind: 'MESSAGE', recipientId: f.member.id,
+          summary: 'Normal update arriving during the first turn', detail: 'This work must continue without replaying the old entry.' });
+        lateId = late.id; f.dispatcher.dispatch(late);
+      }
+      return { status: 'completed', turnId: `completed-delta-${submittedIds.length}` };
+    }), journal: durable.journal };
+    const original = f.service.pending(f.member.id).items[0]!;
+    await driveOnce(ports);
+    durable.restart();
+    const resumed = { ...ports, journal: durable.journal };
+    await driveOnce(resumed);
+    await driveOnce(resumed);
+    expect(f.service.pending(f.member.id).items).toHaveLength(0);
+    expect(submittedIds).toEqual([original.entryIds, [lateId]]);
+    expect(f.submits).toBe(2);
+    expect(durable.rows()).toHaveLength(0);
   });
 
 });
