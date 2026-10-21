@@ -45,7 +45,7 @@ SDK root 是操作者明确信任的已安装代码树。外部 pins 校验固�
 
 ## 正式 child 插件与本地状态读回
 
-`launch-child.ts` 是官方 Loader 默认插件的组合层。`configPath` 与 `configSha256` 在同步 apply 时捕获同一快照，apply 只返回 cleanup，异步启动独立等待 Loader。外部 JSON 使用 `swarmboard-dsh-child/v1` 严格 Schema，拒绝任意模块、未知字段及配置／原创建收据／native 文件摘要变化。`goalBindings` 只限制正式当前授权，不签发授权。选用原 session 可保留外部 persistence root；stage、runtime、工作目录相互独立。实际端口由仓库内 caller-bound 通知桥创建，不能从 JSON 加载代码或复制个人 legacy 配置。
+`launch-child.ts` 默认导出官方 Loader 插件，打包为独立 `server/harness/dsh/child.mjs`；组合层直接导入仓库内 `launcher-channels` 和 `launcher-member-ports`，无个人 shim。宿主以 `{configPath,configSha256}` 显式启用，控制对象沿 `ctx.provide('swarmboardDshLaunchChild', control)` 可读。构造仍不启动连接，只有 apply 的异步启动阶段创建自己的 MCP channels／member ports，失败清理自有连接，正常关闭时先关自己的 ports 再关自己独占的 channels。`configPath` 与 `configSha256` 在同步 apply 时捕获同一快照，apply 只返回 cleanup，异步启动独立等待 Loader。外部 JSON 使用 `swarmboard-dsh-child/v1` 严格 Schema，拒绝任意模块、未知字段及配置／原创建收据／native 文件摘要变化。`goalBindings` 只限制正式当前授权，不签发授权。选用原 session 可保留外部 persistence root；stage、runtime、工作目录相互独立。实际端口由仓库内 caller-bound 通知桥创建，不能从 JSON 加载代码或复制个人 legacy 配置。
 
 固定状态路径为 `stageDirectory/child-state.jsonl` 和 `stageDirectory/child-ready.json`，宿主数据库为 `runtimeDirectory/durable-host.sqlite`。状态文件及新 sidecar 独占创建，存在原状态、sidecar／WAL／SHM 时拒绝重放；所有历史留给操作者核实。状态回调同步 fsync；resume 前同步交叉核实际官方 persistence service 的 canonical root、locate(id/cwd) 路径和原创建收据；不能仅相信 descriptor 的 root。ready 前重新核原 lease、同一 agent/session/cwd、权限 checkpoint 和当前 AGENTS 摘要。它报告正式双提示词文件已准备，官方 workspace-instruction 通道是 user role，不能声称模型已采用或提升为 system/developer 角色。官方 profile 必须保留原指令插件。
 

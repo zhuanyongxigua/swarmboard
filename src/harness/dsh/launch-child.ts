@@ -12,6 +12,8 @@ import { inspectDshSessionRequest, type DshPreparedSession } from './launch-sess
 import type { DshSdkPluginContext } from './sdk-plugin.js';
 import type { DshSdkSessionAgent, DshSdkBatch } from './sdk-session.js';
 import type { DshNotificationPortOptions } from './notification-port.js';
+import { createDshLauncherChannels } from './launcher-channels.js';
+import { openDshLauncherMemberPorts } from './launcher-member-ports.js';
 import { workerProtocol } from '../../worker-prompt.js';
 
 const text = z.string().min(1), sha256 = z.string().regex(/^[a-f0-9]{64}$/);
@@ -106,8 +108,17 @@ export interface DshChildDependencies {
 }
 /** Tests may replace only the process/SDK composition. Production supplies the
  * packaged caller-bound bridge; no arbitrary module path is accepted in JSON. */
-export function createDshLaunchChild(dependencies: DshChildDependencies) {
-  const openPorts = dependencies.openPorts, loadSdk = dependencies.loadSdk ?? loadDshLaunchSdk;
+export async function openDshLaunchChildPorts(_ctx: DshChildContext, config: DshChildConfig): Promise<DshChildPorts> {
+  const channels = createDshLauncherChannels({ nodeCommand: config.nodeCommand, server: config.server,
+    boardDatabasePath: config.boardDatabasePath, runtimeDirectory: config.runtimeDirectory });
+  try {
+    const ports = await openDshLauncherMemberPorts({ channels, identity: config.identity,
+      boardDatabasePath: config.boardDatabasePath, goalBindings: config.goalBindings });
+    return { ...ports, close: async () => { try { await ports.close(); } finally { await channels.close(); } } };
+  } catch (error) { await channels.close(); throw error; }
+}
+export function createDshLaunchChild(dependencies: Partial<DshChildDependencies> = {}) {
+  const openPorts = dependencies.openPorts ?? openDshLaunchChildPorts, loadSdk = dependencies.loadSdk ?? loadDshLaunchSdk;
   let applied = false, closed = false, failed = false, fd: number | undefined, db: DatabaseSync | undefined;
   let ports: DshChildPorts | undefined;
   let bootstrap: ReturnType<typeof createDshLaunchBootstrap<string, string, DshSdkSessionAgent<string>, unknown>> | undefined;
@@ -238,3 +249,13 @@ export function readDshChildStatus(input: { stageDirectory: string; configSha256
   return { ...base, startupReady, phase: last.phase === 'ready' && !startupReady ? 'starting' : last.phase,
     ...(last.errorCode ? { errorCode: last.errorCode } : {}) };
 }
+/** Official Loader entry bundled separately by the trusted launcher. */
+export default {
+  name: 'swarmboard-dsh-launch-child',
+  inject: ['agents', 'sessions', 'agentDefaultModel', 'sessionPersistence', 'tools', 'permissionPresets'],
+  apply(ctx: DshChildContext, options: { configPath: string; configSha256: string }) {
+    const child = createDshLaunchChild();
+    ctx.provide('swarmboardDshLaunchChild', child);
+    return child.plugin.apply(ctx, options);
+  },
+};
