@@ -1,7 +1,7 @@
 // Controlled-clock tests for the per-session five-minute check state machine.
 // No real timers, no processes, no model.
 import { describe, expect, it } from 'vitest';
-import { tick, CHECK_INTERVAL_MS, applicableGoals, type SeatRecord, type SeatSnapshot } from '../../src/seat-checks.js';
+import { tick, pendingWakes, CHECK_INTERVAL_MS, applicableGoals, type SeatRecord, type SeatSnapshot } from '../../src/seat-checks.js';
 
 const seat = (memberId: string, over: Partial<SeatSnapshot> = {}): SeatSnapshot =>
   ({ memberId, sessionRef: 'session-' + memberId, active: true, busy: false, ...over });
@@ -126,6 +126,24 @@ describe('per-session five-minute checks', () => {
       records: new Map(), seats: [seat('a')] });
     expect(r.records).toHaveLength(1);
     expect(new Set(r.records.map(x => `${x.memberId}|${x.sessionRef}`)).size).toBe(r.records.length);
+  });
+
+  it('keeps a durable pending entry so a crash before publish is not lost', () => {
+    const t0 = 1_000_000;
+    const first = tick({ now: t0, organizationActive: true, goals: [goal('g1', 'todo')], records: new Map(), seats: [seat('a')] });
+    const dueTick = tick({ now: t0 + CHECK_INTERVAL_MS, organizationActive: true, goals: [goal('g1', 'todo')],
+      records: merge(first.records), seats: [seat('a')] });
+    // The fired check leaves a pending outbox entry in the persisted record.
+    const fired = dueTick.records[0]!;
+    expect(fired.pending).toMatchObject({ dueAt: t0 + CHECK_INTERVAL_MS, goalIds: ['g1'] });
+    // Simulate a crash before publishing: restart sees the same due as owed.
+    const afterCrash = merge(dueTick.records);
+    expect(pendingWakes(afterCrash)).toHaveLength(1);
+    expect(pendingWakes(afterCrash)[0]!.dueAt).toBe(t0 + CHECK_INTERVAL_MS);
+    // A second tick at the same instant does not invent a new check; the owed one is re-published.
+    const rescan = tick({ now: t0 + CHECK_INTERVAL_MS + 1, organizationActive: true, goals: [goal('g1', 'todo')],
+      records: afterCrash, seats: [seat('a')] });
+    expect(rescan.wake).toEqual([]);
   });
 
   it('restart replays at most one overdue check per seat', () => {

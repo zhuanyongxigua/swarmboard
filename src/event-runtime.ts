@@ -12,7 +12,7 @@ import { boardInstructions } from './board-instructions.js';
 import { WorkerPool } from './worker-pool.js';
 import { PoolLiveness } from './pool-liveness.js';
 import { SeatCheckStore } from './seat-check-store.js';
-import { tick as tickSeatChecks, seatKey, type SeatRecord, type SeatSnapshot, type SeatCheckWake } from './seat-checks.js';
+import { tick as tickSeatChecks, pendingWakes, type SeatRecord, type SeatSnapshot, type SeatCheckWake } from './seat-checks.js';
 import { createNotificationDispatcher } from './notification-dispatch.js';
 import { PipelineEvents, type PipelineReader } from './pipeline-events.js';
 import { ExecutionGrants } from './execution-grants.js';
@@ -164,17 +164,25 @@ export class EventRuntime {
           adapterId: adapter.id, registrationVersion: adapter.version });
       }
     }
+    // Outstanding checks from an earlier scan (or an earlier process) are retried
+    // first: the pending entry is durable, so a crash between save and publish
+    // re-publishes the same due instead of silently dropping the check.
+    const records = seatChecks.store.list();
+    const owed = pendingWakes(records);
     const result = tickSeatChecks({
       now, organizationActive: !!pool?.enabled && pool.state === 'active',
-      seats, goals: this.board.taskStates(), records: seatChecks.store.list(), intervalMs: seatChecks.intervalMs,
+      seats, goals: this.board.taskStates(), records, intervalMs: seatChecks.intervalMs,
     });
-    // Persist first: the wakeups below are only safe if the schedule moved.
+    // Persist first, including the pending outbox entry, before anything is published.
     seatChecks.store.save(result.records);
-    for (const wake of result.wake) this.publishSeatCheck(wake, pool);
+    for (const wake of [...owed, ...result.wake]) {
+      if (!this.publishSeatCheck(wake, pool)) continue;
+      seatChecks.store.confirmPending(wake);
+    }
   }
 
   /** Produce one directed SESSION_TASK_CHECK entry; the dispatcher decides delivery. */
-  private publishSeatCheck(wake: SeatCheckWake, pool: ReturnType<WorkerStore['pool']>) {
+  private publishSeatCheck(wake: SeatCheckWake, pool: ReturnType<WorkerStore['pool']>): boolean {
     const agentId = 'runtime-' + (pool?.id ?? 'session-checks');
     if (!this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(agentId)) {
       this.board.registerAgent({ agentId, name: 'Swarmboard runtime' });
@@ -194,6 +202,7 @@ export class EventRuntime {
       ...(wake.memberId ? { recipientId: wake.memberId } : {}),
     });
     this.notificationDispatcher.dispatch(entry);
+    return true;
   }
 
   status() {

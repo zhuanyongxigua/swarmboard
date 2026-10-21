@@ -31,6 +31,17 @@ describe('seat check store', () => {
     db.close();
   });
 
+  it('clears a pending entry only after a matching confirmation', () => {
+    const db = new DatabaseSync(':memory:');
+    const store = new SeatCheckStore(db);
+    store.save([record('a', { pending: { dueAt: 5_000, goalIds: ['g1'] } })]);
+    store.confirmPending({ memberId: 'a', sessionRef: 'session-a', dueAt: 4_000 });   // stale due
+    expect(store.list().get('a|session-a')?.pending).toBeDefined();
+    store.confirmPending({ memberId: 'a', sessionRef: 'session-a', dueAt: 5_000 });
+    expect(store.list().get('a|session-a')?.pending).toBeUndefined();
+    db.close();
+  });
+
   it('removes a retired seat so it cannot resume silently', () => {
     const db = new DatabaseSync(':memory:');
     const store = new SeatCheckStore(db);

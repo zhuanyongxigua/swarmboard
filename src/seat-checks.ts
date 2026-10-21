@@ -14,6 +14,12 @@ export interface SeatRecord {
   lastCheckAt: number | null;
   /** True when a check came due while the seat was busy and has not fired yet. */
   pendingMerged: boolean;
+  /**
+   * A fired check that has been scheduled but not yet confirmed as published.
+   * It is persisted in the same write that advances nextDueAt, so a crash between
+   * saving and publishing re-publishes the same due instead of losing it.
+   */
+  pending?: { dueAt: number; goalIds: string[]; adapterId?: string; registrationVersion?: number };
   /** Observability only. Never used as a cap or as a stop condition. */
   checks: number;
   state: SeatState;
@@ -39,6 +45,20 @@ export const CHECK_INTERVAL_MS = 5 * 60 * 1000;
 export const APPLICABLE_STATUSES = ['todo', 'in_progress', 'in_review'] as const;
 
 export const seatKey = (seat: Pick<SeatRecord, 'memberId' | 'sessionRef'>) => `${seat.memberId}|${seat.sessionRef}`;
+
+/** Wakeups still owed for records whose pending entry was never confirmed. */
+export function pendingWakes(records: ReadonlyMap<string, SeatRecord>): SeatCheckWake[] {
+  const wakes: SeatCheckWake[] = [];
+  for (const record of records.values()) {
+    const pending = record.pending;
+    if (!pending) continue;
+    wakes.push({ memberId: record.memberId, sessionRef: record.sessionRef, dueAt: pending.dueAt,
+      goalIds: pending.goalIds,
+      ...(pending.adapterId ? { adapterId: pending.adapterId } : {}),
+      ...(pending.registrationVersion !== undefined ? { registrationVersion: pending.registrationVersion } : {}) });
+  }
+  return wakes;
+}
 
 export const applicableGoals = (goals: readonly GoalView[]) =>
   goals.filter(g => (APPLICABLE_STATUSES as readonly string[]).includes(g.status));
@@ -151,17 +171,21 @@ export function tick(input: TickInput): TickResult {
       continue;
     }
 
+    const dueAt = prior.nextDueAt;
+    const goalIds = goals.slice(0, 20).map(g => g.id);
     next = {
       ...next, pendingMerged: false, lastCheckAt: input.now,
       nextDueAt: input.now + intervalMs, checks: next.checks + 1, state: 'waiting',
+      pending: { dueAt, goalIds,
+        ...(seat.adapterId ? { adapterId: seat.adapterId } : {}),
+        ...(seat.registrationVersion !== undefined ? { registrationVersion: seat.registrationVersion } : {}) },
     };
     changed.push(next);
-    wake.push({
-      memberId: seat.memberId, sessionRef: seat.sessionRef, dueAt: prior.nextDueAt,
-      goalIds: goals.slice(0, 20).map(g => g.id),
+    // Returned for an immediate publish in this scan; the pending entry above makes
+    // the same due recoverable if the process dies before publishing.
+    wake.push({ memberId: seat.memberId, sessionRef: seat.sessionRef, dueAt, goalIds,
       ...(seat.adapterId ? { adapterId: seat.adapterId } : {}),
-      ...(seat.registrationVersion !== undefined ? { registrationVersion: seat.registrationVersion } : {}),
-    });
+      ...(seat.registrationVersion !== undefined ? { registrationVersion: seat.registrationVersion } : {}) });
   }
 
   // One record per seat: callers persist this list directly, so a baseline push

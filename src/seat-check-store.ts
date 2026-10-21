@@ -25,6 +25,17 @@ export class SeatCheckStore {
     return [...records];
   }
 
+  /**
+   * Clear the pending outbox entry only after the corresponding wakeup published.
+   * A seat whose pending entry no longer matches `dueAt` is left alone.
+   */
+  confirmPending(wake: { memberId: string; sessionRef: string; dueAt: number }) {
+    const key = seatKey(wake);
+    const current = this.list().get(key);
+    if (!current?.pending || current.pending.dueAt !== wake.dueAt) return;
+    this.save([{ ...current, pending: undefined }]);
+  }
+
   /** Drop one seat, e.g. after a session is retired so it never resumes silently. */
   remove(seat: Pick<SeatRecord, 'memberId' | 'sessionRef'>) {
     this.db.prepare('DELETE FROM seat_checks WHERE seatKey=?').run(seatKey(seat));
