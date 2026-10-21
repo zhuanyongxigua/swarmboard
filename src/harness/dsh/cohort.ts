@@ -35,7 +35,7 @@ interface Attempt {
   state: 'intent' | 'confirmed';
   receipt?: DshLaunchRecord;
 }
-interface SeatState { key: string; sessionRef: string; attempts: Attempt[]; preflightBlocked?: boolean }
+interface SeatState { key: string; sessionRef: string; attempts: Attempt[]; preflightBlocked?: boolean; preflightError?: string }
 interface State {
   schema: 'swarmboard-dsh-cohort/v1';
   cohortKey: string;
@@ -50,12 +50,16 @@ export interface DshCohortStatus {
   seats: Array<DshCohortSeat & {
     phase: 'planned' | 'preflight-blocked' | 'reconcile-required' | 'launched';
     nextStep: string;
+    errorCode: string | null;
     ready: false;
     consumed: false;
   }>;
 }
 
 function fail(code: string): never { throw new Error(code); }
+const preflightErrors = new Set(['DSH_LAUNCH_AUTHORITY_REQUIRED', 'DSH_LAUNCH_WORKSPACE_OUTSIDE_GRANT',
+  'DSH_LAUNCH_GOAL_INACTIVE', 'DSH_LAUNCH_MEMBER_CHANGED', 'DSH_LAUNCH_SERVER_PIN_CHANGED',
+  'DSH_LAUNCH_CONNECT_FAILED', 'DSH_LAUNCH_TOOL_REJECTED', 'DSH_LAUNCH_INVALID_TOOL_RESULT']);
 function canonical(value: unknown): string {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return JSON.stringify(value);
   if (typeof value === 'number' && Number.isFinite(value)) return JSON.stringify(value);
@@ -134,6 +138,7 @@ function status(request: DshCohortRequest, state: State | null, busy: boolean, b
       const complete = seat.attempts.length === DSH_COHORT_STAGES.length && !pending;
       return {
         ...context(seat), phase: pending ? 'reconcile-required' : complete ? 'launched' : blocked.has(seat.key) || seat.preflightBlocked ? 'preflight-blocked' : 'planned',
+        errorCode: seat.preflightError ?? null,
         nextStep: pending ? `Reconcile ${pending.stage} operation ${pending.operationId} with authoritative evidence; do not replay.`
           : complete ? 'Read actual bootstrap readiness, completion receipts, and contribution evidence separately.'
             : blocked.has(seat.key) || seat.preflightBlocked ? 'Restore current formal authority or correct configuration before continuing.' : `Continue ${DSH_COHORT_STAGES[seat.attempts.length]}.`,
@@ -173,8 +178,14 @@ export async function runDshCohort(input: DshCohortRequest, ports: DshCohortPort
       for (let step = seat.attempts.length; step < DSH_COHORT_STAGES.length; step++) {
         const stage = DSH_COHORT_STAGES[step];
         try { await ports.preflight(stage, context(seat)); }
-        catch { blocked.add(seat.key); seat.preflightBlocked = true; save(request, state); break; }
+        catch (error) {
+          blocked.add(seat.key); seat.preflightBlocked = true;
+          const code = error instanceof Error ? error.message : '';
+          seat.preflightError = preflightErrors.has(code) ? code : 'DSH_COHORT_PREFLIGHT_REJECTED';
+          save(request, state); break;
+        }
         delete seat.preflightBlocked;
+        delete seat.preflightError;
         const attempt: Attempt = { stage, operationId: randomUUID(), state: 'intent' };
         seat.attempts.push(attempt);
         save(request, state);

@@ -63,7 +63,7 @@ function fixture() {
   });
   const mcpConfig: DshLauncherChannels['memberMcpConfig'] = () => ({ transport: 'stdio', command: process.execPath, args: [], env: {}, cwd: root,
     serverName: 'swarmboard_worker', failOnStartupError: true, reconnect: { enabled: false } });
-  const channels: DshLauncherChannels = { openManagement: async () => client(),
+  const channels: DshLauncherChannels = { boardDatabasePath: config.boardDatabasePath, openManagement: async () => client(),
     openMember: async (id: string) => Object.assign(client(id), { mcpConfig: mcpConfig(id) }),
     memberMcpConfig: mcpConfig, async close() {} };
   const options = { config, channels, childEntry: pin(root + '/child.mjs').path,
@@ -102,6 +102,9 @@ test('actual production stage composition binds each real returned id and repeat
   const overlay = JSON.parse(fs.readFileSync(path.join(config.stateDirectory, 'seat-1/overlay.json'), 'utf8'));
   expect(overlay.find((row: { id: string }) => row.id === 'headless-runner').disabled).toBe(true);
   expect(overlay.at(-1).insert).toHaveLength(2);
+  const instructions = fs.readFileSync(path.join(config.workspaceRoot, 'seat-1/AGENTS.md'), 'utf8');
+  expect(instructions).toContain('"memberId":"member-1"');
+  expect(instructions).toContain(result.seats[0].sessionRef);
   expect(result.seats.every(seat => !seat.ready && !seat.consumed)).toBe(true);
   await operator.close();
 });

@@ -23,7 +23,7 @@ export function summarizeDshCohort(status: DshCohortStatus, stateDirectory: stri
         } catch { child = { phase: 'unknown', startupReady: false }; }
       }
       return { key: seat.key, memberId: seat.receipts.admit?.id ?? null, sessionRef: seat.sessionRef || null,
-        operatorPhase: seat.phase, nextStep: ['failed', 'unknown'].includes(child.phase)
+        operatorPhase: seat.phase, errorCode: seat.errorCode, nextStep: ['failed', 'unknown'].includes(child.phase)
           ? 'Reconcile the retained child state, lifecycle and delivery journals; do not relaunch or clear ownership.' : seat.nextStep,
         sessionPrepared: !!seat.receipts.session, bound: !!seat.receipts.bind, registered: !!seat.receipts.register,
         spawnedPid: seat.receipts.launch?.pid ?? null, startupReady: child.startupReady,

@@ -5,11 +5,11 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { spawn, type SpawnOptions, type ChildProcess } from 'node:child_process';
-import { workerProtocol } from '../../worker-prompt.js';
 import { createDshInstructionBoundary } from './instructions.js';
 import { createDshLauncherChannels, type DshLauncherChannels, type DshLauncherToolClient } from './launcher-channels.js';
 import { prepareDshSession, type DshPreparedSession } from './launch-session.js';
 import { dshChildConfigSchema } from './launch-child.js';
+import { dshLaunchProtocol } from './launch-instructions.js';
 import { assertDshLaunchAuthority, parseDshLaunchConfig, type DshLaunchConfig } from './cohort-config.js';
 import { inspectDshCohort, runDshCohort, type DshCohortRequest, type DshCohortSeat, type DshCohortStage, type DshLaunchRecord } from './cohort.js';
 
@@ -156,9 +156,10 @@ export function createDshCohortOperator(input: DshCohortOperatorOptions) {
       return value as DshLaunchRecord;
     }
     if (stage === 'instructions') {
-      const connection = await member(seat), protocolText = workerProtocol();
+      const connection = await member(seat), protocol = dshLaunchProtocol({ memberId: admitted(seat).id,
+        sessionRef: seat.sessionRef, cwd: dirs.cwd, poolId: config.poolId, taskIds: config.taskIds });
       const boundary = createDshInstructionBoundary({ directory: dirs.runtime, workspace: dirs.cwd, sessionCwd: prepared(seat).cwd,
-        protocolText, protocolDigest: digest(protocolText), ensureOpen() {},
+        protocolText: protocol.text, protocolDigest: protocol.digest, ensureOpen() {},
         readPreferences: async () => await connection.call('preferences_read') as unknown as { version: number; text: string },
         readUserPrompt: async () => await connection.call('user_prompt_read') as unknown as { version: number; text: string } });
       const result = await boundary.prepare();
