@@ -142,4 +142,41 @@ describe('driveOnce', () => {
     expect(result.skipped).toEqual([intentKey(check())]);
     expect(journal.size).toBe(0);
   });
+
+  it('never widens a receipt retry to entries merged after the submission', async () => {
+    const journal = new Map<string, any>();
+    const echoes: number[][] = [];
+    let attempts = 0;
+    let listed = { ...check(), delivery: { sequence: 7, entryIds: [1, 2] } };
+    const result = await driveOnce({
+      pending: {
+        list: async () => [listed],
+        confirm: async (delivery: { sequence: number; entryIds: readonly number[] }) => {
+          attempts += 1; echoes.push([...delivery.entryIds]);
+          if (attempts === 1) throw new Error('STALE_DELIVERY_VIEW');
+        },
+        release: async () => {},
+      },
+      session: {
+        isCurrent: async () => true, isBusy: async () => false,
+        submit: async () => ({ status: 'completed' as const, turnId: 't1' }),
+        settlement: async () => ({ settled: true as const }),
+      },
+      journal: {
+        get: async (key: string) => journal.get(key),
+        put: async (intent: any) => { journal.set(intent.key, intent); },
+        del: async (key: string) => { journal.delete(key); },
+      },
+    });
+    expect(result.receiptPending).toEqual([intentKey(check())]);
+    listed = { ...check(), delivery: { sequence: 7, entryIds: [1, 2, 99] } };
+    const retried = await driveOnce({
+      pending: { list: async () => [listed], confirm: async (delivery: { entryIds: readonly number[] }) => { echoes.push([...delivery.entryIds]); }, release: async () => {} },
+      session: { isCurrent: async () => true, isBusy: async () => false, submit: async () => ({ status: 'completed' as const, turnId: 't1' }), settlement: async () => ({ settled: true as const }) },
+      journal: { get: async (key: string) => journal.get(key), put: async (intent: any) => { journal.set(intent.key, intent); }, del: async (key: string) => { journal.delete(key); } },
+    });
+    expect(echoes[0]).toEqual([1, 2]);
+    expect(echoes[1]).toEqual([1, 2]);
+    expect(retried.receiptsConfirmed).toEqual([intentKey(check())]);
+  });
 });

@@ -135,9 +135,13 @@ export async function driveOnce(
     // A delivery whose authoritative completion was seen but whose receipt failed: retry
     // ONLY the receipt (idempotent, delivery-scoped) and never run the model again.
     if (intent?.state === 'completedUnacked' || intent?.state === 'acceptedUnacked') {
-      if (!check.delivery) { result.receiptPending.push(key); continue; }
+      // The receipt retry must echo the delivery that was actually submitted. Re-reading
+      // the pending list can hand us a batch enlarged by a later merge; settling that
+      // would acknowledge entries no model turn ever consumed (p2 7144/7145).
+      const original = intent.check;
+      if (!original.delivery) { result.receiptPending.push(key); continue; }
       try {
-        await ports.pending.confirm(check.delivery, check);
+        await ports.pending.confirm(original.delivery, original);
         await ports.journal.del(key);
         result.receiptsConfirmed.push(key);
       } catch {
@@ -160,13 +164,14 @@ export async function driveOnce(
         result.awaitingCompletion.push(key);
         continue;
       }
-      if (!check.delivery) { result.receiptPending.push(key); continue; }
+      const submitted = intent.check;
+      if (!submitted.delivery) { result.receiptPending.push(key); continue; }
       try {
-        await ports.pending.confirm(check.delivery, check);
+        await ports.pending.confirm(submitted.delivery, submitted);
         await ports.journal.del(key);
         result.receiptsConfirmed.push(key);
       } catch {
-        await ports.journal.put({ key, state: 'completedUnacked', check, detail: intent.detail });
+        await ports.journal.put({ key, state: 'completedUnacked', check: submitted, detail: intent.detail });
         result.receiptPending.push(key);
       }
       continue;
