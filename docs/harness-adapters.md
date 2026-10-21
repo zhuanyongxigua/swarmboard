@@ -178,6 +178,14 @@ DSH 的入口导出指令与生命周期边界，供已经授权的宿主显式 
 
 `test/unit/dsh-lifecycle.test.ts` 使用合成 registry/journal 验证身份、恢复、并发及异常围栏，不执行真实模型，不证明四席迁移、官方事件消费、进程启动或耐久宿主组合已经完成。指令更新和通知驱动分别沿既有模块接线，不能把本模块单测称为完整 DSH 适配验收。Zcode 保持暂停，本模块不包含其启动路径。
 
+### DSH 官方 SDK 组合层
+
+`createDshSdkFacade({ sdk, sdkSessionId, createOptions, resumeOptions })` 将受信宿主持有的官方 `ctx.agents` 组合为上述 `DshRegistryPort`。宿主同时传入官方 `SessionId` 构造函数，保持其 branded 类型；组合层核对转换后字符串与原身份完全一致，不能借转换替换会话。`sdk.get` 返回原 agent；`create/resume` 返回的完整 `AgentHandle` 先由组合层保留，再把 `handle.agent` 交给生命周期验证。`ownedHandles()` 返回只读快照，供原宿主保留销毁能力和对账；即使生命周期因身份冲突拒绝绑定，也不丢弃已返回的 handle，更不自动 dispose。借用 attach 的 agent 不伪造为本组合层拥有的 handle。
+
+两份 options 必须显式传入，模型、权限、setup 和 signal 等 SDK 配置保持调用方选择；模块不提供个人策略默认值。会话身份与创建 metadata 由生命周期独占，options 中出现 `sessionId`、`resumeSessionId` 或 `meta` 会在调用 SDK 前被拒绝。配置在组合时浅快照，受信 setup 等对象仍由宿主负责；这些接口不是不可信任务文本的执行入口。官方 SDK 自身类型、安装和当前上下文由宿主核对，不从个人全局路径 import 或复制依赖。
+
+组合时不调用 SDK；只有显式 `lifecycle.connect(mode)` 才可能 create/resume。每个 SDK 宿主共享同一 facade，并在连接前取得其既有跨进程单写租约、注入耐久 journal。pause/detach 不销毁 handle，安全退出须由原宿主在回合结算与账本对账后处理。`test/unit/dsh-sdk-facade.test.ts` 用合成官方返回形状与真实生命周期联接验证配置、所有权及异常不重试；通知回合驱动、跨进程租约实现和真实四席迁移仍须单独交付，不能用这些合成测试代替。
+
 | 证据 | 位置 | 证明/不证明 |
 | --- | --- | --- |
 | 共享契约套件 | `test/harness/adapter-contract.ts`（echo 于 `test/unit/echo-backend.test.ts`，codex 于 `test/unit/codex-adapter-contract.test.ts`） | 两后端满足同一契约：稳定身份、回执、重启核查、unknown、uncertain、能力一致性；不证明真实模型行为 |
