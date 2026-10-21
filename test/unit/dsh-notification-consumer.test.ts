@@ -393,6 +393,23 @@ describe('delivery boundary regressions (PR review)', () => {
     expect(result.actions[0]?.action).toBe('prompted');
   });
 
+  it('rejects seat ids that would collide in the ledger key', async () => {
+    const dir = tempDir();
+    const colliding = [
+      { ...seat, memberId: 'a|b', sessionRef: 'c' },
+      { ...seat, memberId: 'a', sessionRef: 'b|c' },
+      { ...seat, adapterId: '' },
+    ];
+    for (const candidate of colliding) {
+      await expect(startNotificationConsumer({
+        config: { statePath: join(dir, 'state.json'), seats: [candidate] },
+        board: boardFor(),
+        transport: transportFor({ prompts: [] }),
+        once: true,
+      })).rejects.toThrow('CONSUMER_SEAT_INVALID');
+    }
+  });
+
   it('releases the writer lock at most once and never a newer writer lock', () => {
     const dir = tempDir();
     const lockPath = join(dir, 'state.json.lock');
