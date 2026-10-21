@@ -35,6 +35,7 @@ export interface DshChildPorts extends DshNotificationPortOptions {
 export type DshChildContext = DshSdkPluginContext<string, string, DshSdkSessionAgent<string>> & DshLaunchPermissionContext & {
   get(name: string): { await(): Promise<void> } | undefined;
   provide(name: string, value: unknown): unknown;
+  sessionPersistence: { root: string; locate(meta: { id: string; cwd: string }): { path: string } };
 };
 const hash = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
 const ensure = (value: unknown, code: string): void => { if (!value) throw new Error(code); };
@@ -167,6 +168,10 @@ export function createDshLaunchChild(dependencies: DshChildDependencies) {
             const receipt = JSON.parse(pinned(config.sessionReceipt).toString('utf8')) as DshPreparedSession;
             ensure(receipt.sessionRef === config.identity.sessionRef && receipt.cwd === config.identity.cwd
               && receipt.nativeRoot === config.persistenceRoot && within(config.persistenceRoot, receipt.nativePath), 'DSH_CHILD_SESSION_PROVENANCE_REQUIRED');
+            directory(ctx.sessionPersistence.root);
+            ensure(ctx.sessionPersistence.root === config.persistenceRoot
+              && ctx.sessionPersistence.locate({ id: sdk.SessionId(config.identity.sessionRef), cwd: config.identity.cwd }).path === receipt.nativePath,
+            'DSH_CHILD_ACTUAL_PERSISTENCE_CONFLICT');
             pinned({ path: receipt.nativePath, sha256: receipt.nativeSha256 });
           }, installModelSelection: sdk.installModelSelection,
           sdkSessionId: sdk.SessionId, messageId: sdk.MessageId,
