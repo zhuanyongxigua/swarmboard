@@ -16,7 +16,8 @@ function fixture() {
   execFileSync('git', ['init', dir], { stdio: 'ignore' }); execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://gitlab.example.invalid/group/project.git']);
   let now = 1000, status = 'running'; const reader = vi.fn(async () => ({ status, sha }));
   const turns: { id: string; prompt: string; thread: string }[] = [];
-  const make = () => new EventRuntime(board, { notificationBatchMs: 0, databasePath: path, serverEntry: 'unused', now: () => now, pipelineReader: reader, adapter: w => ({ open: async worker => worker.threadId ?? 'thread-' + worker.id, run: async (thread, prompt) => { turns.push({ id: w.id, prompt, thread }); }, close: async () => {} }) });
+  // This suite asserts the legacy IDLE_RECOVERY/IDLE_ATTENTION contract.
+  const make = () => new EventRuntime(board, { notificationBatchMs: 0, sessionCheckMs: 0, databasePath: path, serverEntry: 'unused', now: () => now, pipelineReader: reader, adapter: w => ({ open: async worker => worker.threadId ?? 'thread-' + worker.id, run: async (thread, prompt) => { turns.push({ id: w.id, prompt, thread }); }, close: async () => {} }) });
   let runtime = make(); runtime.configurePool({ workspacePath: dir }); const goal = board.createTask({ title: 'CI-gated human goal' });
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }), () => board.close(), () => runtime.close());
   const settle = async () => { await runtime.scan(); await vi.waitFor(() => expect(runtime.workers.list().every(w => w.status === 'idle')).toBe(true)); };

@@ -13,7 +13,8 @@ function harness(dir: string) {
   const store = new Store(join(dir, 'board.sqlite'));
   const runs: { worker: string; prompt: string }[] = [];
   const runtime = new EventRuntime(store, { databasePath: join(dir, 'board.sqlite'), serverEntry: 'unused',
-    notificationBatchMs: 0, debounceMs: 5, idleMs: 80,
+    // This incident suite covers the explicitly retained legacy idle watchdog.
+    notificationBatchMs: 0, debounceMs: 5, idleMs: 80, sessionCheckMs: 0,
     adapter: worker => ({ open: async () => 'test-thread', run: async (_threadId: string, prompt: string) => { runs.push({ worker: worker.id, prompt }); }, close: async () => {} }) });
   const goal = store.createTask({ title: 'Liveness recovery goal' });
   const pool = runtime.configurePool({ workspacePath: dir, size: 3 });

@@ -4,6 +4,16 @@
 
 Swarmboard 的协作内核（共享目标/上下文、事件投递、稳定身份、持久检查点、生命周期、容量、空闲恢复、执行授权）不依赖任何具体 harness。会话创建/续接、回合执行、状态核查、审批信号等宿主差异全部放在适配层：内核只面向 `src/harness/contract.ts` 定义的通用契约，正式运行入口通过 `src/harness/registry.ts` 这一唯一装配缝选择后端。
 
+## 可复用适配器与个人配置边界
+
+可复用的具体 harness 适配器可以作为独立模块随仓库交付，包括官方指令加载、start/attach/resume、通知接线、忙时排队、状态／能力映射、暂停和安全退出。核心调度、任务和共享事件只依赖通用契约，不导入具体厂商 CLI/SDK 或按厂商名分支；具体模块依赖契约，再由受信配置的注册／组合入口显式启用。第三方通过同一契约注册，任务正文和外部文本不能隐式加载模块。不得为此另起一套逐席调度链。
+
+个人凭据、认证状态、真实身份/session、账本与运行目录、人数启停、模型和权限选择、任务授权及私有输入仍在仓库外配置。只迁移去个人化的最小代码、合成示例和测试，保留原作者及依赖许可；不能整体复制临时个人目录或把历史人数／模型／权限写成默认值。旧接入在安全回合边界迁移，保留健康原 session、历史和 unknown，确保只有一个宿主和一套逐会话计时在工作。
+
+通用协作正文由 `src/worker-prompt.ts` 的 `workerProtocol()` 唯一生成，原生 `workerPrompt()` 直接复用；受信适配组合把同一文本及其内容摘要传给适配器的正式指令接口。该正文不包含个人提示词、执行 grant、身份或事件负载，这些仍经各自正式入口读取。适配器不要再维护手工复制的旧 `protocol.txt`；否则摘要只能证明旧字节未变，不能证明它符合当前协议。更新既有基线时保留来源、版本与陈旧写入围栏，在安全回合边界迁移，不把未知或外来文件当作可覆盖的旧版本。
+
+指令应用必须报告真实的官方通道和角色：Codex 的 developer 注入不代表其他后端也支持。若具体 harness 的正式扩展以 user-role 指令消息提供上下文，应明确其能力、更新／清空语义和限制，不冒充 system/developer，也不以普通聊天静默替代声明的会话指令能力。缺失能力、审批拒绝或未核实投递要显式报告，不能自动批准、kill 或重放。实现、合成契约测试、打包、安装和真实原会话消费分别举证；下方旧能力矩阵不自动升级为新增模块已经支持的证据。
+
 ## 通用会话契约
 
 `src/harness/contract.ts`：
@@ -156,6 +166,27 @@ class DshSession implements SessionAdapter {
 - **版本漂移**：`/api` 面跨 rc 版本有增删；无版本号可用（`host.describe.version` 是占位常量），必须实现运行时探测。
 
 ## 测试与证据边界
+
+### 独立模块的可移植交付
+
+源码中的独立模块必须显式提供 `src/harness/<module>/index.ts` 公共入口；桌面构建将这些受信仓库入口分别打包为 `server/harness/<module>/index.mjs`，不把它们导入主服务。辅助目录没有入口则不导出。公共入口导入时不得注册、启动或执行真实会话，具体启用由受信宿主显式调用。构建拒绝模块中的绝对路径 import，以及 realpath 解析后逃出源码根的输入；宿主的个人 SDK 和配置在运行组合时传入，不以本机路径打进便携包。模块自己的依赖许可与主服务一起进入 `THIRD_PARTY_NOTICES.txt`；个人 SDK 安装、认证、运行目录和配置不随包复制。
+
+DSH 的入口导出指令与生命周期边界，供已经授权的宿主显式 import 后组合。导出不等于注册、启用或启动，不提供任务文本加载本地模块的接口，也不恢复暂停的 harness。第三方可按相同目录入口约定交付独立模块，无需在构建脚本增加厂商分支。源码构建仍通过 TypeScript 输出对应模块；桌面 ZIP 的独立 bundle 可从与源码无关的目录加载。
+
+`test/unit/desktop-harness-modules.test.ts` 验证任意名合成模块打包后脱离源码加载、不执行构建期模块代码；`test/mcp/desktop-harness.test.ts` 对实际 ZIP 解包后加载 DSH 导出，并确认主服务没有嵌入这些实现。上述检查不连接官方宿主或模型，不能当作真实启用与迁移验收。
+
+### DSH 会话生命周期边界模块
+
+`src/harness/dsh/lifecycle.ts` 提供独立的 `DshLifecycle`，由受信组合入口注入 registry 和耐久 journal。它是具体适配层的一个切片，尚不是完整的 `HarnessBackend`，不由核心默认加载。官方接口依据为本机公开安装的 `@deepseek-ai/dsh-agent@0.1.1-rc.2` 的 `AgentRegistry.get/create/resume`、`AgentHandle`，以及同版本 `dsh-session` 的 `Session.header`。实现为原创代码，不复制 SDK 源码，也不添加全局安装路径或个人运行配置依赖。
+
+- `connect('start')` 仅显式创建指定 session，绝不启动宿主进程；已有同 id 会话时拒绝创建。`connect('attach')` 只读取已有 agent，缺失即报错，不降级创建。`connect('resume')` 对存量会话调用官方 resume；已活跃时直接核验并复用。
+- 每次绑定同时核对 agent id、session id、持久 header.cwd 和当前 registry 中的对象。cwd 必须由宿主传入绝对路径，不能从任务正文取得。不会因恢复失败生成替代身份。
+- 宿主 facade 调用官方 create/resume 后保留返回的 `AgentHandle`，只将 `handle.agent` 交给本模块；模型、权限、setup、指令边界和 disposer 均归宿主明确组合。模块不发送消息、不创建 timer、不作审批、不清通知 unknown。
+- 变更前先提交独立的 lifecycle intent。journal 的同步 write 必须在返回前耐久提交；变更异常后仅允许 attach 核查原 registry，不能再次 create/resume。核实原 agent 存在只证明生命周期绑定，不能当作通知消费或某次模型回合完成。宿主保持原有跨进程单写租约；模块内的同 registry/session 单飞保护不能替代它。
+- `pause()` 只停止本模块的新连接，不打断在途工作：暂停前已受理的异步连接允许完成绑定及生命周期对账，返回 agent 后状态仍为 paused；绑定返回不授权发送消息，宿主在提交前仍须核正式启用状态。正式暂停／撤销还需宿主耐久禁用通知和逐席检查。`detach()` 在忙碌或连接未决时拒绝，空闲时只丢弃模块引用。官方 `AgentHandle.dispose()` 会停止 agent 并移除活跃 session，因此模块不会把 dispose 冒作暂停或分离，也没有实现宿主进程安全关闭。
+- `status()` 在 registry 替换或移除原对象后返回 disconnected；若同一对象的身份／cwd 等元数据失去一致性则抛出 `DSH_SESSION_CONFLICT`，调用方按冲突处理，不能默认为可继续发送。
+
+`test/unit/dsh-lifecycle.test.ts` 使用合成 registry/journal 验证身份、恢复、并发及异常围栏，不执行真实模型，不证明四席迁移、官方事件消费、进程启动或耐久宿主组合已经完成。指令更新和通知驱动分别沿既有模块接线，不能把本模块单测称为完整 DSH 适配验收。Zcode 保持暂停，本模块不包含其启动路径。
 
 | 证据 | 位置 | 证明/不证明 |
 | --- | --- | --- |
