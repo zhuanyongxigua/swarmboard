@@ -14,7 +14,10 @@ async function start(dbPath: string) {
 import { startServer } from './src/app.ts';
 const server = await startServer({ port: 0, dbPath: process.argv[1] });
 console.log(JSON.stringify({ url: server.url }));
-process.once('SIGTERM', () => { void server.close().then(() => process.exit(0)); });`;
+// Force-close sockets on SIGTERM: on a loaded CI runner an in-flight request can
+// keep server.close() waiting past the stop() SIGKILL window, which turned a
+// clean shutdown into a signal exit (run 39626578309).
+process.once('SIGTERM', () => { server.server.closeAllConnections(); void server.close().then(() => process.exit(0)); });`;
   const env = Object.fromEntries(['HOME', 'PATH', 'TMPDIR', 'LANG'].filter(k => process.env[k]).map(k => [k, process.env[k]! ]));
   const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '--eval', source, dbPath], { cwd: process.cwd(), env, stdio: ['ignore', 'pipe', 'pipe'] });
   let stderr = '', stdout = '';
@@ -34,8 +37,11 @@ async function stop(child: ChildProcess) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const ended = once(child, 'exit');
   child.kill('SIGTERM');
-  const fallback = setTimeout(() => child.kill('SIGKILL'), 5000);
-  try { expect((await ended)[0]).toBe(0); } finally { clearTimeout(fallback); }
+  const fallback = setTimeout(() => child.kill('SIGKILL'), 10000);
+  try {
+    const [code, signal] = await ended as [number | null, NodeJS.Signals | null];
+    expect(code, `fixture exited by ${signal ?? 'unknown signal'} instead of a clean shutdown`).toBe(0);
+  } finally { clearTimeout(fallback); }
 }
 
 test('real preferences editor persists across server processes, preserves conflicts and clears with a newer empty version', async ({ page, request }, testInfo) => {
