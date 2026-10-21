@@ -175,7 +175,8 @@ class DshSession implements SessionAdapter {
 - 每次绑定同时核对 agent id、session id、持久 header.cwd 和当前 registry 中的对象。cwd 必须由宿主传入绝对路径，不能从任务正文取得。不会因恢复失败生成替代身份。
 - 宿主 facade 调用官方 create/resume 后保留返回的 `AgentHandle`，只将 `handle.agent` 交给本模块；模型、权限、setup、指令边界和 disposer 均归宿主明确组合。模块不发送消息、不创建 timer、不作审批、不清通知 unknown。
 - 变更前先提交独立的 lifecycle intent。journal 的同步 write 必须在返回前耐久提交；变更异常后仅允许 attach 核查原 registry，不能再次 create/resume。核实原 agent 存在只证明生命周期绑定，不能当作通知消费或某次模型回合完成。宿主保持原有跨进程单写租约；模块内的同 registry/session 单飞保护不能替代它。
-- `pause()` 只停止本模块的新连接，不打断在途工作；正式暂停／撤销还需宿主耐久禁用通知和逐席检查。`detach()` 在忙碌或连接未决时拒绝，空闲时只丢弃模块引用。官方 `AgentHandle.dispose()` 会停止 agent 并移除活跃 session，因此模块不会把 dispose 冒作暂停或分离，也没有实现宿主进程安全关闭。
+- `pause()` 只停止本模块的新连接，不打断在途工作：暂停前已受理的异步连接允许完成绑定及生命周期对账，返回 agent 后状态仍为 paused；绑定返回不授权发送消息，宿主在提交前仍须核正式启用状态。正式暂停／撤销还需宿主耐久禁用通知和逐席检查。`detach()` 在忙碌或连接未决时拒绝，空闲时只丢弃模块引用。官方 `AgentHandle.dispose()` 会停止 agent 并移除活跃 session，因此模块不会把 dispose 冒作暂停或分离，也没有实现宿主进程安全关闭。
+- `status()` 在 registry 替换或移除原对象后返回 disconnected；若同一对象的身份／cwd 等元数据失去一致性则抛出 `DSH_SESSION_CONFLICT`，调用方按冲突处理，不能默认为可继续发送。
 
 `test/unit/dsh-lifecycle.test.ts` 使用合成 registry/journal 验证身份、恢复、并发及异常围栏，不执行真实模型，不证明四席迁移、官方事件消费、进程启动或耐久宿主组合已经完成。指令更新和通知驱动分别沿既有模块接线，不能把本模块单测称为完整 DSH 适配验收。Zcode 保持暂停，本模块不包含其启动路径。
 
