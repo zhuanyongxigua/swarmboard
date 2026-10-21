@@ -30,7 +30,12 @@ interface ConsumerConfig {
 }
 ```
 
-## 不变量
+## 端口
+
+- `TransportPort`：随仓库交付官方实现 `createOfficialWebTransport({fetchImpl?, clientTimeZone?})`，只封装官方本地 `session.list` / `session.prompt`；厂商协议留在 DSH 适配模块，核心不感知。
+- `BoardPort`：由宿主用**既有已绑定的 MCP 通知工具**实现（`notification_pending` / `binding_read` / `context_read` 与任务状态），不要把临时 SQLite 直读当作公开适配器契约；`intentCurrent` 需按 `NotificationService.currentIntent()` 的语义给出（含 pool/organization scope 与目标状态），否则会出现“成员可见但不被唤醒”或“已失效仍唤醒”的偏差。
+
+
 
 1. **先落盘后发送**：`{sequence, entryIds, rpcId, adapterId, registrationVersion, sessionRef, asOfSeq, nextSeq}` 在调用 `session.prompt` 之前持久化；`rpcId` 是完成投影唯一可关联本次投递的凭据（不是幂等键）。
 2. **未知不重放**：prompt 抛错或结果不明只记 `unknown`，下次 pass 只显示 `awaiting-member`，绝不自动重发。

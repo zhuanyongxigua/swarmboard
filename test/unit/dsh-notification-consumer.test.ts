@@ -12,6 +12,7 @@ import {
   type TransportPort,
   type UnsettledDelivery,
   type WakerStateShape,
+  createOfficialWebTransport,
 } from '../../src/harness/dsh/notification-consumer.js';
 
 const seat: SeatConfig = { adapterId: 'synthetic-adapter', memberId: 'member-1', sessionRef: 'session-1', port: 1 };
@@ -191,5 +192,39 @@ describe('dsh notification consumer', () => {
     });
     expect(transport.prompts).toHaveLength(0);
     expect(result.actions[0]?.action).toBe('manual-writer-active');
+  });
+});
+
+describe('official web transport port', () => {
+  it('drives session.list/session.prompt through the official local API shape', async () => {
+    const calls: { url: string; body: string }[] = [];
+    const fakeFetch: typeof fetch = async (url, init) => {
+      calls.push({ url: String(url), body: String(init?.body ?? '') });
+      const isList = String(url).endsWith('/api/session.list');
+      return new Response(JSON.stringify({
+        result: isList
+          ? { ok: true, value: { items: [{ sessionId: seat.sessionRef, running: false, projections: { asOfSeq: 40 } }] } }
+          : { ok: true, value: { accepted: true } },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    const transport = createOfficialWebTransport({ fetchImpl: fakeFetch });
+    const view = await transport.describe(seat);
+    expect(view).toEqual({ found: true, running: false, asOfSeq: 40 });
+    const outcome = await transport.prompt(seat, { sequence: 1, text: 'hello', rpcId: 'rpc-x' });
+    expect(outcome).toEqual({ accepted: true, rpcId: 'rpc-x' });
+    expect(calls[0]?.url).toBe('http://127.0.0.1:1/api/session.list');
+    const promptBody = JSON.parse(calls[1]?.body ?? '{}') as { method: string; rpcId: string; payload: { sessionId: string; mode: string; content: Array<{ text: string }> } };
+    expect(promptBody.method).toBe('session.prompt');
+    expect(promptBody.rpcId).toBe('rpc-x');
+    expect(promptBody.payload.sessionId).toBe(seat.sessionRef);
+    expect(promptBody.payload.mode).toBe('queue');
+    expect(promptBody.payload.content[0]?.text).toBe('hello');
+  });
+
+  it('reports a missing original session and surfaces API rejection', async () => {
+    const emptyFetch: typeof fetch = async () => new Response(JSON.stringify({ result: { ok: true, value: { items: [] } } }), { status: 200 });
+    expect(await createOfficialWebTransport({ fetchImpl: emptyFetch }).describe(seat)).toEqual({ found: false, running: false, asOfSeq: null });
+    const rejectFetch: typeof fetch = async () => new Response(JSON.stringify({ result: { ok: false, error: { code: 'rejected' } } }), { status: 200 });
+    await expect(createOfficialWebTransport({ fetchImpl: rejectFetch }).describe(seat)).rejects.toThrow('official-web-api:rejected');
   });
 });

@@ -74,6 +74,57 @@ export interface BoardPort {
   entries(ids: readonly number[]): readonly EntryView[];
 }
 
+/**
+ * Official local DSH web transport. The adapter owns the vendor protocol; the
+ * core runtime never learns about `session.list` or `session.prompt`.
+ */
+export interface OfficialWebTransportOptions {
+  readonly fetchImpl?: typeof fetch;
+  readonly clientTimeZone?: string;
+}
+
+export function createOfficialWebTransport(options: OfficialWebTransportOptions = {}): TransportPort {
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const clientTimeZone = options.clientTimeZone ?? 'UTC';
+  const rpc = async (seat: SeatConfig, method: string, payload: Record<string, unknown>, rpcId: string): Promise<unknown> => {
+    const origin = `http://127.0.0.1:${seat.port}`;
+    const body = { type: 'client-request', rpcId, method, payload };
+    const response = await fetchImpl(`${origin}/api/${method}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: origin },
+      body: JSON.stringify(body),
+    });
+    const json = (await response.json()) as { result?: { ok?: boolean; value?: unknown; error?: { code?: string } } };
+    const result = json?.result;
+    if (!result?.ok) throw new Error(`official-web-api:${result?.error?.code ?? 'rejected'}`);
+    return result.value;
+  };
+  return {
+    async describe(seat) {
+      const value = (await rpc(seat, 'session.list', {}, randomUUID())) as { items?: Array<Record<string, unknown>> } | undefined;
+      const items = Array.isArray(value?.items) ? value.items : [];
+      const match = items.find((row) => row?.sessionId === seat.sessionRef);
+      if (!match) return { found: false, running: false, asOfSeq: null };
+      const projections = match.projections as { asOfSeq?: unknown } | undefined;
+      const asOfSeq = projections?.asOfSeq;
+      return {
+        found: true,
+        running: match.running === true,
+        asOfSeq: Number.isSafeInteger(asOfSeq) ? (asOfSeq as number) : null,
+      };
+    },
+    async prompt(seat, input) {
+      const value = (await rpc(seat, 'session.prompt', {
+        sessionId: seat.sessionRef,
+        mode: 'queue',
+        content: [{ type: 'text', text: input.text }],
+        clientTimeZone,
+      }, input.rpcId)) as { accepted?: unknown } | undefined;
+      return { accepted: value?.accepted === true, rpcId: input.rpcId };
+    },
+  };
+}
+
 export interface SessionView {
   readonly found: boolean;
   readonly running: boolean;
