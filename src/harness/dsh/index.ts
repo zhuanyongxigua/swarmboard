@@ -10,3 +10,4 @@ export * from './host-runner.js';
 export * from './sdk-plugin.js';
 export * from './notification-port.js';
 export * from './host-plugin.js';
+export * from './launcher-channels.js';
