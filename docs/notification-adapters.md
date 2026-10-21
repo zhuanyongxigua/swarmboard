@@ -96,3 +96,13 @@
 - 分页重复用 `dedupeEntries` 按 `id` 保序去重，重复投递不会变成多个模型回合。
 
 > **通知到达不等于执行或完成**：通道确认消费只证明消息被接手；是否有用贡献仍以该成员会话的新动作与产物证据为准。
+
+## 逐会话任务检查的定向协议
+
+逐会话调度发布 `MESSAGE`，使用 `runtime-` 身份、明确的 `recipientId` 和结构化 `detail.kind: SESSION_TASK_CHECK`。载荷包含 `memberId`、`sessionRef`、计划到期时间 `dueAt`、`goalIds`；外部通道还必须包含 `adapterId` 与 `registrationVersion`。原生检查不带外部通道标识，因此不会顺带广播到外部成员。该路由独立于历史 `IDLE_RECOVERY` 广播兼容路径；缺字段或无效载荷拒绝回退为普通定向消息。
+
+外部检查精确匹配适配器、注册代次、成员与 session，并在记录意图前重核启用状态、当前正式准入及声明任务范围。至少一个交集目标须仍为 `todo`、`in_progress` 或 `in_review`；`boardWide` 与 `recipientId` 不能单独扩大周期检查范围，`blocked` 与终态不作为检查目标。组织范围准入还须使用当前 worker/pool 快照验证。
+
+`notification_session_checks` 按 `(memberId, sessionRef, dueAt)` 持久防重；周期声明与意图写入同一事务，记录失败一起回滚，所以重复扫描、重复发布同周期条目或重开连接不会再次发起同周期意图。未知序列仍冻结，不延长、不删除、不自动重放。此层只记录意图，不证明模型执行；每席到期持久化、忙时合并与旧全局计时替换由调度器负责。
+
+周期意图额外保存 `sessionRef` 和 `registrationVersion`。读取 `notification_pending` 时再次核对当前 session、注册代次与适用目标，避免旧会话意图交给替换会话。失效意图与未知证据保留供对账，不因过滤就宣称已消费或已成功。普通事件与原回执协议保持原有语义。

@@ -10,7 +10,7 @@ import type { Store } from './store.js';
 import { collaboratorTaskIds, type CollaboratorStore } from './collaborators.js';
 import type { WorkerStore } from './worker-store.js';
 import { AppError } from './store.js';
-import type { NotificationAdapterRegistration } from './notification-adapters.js';
+import { readSessionTaskCheck, type NotificationAdapterRegistration } from './notification-adapters.js';
 import { NotificationAdapterStore } from './notification-adapter-store.js';
 
 export interface NotificationPendingItem {
@@ -73,11 +73,33 @@ export class NotificationService {
 
   /** Incremental read of the caller's own unsettled deliveries. */
   pending(collaboratorId: string, after = 0, limit = 50): NotificationPendingPage {
-    this.admitted(collaboratorId);
+    const admitted = this.admitted(collaboratorId);
     if (!Number.isSafeInteger(after) || after < 0) throw new AppError('VALIDATION_ERROR', 'Invalid cursor', 400);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new AppError('VALIDATION_ERROR', 'Invalid limit', 400);
     const mine = this.adapters.unsettled()
       .filter(item => item.intent.memberId === collaboratorId && item.intent.sequence > after)
+      // Historical/unknown evidence remains untouched, but replacement sessions
+      // and adapter generations must not consume checks issued to their predecessor.
+      .filter(item => item.intent.sessionRef === undefined || (item.intent.sessionRef === admitted.sessionRef
+        && this.adapters.list().some(adapter => adapter.id === item.intent.adapterId && adapter.enabled
+          && adapter.version === item.intent.registrationVersion
+          && adapter.members.some(member => member.memberId === admitted.id && member.sessionRef === admitted.sessionRef))))
+      .filter(item => {
+        if (item.intent.sessionRef === undefined) return true;
+        const ids = collaboratorTaskIds(admitted, this.workers);
+        const adapter = this.adapters.list().find(adapter => adapter.id === item.intent.adapterId);
+        const member = adapter?.members.find(member => member.memberId === admitted.id);
+        return item.intent.entryIds.some(id => {
+          const entry = this.board.readEntries({ after: id - 1, limit: 1 }).items[0];
+          if (entry?.id !== id) return false;
+          const check = readSessionTaskCheck(entry);
+          // Ordinary updates merged into the same current-session intent stay
+          // actionable; checks alone require a current admitted work target.
+          if (!check) return true;
+          return check.goalIds.some(goalId => (ids === undefined || ids.includes(goalId)) && member?.taskIds.includes(goalId)
+            && (() => { try { return ['todo', 'in_progress', 'in_review'].includes(this.board.readTask(goalId).status); } catch { return false; } })());
+        });
+      })
       .sort((a, b) => a.intent.sequence - b.intent.sequence);
     const page = mine.slice(0, limit);
     return {
