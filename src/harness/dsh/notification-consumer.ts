@@ -182,7 +182,21 @@ export interface WakerStateShape {
   seats: Record<string, SeatRecord | null>;
 }
 
-const seatKey = (seat: SeatConfig): string => `${seat.memberId}|${seat.sessionRef}`;
+// Records are written under an adapter-scoped, collision-free key so two channels
+// of the same member/session keep independent sequence records. A legacy
+// `member|session` record is still honoured when it belongs to the same adapter,
+// so an existing ledger keeps working without being rewritten; a seat whose ids
+// carry the separator cannot be named by a legacy key, so it never reads one.
+const ledgerKey = (seat: SeatConfig): string => JSON.stringify([seat.adapterId, seat.memberId, seat.sessionRef]);
+const legacySeatKey = (seat: SeatConfig): string | null =>
+  seat.memberId.includes('|') || seat.sessionRef.includes('|') ? null : `${seat.memberId}|${seat.sessionRef}`;
+const recordFor = (state: WakerStateShape, seat: SeatConfig): SeatRecord | null => {
+  const scoped = state.seats[ledgerKey(seat)];
+  if (scoped) return scoped;
+  const legacyKey = legacySeatKey(seat);
+  const legacy = legacyKey === null ? undefined : state.seats[legacyKey];
+  return legacy && legacy.adapterId === seat.adapterId ? legacy : null;
+};
 
 /** The prompt carries the product instruction that this delivery actually holds. */
 export function promptTextFor({ sequence, entries }: { readonly sequence: number; readonly entries: readonly EntryView[] }): string {
@@ -231,9 +245,13 @@ export async function runPass(input: {
   const textFor = input.promptText ?? promptTextFor;
   try {
     for (const seat of input.seats) {
-      const key = seatKey(seat);
-      if (!Object.prototype.hasOwnProperty.call(input.state.seats, key)) input.state.seats[key] = null;
-      const record = input.state.seats[key] ?? null;
+      if (!seat.adapterId) {
+        errors.push({ seat: `${seat.memberId}|${seat.sessionRef}`, step: 'seat', error: 'CONSUMER_SEAT_INVALID:adapterId-required' });
+        continue;
+      }
+      const key = ledgerKey(seat);
+      const record = recordFor(input.state, seat);
+      if (record === null && !Object.prototype.hasOwnProperty.call(input.state.seats, key)) input.state.seats[key] = null;
       let rows: readonly UnsettledDelivery[];
       try { rows = await input.board.unsettled(seat); } catch (error) {
         errors.push({ seat: key, step: 'board', error: String((error as Error)?.message ?? error) });
@@ -396,7 +414,11 @@ export async function runPass(input: {
         errors.push({ seat: key, step: 'host-authz', error: `host-authz:changed-during-context:${binding.registrationVersion}->${bindingFinal.ok ? bindingFinal.registrationVersion : bindingFinal.reason}` });
         continue;
       }
-      const scopeFinal = await input.board.intentCurrent(seat, target);
+      let scopeFinal: { ok: boolean; reason?: string };
+      try { scopeFinal = await input.board.intentCurrent(seat, target); } catch (error) {
+        errors.push({ seat: key, step: 'intent-scope', error: String((error as Error)?.message ?? error) });
+        continue;
+      }
       if (!scopeFinal.ok) {
         errors.push({ seat: key, step: 'intent-scope', error: `stale-scope:changed-during-context:${scopeFinal.reason ?? 'unknown'}` });
         continue;
@@ -477,8 +499,12 @@ export class WakerState {
       this.state = { schema: STATE_SCHEMA, seats: shape.seats };
     }
     for (const seat of seats) {
-      const key = seatKey(seat);
-      if (!Object.prototype.hasOwnProperty.call(this.state.seats, key)) this.state.seats[key] = null;
+      const key = ledgerKey(seat);
+      // Never shadow a legacy record for the same adapter: an untouched ledger
+      // must round-trip byte for byte.
+      if (recordFor(this.state, seat) === null && !Object.prototype.hasOwnProperty.call(this.state.seats, key)) {
+        this.state.seats[key] = null;
+      }
     }
   }
 
@@ -533,13 +559,10 @@ export async function startNotificationConsumer(options: {
   readonly once?: boolean;
 }): Promise<{ stop(): void | Promise<void>; first: PassResult }> {
   const now = options.now ?? (() => new Date().toISOString());
-  // The ledger key joins member id and session ref with "|", so a value carrying
-  // the separator (or an empty adapter id) could collide with another seat.
+  // The collision-free ledger key needs an adapter id; separator-bearing ids stay
+  // legal, they just cannot be addressed by a legacy `member|session` record.
   for (const seat of options.config.seats) {
-    const unsafeKey = (value: string): boolean => value.includes('|') || value.includes('\u0000');
-    if (!seat.adapterId || unsafeKey(seat.memberId) || unsafeKey(seat.sessionRef)) {
-      throw new Error('CONSUMER_SEAT_INVALID:adapterId is required and memberId/sessionRef must not contain "|" or NUL');
-    }
+    if (!seat.adapterId) throw new Error('CONSUMER_SEAT_INVALID:adapterId is required');
   }
   // Lock before loading the ledger: a second writer must never start from a stale
   // in-memory snapshot taken before the lock (review FAIL 8704 / 8882).

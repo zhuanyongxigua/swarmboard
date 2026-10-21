@@ -37,7 +37,7 @@ interface ConsumerConfig {
 
 
 1. **先落盘后发送**：`{sequence, entryIds, rpcId, adapterId, registrationVersion, sessionRef, asOfSeq, nextSeq}` 在调用 `session.prompt` 之前持久化；`rpcId` 是完成投影唯一可关联本次投递的凭据（不是幂等键）。落盘前还会**再读一次** binding、投递可见性与人工 writer 记录：context 读取是异步的，其间任何代次/范围/可见性变化都导致 0 发送。
-2. **未知不重放**：prompt 抛错或结果不明只记 `unknown`，下次 pass 只显示 `awaiting-member`，绝不自动重发。该抑制**只对同一 adapterId 生效**：重新注册到新 adapter 后，同 sequence 不会被旧通道记录压住。账本键为 `memberId|sessionRef`，启动时校验两者不含 `|`/NUL 且 adapterId 非空，避免键碰撞。
+2. **未知不重放**：prompt 抛错或结果不明只记 `unknown`，下次 pass 只显示 `awaiting-member`，绝不自动重发。该抑制**只对同一 adapterId 生效**：重新注册到新 adapter 后，同 sequence 不会被旧通道记录压住；两个 adapter 各自持有一条记录，切回旧 adapter 也不会再次发送（old→new→old 共 2 次发送，第三轮 `awaiting-member`）。账本键为 `JSON.stringify([adapterId, memberId, sessionRef])`（无碰撞、每通道独立记录）；旧版 `memberId|sessionRef` 记录仍会被读取，**仅当记录的 `adapterId` 与当前席位一致**，且读取不会改写旧账本；含 `|` 的 id 只是不再享有 legacy 记录回退，仍可正常用新键运行。
 3. **原会话唯一**：`session.list` 精确匹配 `sessionRef`；找不到即报错，绝不创建新会话；`running` 时跳过（忙时合并由产品负责）。
 4. **正式授权**：发送前读当前 binding（adapter enabled、member 与准入 session 相符、poolActive 与 pool enabled/state）与投递 intent 的三元组；`scope === 'organization'` 时取 `pool.taskIds`（空则不限），`selected` 时取准入 ∩ pool；检查批还须有可适用目标（镜像 `NotificationService.currentIntent()`，普通批恒放行）。
 5. **单写者**：进程内 single-flight；跨进程 `statePath.lock`（O_EXCL，陈旧锁只人工处理）；锁文件写入本写者 token，`release()` **幂等且只删自己 token 的锁**——重复 `stop()` 不会误删新写者的锁。`manualWriterStatePath` 未结算时跳过，并在 `describe` 与 context 读取之后各核一次（只收窄窗口，不声称跨 writer 互斥）。

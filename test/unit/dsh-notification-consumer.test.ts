@@ -53,6 +53,7 @@ function transportFor(state: { prompts: unknown[]; describe?: () => Promise<{ fo
   };
 }
 const emptyState = (): WakerStateShape => ({ schema: 1, seats: {} });
+const ledgerKeyOf = (seat: SeatConfig): string => JSON.stringify([seat.adapterId, seat.memberId, seat.sessionRef]);
 
 describe('dsh notification consumer', () => {
   it('writes a durable intent (rpcId + watermark) before prompting once', async () => {
@@ -66,7 +67,7 @@ describe('dsh notification consumer', () => {
       state,
       now,
       newRpcId: () => 'rpc-fixed',
-      persist: () => persisted.push(structuredClone(state.seats[`${seat.memberId}|${seat.sessionRef}`])),
+      persist: () => persisted.push(structuredClone(state.seats[ledgerKeyOf(seat)])),
     });
     expect(result.actions.map((action) => action.action)).toEqual(['prompted']);
     expect(transport.prompts).toHaveLength(1);
@@ -155,7 +156,7 @@ describe('dsh notification consumer', () => {
     const failing = { prompts: [] as unknown[], failPrompt: true };
     const rejected = await runPass({ seats: [seat], board: boardFor({ rows: [{ sequence: 2, entryIds: [5] }] }), transport: transportFor(failing), state, now, newRpcId: () => 'rpc-unknown' });
     expect(rejected.errors[0]?.step).toBe('session.prompt');
-    expect((state.seats[`${seat.memberId}|${seat.sessionRef}`] as { state: string; rpcId: string }).state).toBe('unknown');
+    expect((state.seats[ledgerKeyOf(seat)] as { state: string; rpcId: string }).state).toBe('unknown');
     const ok = { prompts: [] as unknown[] };
     const again = await runPass({ seats: [seat], board: boardFor({ rows: [{ sequence: 2, entryIds: [5] }] }), transport: transportFor(ok), state, now });
     expect(again.actions.map((action) => action.action)).toEqual(['awaiting-member']);
@@ -175,7 +176,7 @@ describe('dsh notification consumer', () => {
     expect(() => acquireWriterLock(lockPath)).toThrow('CONSUMER_WRITER_LOCK_HELD');
     lock.release();
     const persisted = new WakerState(join(dir, 'ok.json'), [seat]);
-    persisted.state.seats[`${seat.memberId}|${seat.sessionRef}`] = { sequence: 9, entryIds: [1], rpcId: 'r', adapterId: seat.adapterId, registrationVersion: 1, sessionRef: seat.sessionRef, asOfSeq: 1, nextSeq: 2, state: 'unknown' };
+    persisted.state.seats[ledgerKeyOf(seat)] = { sequence: 9, entryIds: [1], rpcId: 'r', adapterId: seat.adapterId, registrationVersion: 1, sessionRef: seat.sessionRef, asOfSeq: 1, nextSeq: 2, state: 'unknown' };
     persisted.save();
     expect(readFileSync(join(dir, 'ok.json'), 'utf8')).toContain('"state": "unknown"');
   });
@@ -386,18 +387,90 @@ describe('delivery boundary regressions (PR review)', () => {
     };
     const prior: WakerStateShape = {
       schema: 1,
-      seats: { [`${seat.memberId}|${seat.sessionRef}`]: { sequence: 3, entryIds: [5], rpcId: 'old', adapterId: 'synthetic-adapter', registrationVersion: 1, sessionRef: seat.sessionRef, asOfSeq: 40, nextSeq: 41, state: 'accepted' } },
+      seats: { [ledgerKeyOf(seat)]: { sequence: 3, entryIds: [5], rpcId: 'old', adapterId: 'synthetic-adapter', registrationVersion: 1, sessionRef: seat.sessionRef, asOfSeq: 40, nextSeq: 41, state: 'accepted' } },
     };
     const result = await runPass({ seats: [otherSeat], board, transport: transportFor({ prompts }), state: prior, now });
     expect(prompts).toHaveLength(1);
     expect(result.actions[0]?.action).toBe('prompted');
   });
 
+  it('keeps the pass alive when the final scope re-check throws', async () => {
+    const seats = [{ ...seat, memberId: 'broken', adapterId: 'broken', sessionRef: 'broken' }, seat];
+    let scopeCalls = 0;
+    const prompts: unknown[] = [];
+    const board: BoardPort = {
+      unsettled: (candidate) => (candidate.memberId === 'broken' ? [{ sequence: 1, entryIds: [1] }] : []),
+      binding: (candidate) => ({ ok: true, adapterId: candidate.adapterId, registrationVersion: 1, memberTaskIds: ['goal-1'], admissionTaskIds: ['goal-1'] }),
+      intentCurrent: () => {
+        scopeCalls += 1;
+        if (scopeCalls === 3) throw new Error('SYNTHETIC_FINAL_SCOPE_UNAVAILABLE');
+        return { ok: true };
+      },
+      entries: (ids) => ids.map((id) => ({ id, detail: '{}' })),
+    };
+    const result = await runPass({ seats, board, transport: transportFor({ prompts }), state: emptyState(), now });
+    expect(prompts).toHaveLength(0);  // broken seat never sent; the healthy seat has no delivery here
+    expect(result.errors[0]?.step).toBe('intent-scope');
+    expect(result.errors[0]?.error).toContain('SYNTHETIC_FINAL_SCOPE_UNAVAILABLE');
+  });
+
+  it('keeps one record per adapter so switching back does not resend', async () => {
+    const oldSeat = { ...seat, adapterId: 'adapter-old' };
+    const newSeat = { ...seat, adapterId: 'adapter-new' };
+    const state: WakerStateShape = { schema: 1, seats: {} };
+    const prompts: unknown[] = [];
+    const board = (adapterId: string): BoardPort => ({
+      unsettled: () => [{ sequence: 7, entryIds: [42] }],
+      binding: () => ({ ok: true, adapterId, registrationVersion: 1, memberTaskIds: ['goal-1'], admissionTaskIds: ['goal-1'] }),
+      intentCurrent: () => ({ ok: true }),
+      entries: (ids) => ids.map((id) => ({ id, detail: '{}' })),
+    });
+    for (const candidate of [oldSeat, newSeat, oldSeat]) {
+      await runPass({ seats: [candidate], board: board(candidate.adapterId), transport: transportFor({ prompts }), state, now });
+    }
+    expect(prompts).toHaveLength(2);  // one per adapter, never a third for the old channel
+    expect(state.seats[JSON.stringify(['adapter-old', seat.memberId, seat.sessionRef])]?.state).toBe('accepted');
+    expect(state.seats[JSON.stringify(['adapter-new', seat.memberId, seat.sessionRef])]?.state).toBe('accepted');
+  });
+
+  it('still honours a legacy member|session record for the same adapter', async () => {
+    const state: WakerStateShape = {
+      schema: 1,
+      seats: {
+        [`${seat.memberId}|${seat.sessionRef}`]: { sequence: 1, entryIds: [1], rpcId: 'legacy-rpc', adapterId: seat.adapterId, registrationVersion: 1, sessionRef: seat.sessionRef, asOfSeq: 10, nextSeq: 11, state: 'accepted' },
+      },
+    };
+    const prompts: unknown[] = [];
+    const result = await runPass({ seats: [seat], board: boardFor({ rows: [{ sequence: 1, entryIds: [1] }] }), transport: transportFor({ prompts }), state, now });
+    expect(prompts).toHaveLength(0);
+    expect(result.actions[0]?.action).toBe('awaiting-member');
+  });
+
+  it('keeps separator-bearing ids apart instead of sharing one record', async () => {
+    const dir = tempDir();
+    const state: WakerStateShape = { schema: 1, seats: {} };
+    const prompts: unknown[] = [];
+    const first = { ...seat, memberId: 'a|b', sessionRef: 'c' };
+    const second = { ...seat, memberId: 'a', sessionRef: 'b|c' };
+    const board = boardFor({ rows: [{ sequence: 1, entryIds: [1] }] });
+    for (const candidate of [first, second]) {
+      await runPass({ seats: [candidate], board, transport: transportFor({ prompts }), state, now });
+    }
+    expect(prompts).toHaveLength(2);
+    expect(Object.keys(state.seats)).toHaveLength(2);
+
+    // An empty adapter id cannot form a collision-free key.
+    await expect(startNotificationConsumer({
+      config: { statePath: join(dir, 'state.json'), seats: [{ ...seat, adapterId: '' }] },
+      board: boardFor(),
+      transport: transportFor({ prompts: [] }),
+      once: true,
+    })).rejects.toThrow('CONSUMER_SEAT_INVALID');
+  });
+
   it('rejects seat ids that would collide in the ledger key', async () => {
     const dir = tempDir();
     const colliding = [
-      { ...seat, memberId: 'a|b', sessionRef: 'c' },
-      { ...seat, memberId: 'a', sessionRef: 'b|c' },
       { ...seat, adapterId: '' },
     ];
     for (const candidate of colliding) {
