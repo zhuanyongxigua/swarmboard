@@ -6,10 +6,14 @@
 // their own intents, and the core never assumes delivery happened.
 import type { Entry } from './store.js';
 import type { Store } from './store.js';
-import type { CollaboratorStore } from './collaborators.js';
+import { collaboratorTaskIds, type CollaboratorStore } from './collaborators.js';
+import type { WorkerStore } from './worker-store.js';
 import { NotificationAdapterStore } from './notification-adapter-store.js';
 import {
   isIdleReminder,
+  isSessionTaskCheck,
+  readSessionTaskCheck,
+  resolveSessionTaskCheckTargets,
   resolveNotificationTargets,
   resolveReminderTargets,
   type DeliveryResolution,
@@ -27,7 +31,7 @@ export interface NotificationDispatcher {
   adapters(): ReturnType<NotificationAdapterStore['list']>;
 }
 
-export function createNotificationDispatcher(board: Store, collaborators?: CollaboratorStore): NotificationDispatcher {
+export function createNotificationDispatcher(board: Store, collaborators?: CollaboratorStore, workers?: WorkerStore): NotificationDispatcher {
   const store = new NotificationAdapterStore(board.db);
 
   const admitted = (memberId: string): boolean => {
@@ -45,9 +49,24 @@ export function createNotificationDispatcher(board: Store, collaborators?: Colla
    */
   const recordTarget = (
     entry: Entry,
-    target: { adapterId: string; memberId: string },
+    target: { adapterId: string; memberId: string; sessionRef: string },
     resolution: DeliveryResolution,
   ): void => {
+    const check = readSessionTaskCheck(entry);
+    if (isSessionTaskCheck(entry)) {
+      const adapter = store.list().find(adapter => adapter.id === target.adapterId);
+      const current = check && collaborators ? (() => { try { return collaborators.get(target.memberId); } catch { return undefined; } })() : undefined;
+      const ids = current ? collaboratorTaskIds(current, workers) : [];
+      const declared = adapter?.members.find(member => member.memberId === target.memberId);
+      const applicable = check?.goalIds.some(id => (ids === undefined || ids.includes(id)) && declared?.taskIds.includes(id)
+        && (() => { try { return ['todo', 'in_progress', 'in_review'].includes(board.readTask(id).status); } catch { return false; } })());
+      if (!check || !current?.enabled || current.revokedAt || current.sessionRef !== check.sessionRef
+        || adapter?.enabled !== true || adapter.version !== check.registrationVersion
+        || declared?.sessionRef !== check.sessionRef || !applicable) {
+        resolution.skipped.push({ adapterId: target.adapterId, memberId: target.memberId, reason: 'out-of-scope' });
+        return;
+      }
+    }
     if (!admitted(target.memberId)) {
       resolution.skipped.push({ adapterId: target.adapterId, memberId: target.memberId, reason: 'collaborator-inactive' });
       return;
@@ -59,14 +78,23 @@ export function createNotificationDispatcher(board: Store, collaborators?: Colla
         return;
       }
     }
-    // Idempotent per (entry, channel, member): a re-scan cannot duplicate it.
-    if (!store.claimDispatch(entry.id, target.adapterId, target.memberId)) return;
+    // Persist the period claim and its intent together: failure must leave the
+    // same due period retryable, while a crash after commit cannot duplicate it.
+    if (check) board.db.exec('SAVEPOINT notification_session_check');
     try {
+      if (!store.claimDispatch(entry.id, target.adapterId, target.memberId)
+        || (check && !store.claimSessionCheck(check.memberId, check.sessionRef, check.dueAt, entry.id))) {
+        if (check) board.db.exec('RELEASE notification_session_check');
+        return;
+      }
       const pending = store.pendingIntent(target.adapterId, target.memberId);
       if (pending) {
+        if (check && (pending.sessionRef !== check.sessionRef || pending.registrationVersion !== check.registrationVersion))
+          throw new Error('Reconcile the earlier session delivery before recording a check');
         // Busy merge: batch into the unconfirmed delivery rather than opening a
         // second sequence, which the cross-sequence fence would reject.
         store.appendEntries(target.adapterId, target.memberId, pending.sequence, [entry.id]);
+        if (check) board.db.exec('RELEASE notification_session_check');
         return;
       }
       store.recordIntent({
@@ -75,11 +103,14 @@ export function createNotificationDispatcher(board: Store, collaborators?: Colla
         sequence: store.nextSequence(target.adapterId, target.memberId),
         entryIds: [entry.id],
         createdAt: entry.createdAt,
+        ...(check ? { sessionRef: check.sessionRef, registrationVersion: check.registrationVersion } : {}),
       });
+      if (check) board.db.exec('RELEASE notification_session_check');
     } catch {
       // Roll the claim back so the entry is retried later instead of being lost,
       // and keep the failure inside this channel (acceptance-4 isolation).
-      store.releaseDispatch(entry.id, target.adapterId, target.memberId);
+      if (check) board.db.exec('ROLLBACK TO notification_session_check; RELEASE notification_session_check');
+      else store.releaseDispatch(entry.id, target.adapterId, target.memberId);
       resolution.skipped.push({ adapterId: target.adapterId, memberId: target.memberId, reason: 'dispatch-failed' });
     }
   };
@@ -116,6 +147,7 @@ export function createNotificationDispatcher(board: Store, collaborators?: Colla
   };
 
   const resolveAll = (entry: Entry, adapters: readonly NotificationAdapterRegistration[]): DeliveryResolution =>
+    isSessionTaskCheck(entry) ? resolveSessionTaskCheckTargets(entry, adapters) :
     // An idle reminder is a public board signal: its recipientId only rotates the
     // internal wake-up, so every registered member is an applicable target.
     isIdleReminder(entry)

@@ -268,6 +268,57 @@ export function isIdleReminder(entry: Entry): boolean {
   return typeof entry.summary === 'string' && entry.summary.startsWith('IDLE_RECOVERY');
 }
 
+/** A check belongs to one existing session and one due period, not a broadcast. */
+export interface SessionTaskCheck {
+  kind: 'SESSION_TASK_CHECK';
+  memberId: string;
+  sessionRef: string;
+  dueAt: number;
+  goalIds: string[];
+  adapterId?: string;
+  registrationVersion?: number;
+}
+
+function sessionCheckDetail(entry: Entry): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(entry.detail);
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  } catch { return null; }
+}
+
+/** Reserve malformed check envelopes too: they must not fall back to direct messages. */
+export function isSessionTaskCheck(entry: Entry): boolean {
+  return entry.kind === 'MESSAGE' && entry.agentId.startsWith('runtime-')
+    && (sessionCheckDetail(entry)?.kind === 'SESSION_TASK_CHECK' || entry.summary.startsWith('SESSION_TASK_CHECK:'));
+}
+
+export function readSessionTaskCheck(entry: Entry): SessionTaskCheck | null {
+  if (!isSessionTaskCheck(entry)) return null;
+  const value = sessionCheckDetail(entry);
+  if (!value || value.kind !== 'SESSION_TASK_CHECK'
+    || typeof value.memberId !== 'string' || !nonEmpty(value.memberId) || value.memberId !== entry.recipientId
+    || typeof value.sessionRef !== 'string' || !nonEmpty(value.sessionRef)
+    || !Number.isSafeInteger(value.dueAt) || Number(value.dueAt) < 0
+    || !Array.isArray(value.goalIds) || !value.goalIds.length || value.goalIds.length > 200
+    || value.goalIds.some(id => typeof id !== 'string' || !nonEmpty(id))) return null;
+  return value as unknown as SessionTaskCheck;
+}
+
+/** Native checks omit adapter identity; external checks require its exact current generation. */
+export function resolveSessionTaskCheckTargets(entry: Entry, adapters: readonly NotificationAdapterRegistration[]): DeliveryResolution {
+  const check = readSessionTaskCheck(entry);
+  if (!check || !check.adapterId || !Number.isSafeInteger(check.registrationVersion) || check.registrationVersion! < 1)
+    return { targets: [], skipped: [] };
+  const selected = adapters.filter(adapter => adapter?.id === check.adapterId && adapter?.version === check.registrationVersion);
+  const resolution = resolveNotificationTargets(entry, selected);
+  resolution.targets = resolution.targets.filter(target => {
+    const member = selected.find(adapter => adapter.id === target.adapterId)?.members.find(member => member.memberId === target.memberId);
+    return target.sessionRef === check.sessionRef && member !== undefined
+      && check.goalIds.some(id => member.taskIds.includes(id));
+  });
+  return resolution;
+}
+
 /**
  * Resolve who should hear a public idle reminder.
  *
@@ -320,6 +371,9 @@ export interface DeliveryIntent {
   sequence: number;
   entryIds: readonly number[];
   createdAt: string;
+  /** Present for periodic checks so a new admission cannot consume an old session's intent. */
+  sessionRef?: string;
+  registrationVersion?: number;
 }
 
 export interface AdapterReceipt {

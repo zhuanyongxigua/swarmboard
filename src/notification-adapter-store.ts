@@ -26,6 +26,7 @@ export class NotificationAdapterStore {
       CREATE TABLE IF NOT EXISTS notification_deliveries(adapterId TEXT NOT NULL, memberId TEXT NOT NULL, sequence INTEGER NOT NULL, intent TEXT NOT NULL, receipt TEXT, PRIMARY KEY(adapterId, memberId, sequence));
       CREATE TABLE IF NOT EXISTS notification_dispatched(entryId INTEGER NOT NULL, adapterId TEXT NOT NULL, memberId TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(entryId, adapterId, memberId));
       CREATE TABLE IF NOT EXISTS notification_adapter_floor(adapterId TEXT PRIMARY KEY, through INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS notification_session_checks(memberId TEXT NOT NULL, sessionRef TEXT NOT NULL, dueAt INTEGER NOT NULL, entryId INTEGER NOT NULL, PRIMARY KEY(memberId, sessionRef, dueAt));
       -- Superseded by per-adapter floors before release; safe to drop on open.
       DROP TABLE IF EXISTS notification_dispatch_progress;
     `);
@@ -186,6 +187,12 @@ export class NotificationAdapterStore {
     const row = this.db.prepare('SELECT intent FROM notification_deliveries WHERE adapterId=? AND memberId=? AND receipt IS NULL ORDER BY sequence DESC LIMIT 1')
       .get(adapterId, memberId) as unknown as { intent: string } | undefined;
     return row ? JSON.parse(row.intent) as DeliveryIntent : null;
+  }
+
+  /** Claim one due period across re-published entries and replacement channels. */
+  claimSessionCheck(memberId: string, sessionRef: string, dueAt: number, entryId: number): boolean {
+    return this.db.prepare('INSERT OR IGNORE INTO notification_session_checks(memberId,sessionRef,dueAt,entryId) VALUES(?,?,?,?)')
+      .run(memberId, sessionRef, dueAt, entryId).changes > 0;
   }
 
   /**
