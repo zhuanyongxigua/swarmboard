@@ -51,19 +51,24 @@
 
 ## 成员侧 API（MCP 工具）
 
-外部适配器不需要、也不应该直接读写看板 SQLite 或从任务正文加载代码。已准入的 collaborator 通过三个受控 MCP 工具使用同一通道：
+外部适配器不需要、也不应该直接读写看板 SQLite 或从任务正文加载代码。已准入的 collaborator 通过四个受控 MCP 工具使用同一通道：
 
 | 工具 | 语义 |
 | --- | --- |
 | `notification_register` | 只登记**调用者自己**：`members` 必须恰为本人 `memberId` 且 `sessionRef` 与准入一致；`taskIds` 必须是当前准入范围的子集（越界报 `SCOPE_VIOLATION`）。替换需严格更大的 `version` |
+| `notification_binding_read` | 只读自查指定 `adapterId` 的当前绑定；只返回本调用者的注册投影，缺失或其他成员通道都返回 `{binding:null}`，不暴露其他成员或会话。每次重读注册与准入；不登记、不改游标或投递证据 |
 | `notification_pending` | 增量读取**自己**未结算的投递（`after`/`limit` 有界），只返回 `entryIds` 与状态；内容仍要通过 `context_read` 读取，由成员自行决定是否行动 |
 | `notification_receipt` | 只对自己某条 `sequence` 确认消费/未消费。**确认时必须回显 `entryIds`**：忙时合并可能在你读完后又追加条目，回显不一致会被拒（`STALE_DELIVERY_VIEW`），需重新 `notification_pending` 再确认——避免把没看见的条目静默记为已投递。未消费保持 `unknown` 且不得重放；弃用属宿主/操作者动作，不开放给成员 |
+
+`notification_binding_read({adapterId})` 的非空 `binding` 包含 `adapterId`、`memberId`、注册的 `sessionRef`、`registrationVersion`、`admissionVersion`、`capabilities`、有效 `taskIds`、`boardWide` 与 `enabled`。两种版本分别来自注册与准入，不能互相替代；任务范围为注册声明和当前正式准入的交集。适配器停用、准入撤销、session 不匹配、组织停止或组织绑定失效时 `enabled:false`，保留历史注册和投递以供对账。此读只供已绑定调用者查询，不接受 `memberId` 等身份覆盖字段，也不枚举注册。
+
+受信宿主可以把该查询作为当前绑定回调，替代启动时缓存；必须另外核实际所需能力和当前执行授权。异步读不是与远端状态变更原子提交的许可，最终同步发送围栏仍需核宿主当前状态和单写租约，不能把一次成功查询当永久授权。
 
 **逐会话检查具有真正的定向语义**：检查只送到其稳定 member/session 对应的当前启用通道，且目标必须在该席正式授权范围内。旧全局 `IDLE_RECOVERY` 轮换并向全部外部成员广播的周期路径由逐席机制替换，不能同时运行。`boardWide` 不绕过定向隔离或目标范围；历史注册、旧 session 或失效能力不代表实际接入。忙碌／已排队合并一次检查，unknown 保持待核而不重放。
 
 逐席检查 MESSAGE 的 `detail.kind` 为 `SESSION_TASK_CHECK`，携带 `memberId`、`sessionRef`、`dueAt` 与 `goalIds`；外部目标还携带 `adapterId` 和 `registrationVersion`。`dueAt` 表示计划到期点，而非临时派发时刻；稳定成员、session 和到期点共同标识一次检查。外部解析必须精确匹配当前适配器与注册代次，并在记录意图前再次核对正式准入和任务范围。原生检查不带外部适配器身份，不能因此被当作外部广播。范围、会话或注册代次变化须拒绝旧快照，不能为继续投递放宽授权。
 
-三条都在服务层再次校验身份与范围（`NotificationService`），不信任入参：`memberId`/`sessionRef`/`taskIds` 一律与正式准入记录比对。注册不等于启动、通知到达不等于执行或完成。
+四条都在服务层再次校验身份与范围（`NotificationService`），不信任入参：`memberId`/`sessionRef`/`taskIds` 一律与正式准入记录比对。注册不等于启动、通知到达不等于执行或完成。
 
 确认回执支持响应丢失后的严格幂等重试：当前仍获准入的同一成员，对唯一匹配通道的已消费序列，再次以 `consumed:true` 和完整 `entryIds` 集合确认，会返回首次结果，不改写原意图、回执或后续序列。缺少回显、回显不符仍分别拒绝；已消费后改报 `consumed:false` 返回 `RECEIPT_CONFLICT`，不能把成功降级为未知。不存在或已弃用的序列仍返回 `DELIVERY_NOT_FOUND`。
 
