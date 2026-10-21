@@ -226,7 +226,7 @@ describe('DSH driver and durable notification consumption', () => {
     durable.restart();
     ports.session.isBusy = async () => true;
     const second = await driveOnce({ ...ports, journal: durable.journal });
-    expect(second.receiptPending).toHaveLength(1);
+    expect([...second.receiptPending, ...second.merged]).toHaveLength(1);
     expect(f.submits).toBe(1);
     expect((await durable.journal.get(intentKey(batch)))?.batch.delivery.entryIds).toEqual(batch.delivery.entryIds);
     expect(f.service.pending(f.member.id).items[0]!.entryIds).toHaveLength(2);
@@ -293,6 +293,35 @@ describe('DSH driver and durable notification consumption', () => {
     expect(f.service.pending(f.member.id).items).toHaveLength(0);
     expect(submittedIds).toEqual([original.entryIds, [lateId]]);
     expect(f.submits).toBe(2);
+    expect(durable.rows()).toHaveLength(0);
+  });
+
+
+  it('completes an enqueued SDK delta after journal reopen without revisiting the old entries', async () => {
+    const f = fixture(); const durable = durableJournal(); const sdk = sdkSession(f.member);
+    const ports = { pending: f.ports(async () => ({ status: 'rejected' })).pending,
+      journal: durable.journal, session: sdk.port };
+    const finish = (index: number) => {
+      const turn = index + 1; const seq = sdk.events.length + 1;
+      sdk.events.push({ type: 'turn/start', seq, data: { turn } },
+        { type: 'user/message', seq: seq + 1, data: sdk.messages[index] },
+        { type: 'turn/end', seq: seq + 2, data: { turn, reason: { kind: 'completed' } } });
+    };
+    await driveOnce(ports);
+    f.dispatcher.dispatch(f.board.publishEntry({ agentId: 'runtime-driver-test', kind: 'MESSAGE', recipientId: f.member.id,
+      summary: 'SDK late update', detail: 'Only this delta belongs in the second model turn.' }));
+    finish(0);
+    await driveOnce(ports);
+    await driveOnce(ports);
+    expect(sdk.messages).toHaveLength(2);
+    durable.restart();
+    finish(1);
+    const resumed = { ...ports, journal: durable.journal };
+    await driveOnce(resumed);
+    await driveOnce(resumed);
+    await driveOnce(resumed);
+    expect(f.service.pending(f.member.id).items).toHaveLength(0);
+    expect(sdk.messages).toHaveLength(2);
     expect(durable.rows()).toHaveLength(0);
   });
 
