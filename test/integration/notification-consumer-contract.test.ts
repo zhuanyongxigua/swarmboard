@@ -24,7 +24,8 @@ function fixture() {
   let now = 1000;
   const turns: string[] = [];
   const boardProbe = new Store(boardPath);
-  const runtime = new EventRuntime(boardProbe, { notificationBatchMs: 0, databasePath: boardPath, serverEntry: 'unused', now: () => now, idleMs: 100,
+  // Legacy global reminder contract: opt in explicitly; per-seat checks are the default.
+  const runtime = new EventRuntime(boardProbe, { notificationBatchMs: 0, databasePath: boardPath, serverEntry: 'unused', now: () => now, idleMs: 100, sessionCheckMs: 0,
     adapter: worker => ({ open: async w => w.threadId ?? 'thread-' + w.id, run: async () => { turns.push(worker.id); }, close: async () => {} }) });
   const goal = boardProbe.createTask({ title: 'Contract goal' });
   // Admit through the runtime's own collaborator store: that is the store the

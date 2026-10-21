@@ -19,7 +19,8 @@ function fixture() {
   const board = new Store(path);
   const turns: string[] = [];
   let now = 1000;
-  const runtime = new EventRuntime(board, { notificationBatchMs: 0, databasePath: path, serverEntry: 'unused', now: () => now, idleMs: 100,
+  // Legacy global reminder contract: opt in explicitly; per-seat checks are the default.
+  const runtime = new EventRuntime(board, { notificationBatchMs: 0, databasePath: path, serverEntry: 'unused', now: () => now, idleMs: 100, sessionCheckMs: 0,
     adapter: worker => ({ open: async w => w.threadId ?? 'thread-' + w.id,
       run: async () => { turns.push(worker.id); }, close: async () => {} }),
   });
