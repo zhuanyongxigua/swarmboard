@@ -154,7 +154,7 @@ export function createDshInstructionBoundary(options: BoundaryOptions) {
     try { user = await readUserPrompt(); }
     catch (error) {
       if ((error as { code?: string }).code === 'NOT_FOUND' || /unknown tool|not found/i.test(String((error as Error)?.message ?? ''))) {
-        throw Error('Current DSH generation does not expose user_prompt_read; dual-prompt unsupported');
+        throw new Error('Current DSH generation does not expose user_prompt_read; dual-prompt unsupported', { cause: error });
       }
       throw error;
     }
