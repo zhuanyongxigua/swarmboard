@@ -86,6 +86,8 @@ function errorCode(error: unknown) {
 export type DshLaunchBootstrapOptions<S extends string, M extends string, A extends DshSdkSessionAgent<M>, C> =
   Omit<DshHostPluginOptions<S, M, A>, 'mode' | 'createOptions' | 'resumeOptions'> & DshLaunchSetup<C> & {
     permissionPreset: string;
+    /** Final fixed-session provenance check immediately before official resume. */
+    beforeResume?(): void;
     /** Synchronous durable sink, supplied by the trusted external runtime; never log raw errors. */
     recordState(state: Readonly<DshLaunchBootstrapState>): void;
     /** Trusted composition must call the official preset APIs and throw on unsupported choices. */
@@ -119,6 +121,7 @@ export function createDshLaunchBootstrap<S extends string, M extends string, A e
       report({ phase: 'starting' });
       if (ctx.agents.get(options.sdkSessionId(options.sessionRef))) throw new Error('DSH_LAUNCH_AGENT_ALREADY_LIVE');
       entry = createDshHostPlugin({ ...options, mode: 'resume', createOptions: {},
+        isAuthorized: (batch, agent) => !closed && state.phase !== 'failed' && options.isAuthorized(batch, agent),
         onError: error => {
           try { report({ phase: 'failed', errorCode: errorCode(error) }); } finally { options.onError(error); }
         },
@@ -127,6 +130,7 @@ export function createDshLaunchBootstrap<S extends string, M extends string, A e
         get: (id: S) => ctx.agents.get(id),
         create: async (): Promise<DshSdkHandle<A>> => { throw new Error('DSH_LAUNCH_CREATE_FORBIDDEN'); },
         resume: async (resumeOptions: { resumeSessionId: S; [key: string]: unknown }) => {
+          requireSynchronous(options.beforeResume?.(), 'DSH_LAUNCH_ASYNC_PROVENANCE');
           const handle = await ctx.agents.resume(resumeOptions);
           retained.add(handle);
           const agent = handle.agent;

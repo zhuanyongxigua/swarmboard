@@ -94,3 +94,11 @@ it('rejects an asynchronous permission callback before claiming durable setup', 
   expect(f.flush).not.toHaveBeenCalled(); expect(bootstrap.ownedHandles()).toHaveLength(1);
   await expect(close()).rejects.toThrow('NOT_QUIESCENT');
 });
+it('rejects ready if its required durable state sink fails', async () => {
+  const f = fixture();
+  const bootstrap = createDshLaunchBootstrap({ ...f.options, recordState: state => { if (state.phase === 'ready') throw Error('synthetic fsync failed'); } });
+  const close = bootstrap.plugin.apply(f.ctx);
+  await expect(bootstrap.ready()).rejects.toThrow('synthetic fsync failed');
+  expect(bootstrap.status()).toEqual({ phase: 'failed', errorCode: 'DSH_LAUNCH_HOST_FAILED' });
+  await close();
+});

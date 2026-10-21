@@ -42,3 +42,11 @@ SDK root 是操作者明确信任的已安装代码树。外部 pins 校验固�
 ## 验证范围
 
 普通 CI 使用合成 SDK 文件、隔离目录与 SQLite，覆盖 inert inspection、创建／选择、确认后重复、配置／native 冲突、pin／符号链接拒绝、flush／清理失败保意图、显式 void setup、权限读回、lease／身份和安全清理。官方 SDK 的无模型冷会话验证可在明确授权的隔离目录另行执行；不把它作为所有机器上 SDK 已安装或现场真实接入的证明。第三方 SDK 不打入本仓库，不复制其源码或个人配置。
+
+## 正式 child 插件与本地状态读回
+
+`launch-child.ts` 是官方 Loader 默认插件的组合层。`configPath` 与 `configSha256` 在同步 apply 时捕获同一快照，apply 只返回 cleanup，异步启动独立等待 Loader。外部 JSON 使用 `swarmboard-dsh-child/v1` 严格 Schema，拒绝任意模块、未知字段及配置／原创建收据／native 文件摘要变化。`goalBindings` 只限制正式当前授权，不签发授权。选用原 session 可保留外部 persistence root；stage、runtime、工作目录相互独立。实际端口由仓库内 caller-bound 通知桥创建，不能从 JSON 加载代码或复制个人 legacy 配置。
+
+固定状态路径为 `stageDirectory/child-state.jsonl` 和 `stageDirectory/child-ready.json`，宿主数据库为 `runtimeDirectory/durable-host.sqlite`。状态文件及新 sidecar 独占创建，存在原状态、sidecar／WAL／SHM 时拒绝重放；所有历史留给操作者核实。状态回调同步 fsync；ready 前重新核原 lease、同一 agent/session/cwd、权限 checkpoint 和当前 AGENTS 摘要。它报告正式双提示词文件已准备，官方 workspace-instruction 通道是 user role，不能声称模型已采用或提升为 system/developer 角色。官方 profile 必须保留原指令插件。
+
+`readDshChildStatus({stageDirectory,configSha256,sessionRef})` 只读外部固定收据，返回阶段及 `startupReady`。截断行、配置／会话／PID 不匹配为 unknown。历史 ready 后再失败时返回 `startupReady: true, phase: 'failed'`，不能把旧 ready 当作持续健康。`notificationConsumed`、`usefulContribution` 在该本地读回中始终为 false；实际消费与有用工作须从正式完成回执和共享贡献核对。该读取不会运行 SDK、MCP 或模型，也不会修复或清空记录。
