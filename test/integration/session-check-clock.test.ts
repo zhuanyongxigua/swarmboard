@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { Store } from '../../src/store.js';
 import { EventRuntime } from '../../src/event-runtime.js';
 import { NotificationAdapterStore } from '../../src/notification-adapter-store.js';
+import type { Collaborator } from '../../src/collaborators.js';
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => { for (const fn of cleanups.splice(0).reverse()) await fn(); });
@@ -127,7 +128,7 @@ function externalFixture() {
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }), () => board.close(), () => runtime.close());
   const goal = board.createTask({ title: 'External-only goal' });
   const channels = new NotificationAdapterStore(board.db);
-  const members = [];
+  const members: Collaborator[] = [];
   for (const [name, sessionRef] of [['A', 'ext-session-a'], ['B', 'ext-session-b']]) {
     const c = runtime.collaborators.configure({ expectedVersion: 0, name, harness: 'synthetic', sessionRef, taskIds: [goal.id], enabled: true }, board).collaborator;
     board.registerAgent({ agentId: c.id, name });
@@ -137,7 +138,13 @@ function externalFixture() {
   }
   const checks = () => board.readEntries({ query: 'SESSION_TASK_CHECK' }).items;
   const count = (id: string) => checks().filter(e => e.recipientId === id).length;
-  return { board, runtime, goal, members, checks, count, tick: (ms = 100) => { now += ms; } };
+  const consume = (index: number) => {
+    const member = members[index]!, adapterId = 'adapter-' + member.name;
+    const pending = channels.pendingIntent(adapterId, member.id);
+    expect(pending).not.toBeNull();
+    channels.recordReceipt(adapterId, member.id, { sequence: pending!.sequence, consumed: true });
+  };
+  return { board, runtime, goal, members, checks, count, consume, tick: (ms = 100) => { now += ms; } };
 }
 
 describe('pure external organization still gets per-session checks', () => {
@@ -147,9 +154,18 @@ describe('pure external organization still gets per-session checks', () => {
     f.tick(); await f.runtime.scan();
     expect(f.count(f.members[0]!.id)).toBeGreaterThanOrEqual(1);
     expect(f.count(f.members[1]!.id)).toBeGreaterThanOrEqual(1);
+    // Synthetic consumption completes A's turn. B keeps its pending delivery,
+    // so repeated due scans must coalesce instead of opening another turn.
+    f.consume(0);
     f.tick(); await f.runtime.scan();
     expect(f.count(f.members[0]!.id)).toBeGreaterThanOrEqual(2);
+    expect(f.count(f.members[1]!.id)).toBe(1);
+    f.consume(1); await f.runtime.scan();
     expect(f.count(f.members[1]!.id)).toBeGreaterThanOrEqual(2);
+    f.consume(0); f.consume(1);
+    f.tick(); await f.runtime.scan();
+    expect(f.count(f.members[0]!.id)).toBeGreaterThanOrEqual(3);
+    expect(f.count(f.members[1]!.id)).toBeGreaterThanOrEqual(3);
     const entries = f.checks();
     expect(entries.every(e => e.detail.includes('"kind":"SESSION_TASK_CHECK"'))).toBe(true);
     expect(f.runtime.workers.list()).toHaveLength(0);
