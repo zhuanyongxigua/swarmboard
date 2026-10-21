@@ -12,13 +12,15 @@ import { boardInstructions } from './board-instructions.js';
 import { WorkerPool } from './worker-pool.js';
 import { PoolLiveness } from './pool-liveness.js';
 import { SeatCheckStore } from './seat-check-store.js';
-import { tick as tickSeatChecks, pendingWakes, type SeatRecord, type SeatSnapshot, type SeatCheckWake } from './seat-checks.js';
+import { tick as tickSeatChecks, pendingWakes, seatKey, type SeatSnapshot, type SeatCheckWake } from './seat-checks.js';
 import { createNotificationDispatcher } from './notification-dispatch.js';
 import { PipelineEvents, type PipelineReader } from './pipeline-events.js';
 import { ExecutionGrants } from './execution-grants.js';
 import { CollaboratorStore } from './collaborators.js';
 import { notificationDelay, notificationSettings, type NotificationOptions } from './notification-batch.js';
 import { actionableWake, boardPreferencesChanged, wakePolicySettings, type WakePolicyOptions } from './wake-policy.js';
+
+const TERMINAL_POOL_STATES = ['stopped', 'stopping', 'completed', 'error'];
 
 export interface RuntimeOptions extends NotificationOptions, WakePolicyOptions {
   databasePath: string; serverEntry: string;
@@ -168,9 +170,24 @@ export class EventRuntime {
     // first: the pending entry is durable, so a crash between save and publish
     // re-publishes the same due instead of silently dropping the check.
     const records = seatChecks.store.list();
+    // A native worker's session identity moves from `worker:<id>` to its threadId on
+    // first open. Retire rows whose member kept the same id under an older session so
+    // the new seat starts from a clean schedule instead of inheriting a stale one.
+    const liveKeys = new Set(seats.map(seat => seatKey(seat)));
+    for (const [key, record] of records) {
+      if (liveKeys.has(key)) continue;
+      if (seats.some(seat => seat.memberId === record.memberId)) {
+        seatChecks.store.remove(record as unknown as { memberId: string; sessionRef: string });
+        records.delete(key);
+      }
+    }
     const owed = pendingWakes(records);
     const result = tickSeatChecks({
-      now, organizationActive: !!pool?.enabled && pool.state === 'active',
+      // `in_review`-only boards report pool.state 'waiting' (nothing left to
+      // dispatch), which must NOT suppress the per-session checks: the human plan
+      // explicitly keeps reviewing goals in scope. Only a stopped/terminal
+      // organization disables them.
+      now, organizationActive: !!pool?.enabled && !TERMINAL_POOL_STATES.includes(pool.state),
       seats, goals: this.board.taskStates(), records, intervalMs: seatChecks.intervalMs,
     });
     // Persist first, including the pending outbox entry, before anything is published.

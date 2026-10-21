@@ -61,6 +61,38 @@ describe('per-session five-minute checks (runtime wiring)', () => {
     expect(f.checks().some(e => e.summary.startsWith('IDLE_RECOVERY:'))).toBe(false);
   });
 
+  it('keeps checking while only in_review goals remain (pool.state = waiting)', async () => {
+    const f = fixture(); await f.settle();
+    f.board.updateTask(f.task.id, { status: 'in_review', expectedVersion: 1 });
+    await f.settle();
+    // The pool reports 'waiting' because nothing is dispatchable; the per-session
+    // checks must still run, which is the core of the human plan.
+    expect(f.runtime.workers.pool()?.state).toBe('waiting');
+    const before = f.checks().filter(e => e.summary.startsWith('SESSION_TASK_CHECK:')).length;
+    f.tick(); await f.settle();
+    const after = f.checks().filter(e => e.summary.startsWith('SESSION_TASK_CHECK:')).length;
+    expect(after).toBeGreaterThan(before);
+  });
+
+  it('still scans cleanly when the organization has no native workers', async () => {
+    // The pure-external path used to return before the per-session checks ran; this
+    // pins that the early-return branch now runs the checks and stays inert when no
+    // seats exist. Real registered-adapter coverage lives in the integration suites
+    // written by the reviewers that host notification channels.
+    const dir = mkdtempSync(join(tmpdir(), 'swarmboard-session-check-empty-'));
+    const path = join(dir, 'board.sqlite');
+    const board = new Store(path);
+    let now = 1_000_000;
+    const runtime = new EventRuntime(board, { notificationBatchMs: 0, databasePath: path, serverEntry: 'unused',
+      now: () => now, sessionCheckMs: 60_000 });
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }), () => board.close(), async () => { await runtime.close(); });
+    board.createTask({ title: 'Human goal' });
+    await runtime.scan();                    // must not throw on the empty organization
+    now += 60_000;
+    await runtime.scan();
+    expect(board.board().entries.filter(e => e.summary.startsWith('SESSION_TASK_CHECK:'))).toHaveLength(0);
+  });
+
   it('survives a restart without losing the due check', async () => {
     const f = fixture(); await f.settle();
     f.tick();
