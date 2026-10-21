@@ -42,6 +42,33 @@ describe('seat check store', () => {
     db.close();
   });
 
+  it('survives a damaged row instead of failing every read', () => {
+    const db = new DatabaseSync(':memory:');
+    const store = new SeatCheckStore(db);
+    store.save([record('a')]);
+    // Something else (or a damaged file) wrote a row this reader cannot use.
+    db.prepare('INSERT INTO seat_checks(seatKey,data) VALUES(?,?)').run('bad|session-b', '{not json');
+    db.prepare('INSERT INTO seat_checks(seatKey,data) VALUES(?,?)').run('bad2|session-c2', JSON.stringify({ hello: 'world' }));
+    const listed = store.list();                       // must not throw
+    expect([...listed.keys()]).toEqual(['a|session-a']);
+    expect([...store.corruptKeys()].sort()).toEqual(['bad2|session-c2', 'bad|session-b']);
+    // The damaged rows are kept for diagnosis and still do not poison later reads.
+    expect(store.list().size).toBe(1);
+    db.close();
+  });
+
+  it('refuses to write inside an open transaction, where the schedule would not be durable', () => {
+    const db = new DatabaseSync(':memory:');
+    const store = new SeatCheckStore(db);
+    db.exec('BEGIN');
+    expect(() => store.save([record('a')])).toThrow(/idle connection/);
+    db.exec('ROLLBACK');
+    // After the rollback the store is usable again.
+    store.save([record('a')]);
+    expect(store.list().size).toBe(1);
+    db.close();
+  });
+
   it('removes a retired seat so it cannot resume silently', () => {
     const db = new DatabaseSync(':memory:');
     const store = new SeatCheckStore(db);

@@ -12,13 +12,41 @@ export class SeatCheckStore {
     this.db.exec(`CREATE TABLE IF NOT EXISTS seat_checks(seatKey TEXT PRIMARY KEY, data TEXT NOT NULL);`);
   }
 
+  private corrupt: string[] = [];
+
+  /**
+   * Read the schedule. A row written by something else (or damaged on disk) must never take
+   * the whole scan down: an unreadable row makes its seat re-anchor, which costs at most one
+   * interval, while a throwing read would stop every seat until a human repaired the file.
+   */
   list(): Map<string, SeatRecord> {
-    const rows = this.db.prepare('SELECT seatKey, data FROM seat_checks ORDER BY seatKey').all() as unknown as { seatKey: string; data: string }[];
-    return new Map(rows.map(row => [row.seatKey, JSON.parse(row.data) as SeatRecord]));
+    const rows = this.db.prepare('SELECT seatKey, data FROM seat_checks ORDER BY seatKey').all() as unknown as { seatKey: string; data: unknown }[];
+    const records = new Map<string, SeatRecord>();
+    const corrupt: string[] = [];
+    for (const row of rows) {
+      let parsed: unknown;
+      try { parsed = JSON.parse(String(row.data)); } catch { corrupt.push(row.seatKey); continue; }
+      const record = parsed as SeatRecord | null;
+      if (!record || typeof record !== 'object' || Array.isArray(record)
+        || typeof record.memberId !== 'string' || typeof record.sessionRef !== 'string'
+        || !Number.isFinite(record.nextDueAt)) { corrupt.push(row.seatKey); continue; }
+      records.set(row.seatKey, record);
+    }
+    this.corrupt = corrupt;
+    return records;
   }
+
+  /** Seat keys whose stored row could not be used on the last read (kept for diagnosis). */
+  corruptKeys(): readonly string[] { return this.corrupt; }
 
   /** Persist the scheduler's decisions. Callers must save before dispatching. */
   save(records: readonly SeatRecord[]): SeatRecord[] {
+    // Durability contract: the caller publishes a wakeup only after this write. Inside someone
+    // else's open transaction the write is not durable yet (a rollback would erase the schedule
+    // while the wakeup had already gone out), so refuse instead of silently relying on it.
+    if ((this.db as unknown as { isTransaction?: boolean }).isTransaction) {
+      throw new Error('SeatCheckStore.save requires an idle connection: an open transaction would make the schedule non-durable');
+    }
     const statement = this.db.prepare(
       'INSERT INTO seat_checks(seatKey, data) VALUES(?,?) ON CONFLICT(seatKey) DO UPDATE SET data=excluded.data');
     for (const record of records) statement.run(seatKey(record), JSON.stringify(record));
