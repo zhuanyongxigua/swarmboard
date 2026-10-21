@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { SeatCheckStore } from '../../src/seat-check-store.js';
+import { pendingWakes } from '../../src/seat-checks.js';
 import { CHECK_INTERVAL_MS, type SeatRecord } from '../../src/seat-checks.js';
 
 const record = (memberId: string, over: Partial<SeatRecord> = {}): SeatRecord => ({
@@ -54,6 +55,30 @@ describe('seat check store', () => {
     expect([...store.corruptKeys()].sort()).toEqual(['bad2|session-c2', 'bad|session-b']);
     // The damaged rows are kept for diagnosis and still do not poison later reads.
     expect(store.list().size).toBe(1);
+    db.close();
+  });
+
+  it('rejects a row whose pending outbox entry is not usable (p8 7261)', () => {
+    const db = new DatabaseSync(':memory:');
+    const store = new SeatCheckStore(db);
+    store.save([record('a')]);
+    const good = { memberId: 'b', sessionRef: 'session-b', nextDueAt: 4_000, lastCheckAt: 1_000,
+      pendingMerged: false, checks: 1, state: 'waiting' };
+    const bad = [
+      ['noop|s', { ...good, memberId: 'noop', sessionRef: 's', pending: { dueAt: 4_000, goalIds: null } }],
+      ['empty|s', { ...good, memberId: 'empty', sessionRef: 's', pending: { dueAt: 4_000, goalIds: [] } }],
+      ['badgoal|s', { ...good, memberId: 'badgoal', sessionRef: 's', pending: { dueAt: 4_000, goalIds: [1] } }],
+      ['badDue|s', { ...good, memberId: 'badDue', sessionRef: 's', pending: { dueAt: -1, goalIds: ['g'] } }],
+      ['badShape|s', { ...good, memberId: 'badShape', sessionRef: 's', pending: 'nope' }],
+      ['badVer|s', { ...good, memberId: 'badVer', sessionRef: 's', pending: { dueAt: 1, goalIds: ['g'], registrationVersion: 0 } }],
+      ['mismatch|other', { ...good, memberId: 'mismatch', sessionRef: 's' }],   // key does not match identity
+    ] as const;
+    for (const [key, value] of bad) db.prepare('INSERT INTO seat_checks(seatKey,data) VALUES(?,?)').run(key, JSON.stringify(value));
+    const listed = store.list();                        // must not throw and must not leak them
+    expect([...listed.keys()]).toEqual(['a|session-a']);
+    expect(store.corruptKeys()).toHaveLength(bad.length);
+    // pendingWakes is what actually throws downstream in the runtime; it must stay safe here.
+    expect(() => pendingWakes(listed)).not.toThrow();
     db.close();
   });
 

@@ -7,6 +7,34 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { seatKey, type SeatRecord } from './seat-checks.js';
 
+/**
+ * A row is only usable when the whole record — including the pending outbox entry — has the
+ * shape the scheduler and the publisher rely on. Checking identity alone is not enough: a
+ * `pending.goalIds` that is not a string array passes a shallow check and then throws in
+ * `pendingWakes()`/`runSeatChecks()` while other seats are being scheduled (p8 7261).
+ */
+function isSeatRecord(value: unknown): value is SeatRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const r = value as SeatRecord;
+  if (typeof r.memberId !== 'string' || !r.memberId) return false;
+  if (typeof r.sessionRef !== 'string' || !r.sessionRef) return false;
+  if (!Number.isSafeInteger(r.nextDueAt) || r.nextDueAt < 0) return false;
+  if (!Number.isSafeInteger(r.checks) || r.checks < 0) return false;
+  if (typeof r.state !== 'string' || !r.state) return false;
+  if (typeof r.pendingMerged !== 'boolean') return false;
+  if (r.lastCheckAt !== undefined && r.lastCheckAt !== null && !Number.isSafeInteger(r.lastCheckAt)) return false;
+  if (r.pending === undefined) return true;
+  const pending = r.pending as { dueAt?: unknown; goalIds?: unknown; adapterId?: unknown; registrationVersion?: unknown } | null;
+  if (!pending || typeof pending !== 'object' || Array.isArray(pending)) return false;
+  if (!Number.isSafeInteger(pending.dueAt) || (pending.dueAt as number) < 0) return false;
+  if (!Array.isArray(pending.goalIds) || pending.goalIds.length === 0) return false;
+  if (pending.goalIds.some(id => typeof id !== 'string' || !id)) return false;
+  if (pending.adapterId !== undefined && (typeof pending.adapterId !== 'string' || !pending.adapterId)) return false;
+  if (pending.registrationVersion !== undefined
+    && (!Number.isSafeInteger(pending.registrationVersion) || (pending.registrationVersion as number) < 1)) return false;
+  return true;
+}
+
 export class SeatCheckStore {
   constructor(private readonly db: DatabaseSync) {
     this.db.exec(`CREATE TABLE IF NOT EXISTS seat_checks(seatKey TEXT PRIMARY KEY, data TEXT NOT NULL);`);
@@ -27,9 +55,7 @@ export class SeatCheckStore {
       let parsed: unknown;
       try { parsed = JSON.parse(String(row.data)); } catch { corrupt.push(row.seatKey); continue; }
       const record = parsed as SeatRecord | null;
-      if (!record || typeof record !== 'object' || Array.isArray(record)
-        || typeof record.memberId !== 'string' || typeof record.sessionRef !== 'string'
-        || !Number.isFinite(record.nextDueAt)) { corrupt.push(row.seatKey); continue; }
+      if (!isSeatRecord(record) || seatKey(record) !== row.seatKey) { corrupt.push(row.seatKey); continue; }
       records.set(row.seatKey, record);
     }
     this.corrupt = corrupt;
