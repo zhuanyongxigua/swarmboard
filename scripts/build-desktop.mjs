@@ -1,10 +1,11 @@
 // Build a relocatable desktop plugin so the host can launch its local MCP server
 // without npm install, a running web server, or access to this source checkout.
 import { build } from 'esbuild';
-import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { buildHarnessModules } from './build-harness-modules.mjs';
+import { dependencyNotices } from './build-notices.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const destination = path.join(root, 'dist/desktop');
@@ -51,23 +52,10 @@ for (const language of ['en', 'zh-CN']) {
   }
 }
 // Preserve dependency license notices without shipping development dependencies or their source trees.
-const packageDirectories = new Set();
-for (const input of [result, ...harnessModules].flatMap(result => Object.keys(result.metafile.inputs))) {
-  const match = input.match(/^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\//);
-  if (match) packageDirectories.add(path.join(root, match[1]));
-}
 // The UI bundle is built separately, so include its direct runtime packages as well.
-for (const name of ['react', 'react-dom', 'scheduler', '@modelcontextprotocol/ext-apps']) {
-  packageDirectories.add(path.join(root, 'node_modules', name));
-}
-const notices = [];
-for (const directory of [...packageDirectories].sort()) {
-  const info = JSON.parse(await readFile(path.join(directory, 'package.json'), 'utf8'));
-  const licenses = (await readdir(directory)).filter(name => /^(licen[sc]e|notice)(\.|$)/i.test(name));
-  const texts = await Promise.all(licenses.map(name => readFile(path.join(directory, name), 'utf8')));
-  notices.push(`${info.name}@${info.version} (${info.license ?? 'see upstream license'})\n${texts.join('\n')}`);
-}
-await writeFile(path.join(destination, 'THIRD_PARTY_NOTICES.txt'), notices.join('\n\n--------------------\n\n') + '\n');
+const notices = await dependencyNotices(root, [result, ...harnessModules].map(result => result.metafile),
+  ['react', 'react-dom', 'scheduler', '@modelcontextprotocol/ext-apps']);
+await writeFile(path.join(destination, 'THIRD_PARTY_NOTICES.txt'), notices);
 const packageInfo = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 await writeFile(path.join(destination, 'BUILD.json'), JSON.stringify({ name: packageInfo.name, version: packageInfo.version, runtime: 'node >=24', transport: 'stdio' }, null, 2) + '\n');
 console.log(`Desktop plugin: ${path.relative(root, destination)}`);
