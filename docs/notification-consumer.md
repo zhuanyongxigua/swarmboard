@@ -33,7 +33,7 @@ interface ConsumerConfig {
 ## 端口
 
 - `TransportPort`：随仓库交付官方实现 `createOfficialWebTransport({fetchImpl?, clientTimeZone?})`，只封装官方本地 `session.list` / `session.prompt`；厂商协议留在 DSH 适配模块，核心不感知。
-- `BoardPort`：由宿主用**既有已绑定的 MCP 通知工具**实现（`notification_pending` / `binding_read` / `context_read` 与任务状态），不要把临时 SQLite 直读当作公开适配器契约；`intentCurrent` 需按 `NotificationService.currentIntent()` 的语义给出（含 pool/organization scope 与目标状态），否则会出现“成员可见但不被唤醒”或“已失效仍唤醒”的偏差。
+- `BoardPort`：由宿主用**既有已绑定的 MCP 通知工具**实现，不要把临时 SQLite 直读当作公开适配器契约：`notification_pending` 返回的未结算投递**已由服务端按 `currentIntent()` 过滤**（scope/状态/代际），因此该端口实现可直接把 `intentCurrent` 视为服务端保证并返回 `{ok:true}`；`binding_read` 供 adapter/版本/启用校验，`context_read` 读取批内条目（含 `SESSION_TASK_CHECK` 指令）。若宿主选择自建 SQL 读取，则必须自行完整镜像 `currentIntent()` 的语义，否则会出现“成员可见但不被唤醒”或“已失效仍唤醒”的偏差。
 
 
 
