@@ -62,6 +62,10 @@ it('detaches startup from Loader.apply, records durable lifecycle and an exact n
   expect(ready).toMatchObject({ configSha256: f.options.configSha256, leaseOwned: true,
     originalSessionMatches: true, permissionDurable: true, notificationConsumed: false, usefulContribution: false,
     preferencesVersion: 1, userPromptVersion: 1, instructionRole: 'user' });
+  const instructions = fs.readFileSync(join(f.config.identity.cwd, 'AGENTS.md'), 'utf8');
+  expect(instructions).toContain(JSON.stringify({ memberId: 'member', sessionRef: 'original', cwd: f.config.identity.cwd, poolId: 'pool', taskIds: ['task'] }));
+  expect(instructions).toContain('not additional execution permission');
+  expect(instructions).toContain('do not create a replacement identity');
   expect(f.ctx.agents.resume).toHaveBeenCalledTimes(1);
   const states = fs.readFileSync(join(f.config.stageDirectory, 'child-state.jsonl'), 'utf8').trim().split('\n').map(x => JSON.parse(x));
   expect(states.at(-1).phase).toBe('ready'); expect(states.every(state => !JSON.stringify(state).includes('original'))).toBe(true);
