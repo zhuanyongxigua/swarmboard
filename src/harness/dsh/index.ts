@@ -17,3 +17,4 @@ export * from './cohort-operator.js';
 export * from './launch-session.js';
 export * from './launch-bootstrap.js';
 export { readDshChildConfig, readDshChildStatus } from './launch-child.js';
+export * from './launcher-member-ports.js';

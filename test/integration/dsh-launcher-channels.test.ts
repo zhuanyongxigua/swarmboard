@@ -8,10 +8,13 @@ import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Store } from '../../src/store.js';
 import { WorkerStore } from '../../src/worker-store.js';
+import { WorkerPool } from '../../src/worker-pool.js';
+import { ExecutionGrants } from '../../src/execution-grants.js';
+import { openDshLauncherMemberPorts, type DshLauncherGoalBinding } from '../../src/harness/dsh/launcher-member-ports.js';
 import { createDshLauncherChannels, readDshLauncherToolResult,
   type DshLauncherChannels, type DshLauncherChannelsOptions } from '../../src/harness/dsh/launcher-channels.js';
 
-let root: string, options: DshLauncherChannelsOptions, taskId: string;
+let root: string, options: DshLauncherChannelsOptions, taskId: string, goalBinding: DshLauncherGoalBinding;
 const channels: DshLauncherChannels[] = [];
 beforeAll(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-launch-channels-')));
@@ -26,7 +29,17 @@ beforeAll(async () => {
     sha256: createHash('sha256').update(readFileSync(file)).digest('hex') },
   runtimeDirectory, boardDatabasePath: join(root, 'board.sqlite') };
   const store = new Store(options.boardDatabasePath);
-  try { taskId = store.createTask({ title: 'Synthetic authorized goal' }).id; }
+  try {
+    taskId = store.createTask({ title: 'Synthetic authorized goal' }).id;
+    const workers = new WorkerStore(options.boardDatabasePath + '.runtime.sqlite');
+    try {
+      const pool = new WorkerPool(workers, store, options.boardDatabasePath).configure({
+        expectedVersion: 0, workspacePath: root, size: 1, maxSize: 1, taskIds: [taskId] });
+      const grant = new ExecutionGrants(store, workers).configure({ taskId, expectedVersion: 0,
+        projectPath: root, executionWorkspace: root, externalHarnesses: ['dsh'], monitoring: true, enabled: true });
+      goalBinding = { taskId, poolId: pool.id, projectPath: grant.projectPath, executionWorkspace: grant.executionWorkspace };
+    } finally { workers.close(); }
+  }
   finally { store.close(); }
 }, 20000);
 afterAll(async () => {
@@ -93,6 +106,31 @@ describe('DSH launcher official channels', () => {
       await host.close();
       expect(workers.owns(token)).toBe(true);
     } finally { workers.release(token); workers.close(); }
+  });
+
+  it('opens the complete member authority through actual stdio and fences a real grant revocation', async () => {
+    const host = createDshLauncherChannels(options); channels.push(host);
+    const management = await host.openManagement();
+    const sessionRef = 'session-00000000-0000-4000-8000-000000000002';
+    const admitted = await management.call('collaborator_configure', { expectedVersion: 0, name: 'Synthetic composed member',
+      harness: 'dsh', sessionRef, taskIds: [taskId], poolId: goalBinding.poolId, enabled: true });
+    const memberId = String(admitted.id), setup = await host.openMember(memberId), adapterId = 'synthetic-composed-channel';
+    await setup.call('notification_register', { id: adapterId, version: 1, displayName: 'Synthetic complete port', harness: 'dsh', enabled: true,
+      capabilities: ['durableDelivery', 'receipt', 'sameSessionContinuation', 'timedReminder'],
+      members: [{ memberId, sessionRef, taskIds: [taskId], boardWide: false }] });
+    expect((await setup.call('notification_binding_read', { adapterId })).binding).toMatchObject({ enabled: true, admissionVersion: 1 });
+    expect(await management.call('task_read', { id: taskId, limit: 1 })).toMatchObject({ id: taskId, status: 'todo' });
+    expect((await management.call('runtime_read')).pool).toMatchObject({ id: goalBinding.poolId, enabled: true });
+    const ports = await openDshLauncherMemberPorts({ channels: host, identity: { memberId, sessionRef, adapterId, cwd: root },
+      boardDatabasePath: options.boardDatabasePath, goalBindings: [goalBinding] });
+    try {
+      expect(await ports.getCurrentBinding()).toMatchObject({ memberId, sessionRef, admissionVersion: 1, registrationVersion: 1 });
+      const store = new Store(options.boardDatabasePath), workers = new WorkerStore(options.boardDatabasePath + '.runtime.sqlite');
+      try { new ExecutionGrants(store, workers).configure({ taskId, expectedVersion: 1, projectPath: root,
+        executionWorkspace: root, externalHarnesses: ['dsh'], monitoring: true, enabled: false }); }
+      finally { workers.close(); store.close(); }
+      expect(await ports.getCurrentBinding()).toBeUndefined();
+    } finally { await ports.close(); await host.close(); }
   });
 
   it('never parses shared attachments or arbitrary error text as the tool result', () => {

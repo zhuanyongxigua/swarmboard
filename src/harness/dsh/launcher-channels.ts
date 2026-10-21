@@ -31,6 +31,7 @@ export interface DshLauncherToolClient {
 }
 export interface DshLauncherMemberClient extends DshLauncherToolClient { mcpConfig: DshLauncherMcpConfig }
 export interface DshLauncherChannels {
+  readonly boardDatabasePath: string;
   openManagement(): Promise<DshLauncherToolClient>;
   openMember(memberId: string): Promise<DshLauncherMemberClient>;
   memberMcpConfig(memberId: string): DshLauncherMcpConfig;
@@ -133,6 +134,7 @@ export function createDshLauncherChannels(input: DshLauncherChannelsOptions): Ds
     return work;
   };
   return {
+    get boardDatabasePath() { return options.boardDatabasePath; },
     openManagement: () => open(),
     openMember: memberId => open(memberId) as Promise<DshLauncherMemberClient>,
     memberMcpConfig: memberId => { ensureOpen(); return mcpConfig(memberId); },
