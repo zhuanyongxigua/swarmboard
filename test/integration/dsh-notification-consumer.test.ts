@@ -213,6 +213,26 @@ describe('DSH driver and durable notification consumption', () => {
     expect(await durable.journal.get(intentKey(batch))).toBeUndefined();
   });
 
+  it.each(['unknown', 'completedUnacked'] as const)(
+    'preserves a legacy %s intent after SQLite reopen without creating a fresh tuple-key attempt', async state => {
+      const f = fixture(); const durable = durableJournal();
+      const ports = { ...f.ports(async () => ({ status: 'completed', turnId: 'must-not-submit' })), journal: durable.journal };
+      const batch = (await ports.pending.list())[0]!;
+      const legacyKey = `${batch.adapterId ?? 'native'}|${batch.memberId}|${batch.sessionRef}|${batch.delivery.sequence}`;
+      await durable.journal.put({ key: legacyKey, state, batch, detail: 'Preserve the unresolved legacy evidence.' });
+      const before = durable.rows();
+      durable.restart();
+      await expect(driveOnce({ ...ports, journal: durable.journal })).rejects.toThrow('LEGACY_INTENT_KEY');
+      expect(f.submits).toBe(0);
+      expect(durable.rows()).toEqual(before);
+      expect((await durable.journal.get(legacyKey))?.state).toBe(state);
+      expect(await durable.journal.get(JSON.stringify([
+        batch.adapterId ?? null, batch.memberId, batch.sessionRef, batch.delivery.sequence,
+      ]))).toBeUndefined();
+      expect(f.service.pending(f.member.id).items).toHaveLength(1);
+    },
+  );
+
   it('retains the submitted snapshot after a host reopen when the delivery grew', async () => {
     const f = fixture(); const durable = durableJournal();
     const ports = { ...f.ports(async () => {
