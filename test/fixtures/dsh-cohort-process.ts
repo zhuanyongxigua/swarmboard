@@ -4,7 +4,6 @@ import path from 'node:path';
 import { runDshCohort } from '../../src/harness/dsh/cohort.js';
 
 const [directory, mode] = process.argv.slice(2);
-try {
 const result = await runDshCohort({ cohortKey: 'process-test', stateDirectory: directory, count: 1, configuration: {} }, {
   preflight: async () => undefined,
   execute: async stage => {
@@ -18,7 +17,4 @@ const result = await runDshCohort({ cohortKey: 'process-test', stateDirectory: d
   },
 });
 process.send?.({ type: 'result', result });
-} catch {
-  process.send?.({ type: 'receipt-failed' });
-}
 process.disconnect?.();

@@ -74,7 +74,7 @@ function requestSnapshot(request: DshCohortRequest): DshCohortRequest {
   if (!path.isAbsolute(snapshot.stateDirectory) || realpathSync(snapshot.stateDirectory) !== snapshot.stateDirectory
     || !lstatSync(snapshot.stateDirectory).isDirectory()) fail('DSH_COHORT_CANONICAL_DIRECTORY_REQUIRED');
   if (snapshot.sessionRefs && (snapshot.sessionRefs.length !== snapshot.count || new Set(snapshot.sessionRefs).size !== snapshot.count
-    || snapshot.sessionRefs.some(ref => !/^session-[0-9a-f-]{36}$/.test(ref)))) fail('DSH_COHORT_SESSION_REFS_REQUIRED');
+    || snapshot.sessionRefs.some(ref => !/^[A-Za-z0-9][A-Za-z0-9_-]{0,255}$/.test(ref)))) fail('DSH_COHORT_SESSION_REFS_REQUIRED');
   return snapshot;
 }
 function hash(request: DshCohortRequest): string {
@@ -93,7 +93,7 @@ function load(request: DshCohortRequest): State | null {
     || state.configurationSha256 !== hash(request) || state.seats?.length !== request.count) fail('DSH_COHORT_CONFIG_CONFLICT');
   const sessions = new Set<string>();
   for (const [index, seat] of state.seats.entries()) {
-    if (seat.key !== `seat-${index + 1}` || !/^session-[0-9a-f-]{36}$/.test(seat.sessionRef)
+    if (seat.key !== `seat-${index + 1}` || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,255}$/.test(seat.sessionRef)
       || sessions.has(seat.sessionRef) || !Array.isArray(seat.attempts) || seat.attempts.length > DSH_COHORT_STAGES.length) fail('DSH_COHORT_CORRUPT');
     sessions.add(seat.sessionRef);
     for (const [step, attempt] of seat.attempts.entries()) {
@@ -177,11 +177,12 @@ export async function runDshCohort(input: DshCohortRequest, ports: DshCohortPort
         const attempt: Attempt = { stage, operationId: randomUUID(), state: 'intent' };
         seat.attempts.push(attempt);
         save(request, state);
-        let receipt: DshLaunchRecord;
-        try { receipt = await ports.execute(stage, context(seat)); }
+        let snapshot: DshLaunchRecord;
+        try {
+          snapshot = copy(await ports.execute(stage, context(seat)));
+          if (!snapshot || Array.isArray(snapshot) || typeof snapshot !== 'object') fail('DSH_COHORT_INVALID_RECEIPT');
+        }
         catch { break; } // Preserve the durable intent, even for an apparent transport failure.
-        const snapshot = copy(receipt);
-        if (!snapshot || Array.isArray(snapshot) || typeof snapshot !== 'object') fail('DSH_COHORT_INVALID_RECEIPT');
         attempt.receipt = snapshot;
         attempt.state = 'confirmed';
         save(request, state);

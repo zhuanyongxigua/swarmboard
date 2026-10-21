@@ -56,7 +56,7 @@ test('a missing receipt after a successful effect cannot become a new attempt', 
   const { request, ports } = fixture(1);
   let effects = 0;
   ports.execute = async () => { effects++; return { invalid: undefined } as never; };
-  await expect(runDshCohort(request, ports)).rejects.toThrow('DSH_COHORT_INVALID_JSON');
+  expect((await runDshCohort(request, ports)).seats[0].phase).toBe('reconcile-required');
   expect(inspectDshCohort(request).seats[0].phase).toBe('reconcile-required');
   await runDshCohort(request, ports);
   expect(effects).toBe(1);

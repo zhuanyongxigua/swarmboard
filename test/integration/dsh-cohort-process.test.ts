@@ -51,7 +51,7 @@ test('a new process preserves the old effect when its receipt could not be commi
   const directory = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'dsh-process-loss-')));
   roots.push(directory);
   const first = child(directory, 'receipt-loss');
-  await message(first, 'receipt-failed');
+  expect((await message(first, 'result')).result.seats[0].phase).toBe('reconcile-required');
   const second = child(directory, 'normal');
   expect((await message(second, 'result')).result.seats[0].phase).toBe('reconcile-required');
   expect(readFileSync(path.join(directory, 'effects.jsonl'), 'utf8').trim().split('\n')).toHaveLength(1);
