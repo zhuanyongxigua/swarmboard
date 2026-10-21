@@ -31,6 +31,8 @@ const send = (value: unknown) => process.send?.(value);
 const wait = (key: string) => new Promise<void>(resolve => { waiting.set(key, resolve); });
 const runtime = new EventRuntime(board, { notificationBatchMs: Number(process.env.SWARMBOARD_TEST_BATCH_MS ?? 0),
   databasePath, serverEntry: 'never-start-a-real-model', keepAlive: true, fallbackMs: 100, debounceMs: 5,
+  // The process-recovery cases pin the legacy global reminder contract: opt in.
+  sessionCheckMs: 0,
   now: process.env.SWARMBOARD_TEST_BATCH_MS ? () => Date.now() : () => now, idleMs: process.env.SWARMBOARD_TEST_BATCH_MS ? 60000 : 100,
   pipelineReader: async watch => ({ sha: watch.sha, status: 'success' }),
   adapter: worker => ({
