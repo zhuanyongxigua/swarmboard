@@ -11,6 +11,8 @@ import { workerPrompt } from './worker-prompt.js';
 import { boardInstructions } from './board-instructions.js';
 import { WorkerPool } from './worker-pool.js';
 import { PoolLiveness } from './pool-liveness.js';
+import { SeatCheckStore } from './seat-check-store.js';
+import { tick as tickSeatChecks, seatKey, type SeatRecord, type SeatSnapshot, type SeatCheckWake } from './seat-checks.js';
 import { createNotificationDispatcher } from './notification-dispatch.js';
 import { PipelineEvents, type PipelineReader } from './pipeline-events.js';
 import { ExecutionGrants } from './execution-grants.js';
@@ -24,6 +26,12 @@ export interface RuntimeOptions extends NotificationOptions, WakePolicyOptions {
   backend?: HarnessBackend;
   fallbackMs?: number; debounceMs?: number; keepAlive?: boolean; autoPool?: boolean;
   now?: () => number; idleMs?: number;
+  /**
+   * Per-session five-minute task checks (human plan 2026-10-21). Defaults to five
+   * minutes; `0` disables them and restores the legacy global idle reminder.
+   * When enabled, the global reminder is not constructed at all.
+   */
+  sessionCheckMs?: number;
   pipelineReader?: PipelineReader;
   /** Host-control surface only: never watch, claim ownership, scan or deliver,
    *  so a management process can expose host tools beside a live owner. */
@@ -35,7 +43,8 @@ export class EventRuntime {
   readonly ci: PipelineEvents;
   readonly grants: ExecutionGrants;
   readonly collaborators: CollaboratorStore;
-  private liveness: PoolLiveness;
+  private liveness?: PoolLiveness;
+  private seatChecks?: { store: SeatCheckStore; intervalMs: number };
   private notificationDispatcher: ReturnType<typeof createNotificationDispatcher>;
   private scanning?: Promise<void>;
   private token = randomUUID();
@@ -67,8 +76,15 @@ export class EventRuntime {
     // Reminders are also offered to registered notification channels as durable
     // intents; the core never delivers or starts anything itself.
     this.notificationDispatcher = createNotificationDispatcher(board, this.collaborators);
-    this.liveness = new PoolLiveness(board, this.workers, options.idleMs ?? 5 * 60 * 1000,
-      entry => { this.notificationDispatcher.dispatch(entry); });
+    const sessionCheckMs = options.sessionCheckMs ?? 5 * 60 * 1000;
+    if (sessionCheckMs > 0) {
+      // Per-session checks replace the global reminder; constructing the legacy
+      // watchdog as well would be a second periodic wakeup for the same seat.
+      this.seatChecks = { store: new SeatCheckStore(this.workers.db), intervalMs: sessionCheckMs };
+    } else {
+      this.liveness = new PoolLiveness(board, this.workers, options.idleMs ?? 5 * 60 * 1000,
+        entry => { this.notificationDispatcher.dispatch(entry); });
+    }
     this.ci = new PipelineEvents(board, this.workers, options.pipelineReader, options.now, () => !this.closed && this.workers.owns(this.token));
   }
   start() {
@@ -123,8 +139,80 @@ export class EventRuntime {
     this.debounce = setTimeout(() => { this.debounce = undefined; void this.scan().catch(() => { this.lastError = 'Unable to read runtime state; next recovery scan will retry'; }); }, this.options.debounceMs ?? 50);
     this.debounce.unref();
   }
+  /**
+   * One per-session check pass (human plan 2026-10-21). Seats come from the active
+   * pool plus every enabled registered channel that declares durableDelivery.
+   * Records are persisted before any entry is produced, so a crash re-emits rather
+   * than loses a check, and a repeated scan cannot emit the same dueAt twice.
+   */
+  private runSeatChecks(pool: ReturnType<WorkerStore['pool']>, now: number) {
+    const seatChecks = this.seatChecks;
+    if (!seatChecks) return;
+    const seats: SeatSnapshot[] = [];
+    for (const memberId of pool?.memberIds ?? []) {
+      const worker = this.workers.get(memberId);
+      if (!worker?.enabled) continue;
+      // Native seats are identified by their worker id and the backend thread it
+      // currently owns; a rebind changes threadId, which must not resume silently.
+      seats.push({ memberId, sessionRef: worker.threadId ?? `worker:${worker.id}`, active: worker.status !== 'error',
+        busy: ['running', 'uncertain'].includes(worker.status) });
+    }
+    for (const adapter of this.notificationDispatcher.adapters()) {
+      if (!adapter.enabled || !adapter.capabilities.includes('durableDelivery')) continue;
+      for (const member of adapter.members) {
+        seats.push({ memberId: member.memberId, sessionRef: member.sessionRef, active: true, busy: false,
+          adapterId: adapter.id, registrationVersion: adapter.version });
+      }
+    }
+    const result = tickSeatChecks({
+      now, organizationActive: !!pool?.enabled && pool.state === 'active',
+      seats, goals: this.board.taskStates(), records: seatChecks.store.list(), intervalMs: seatChecks.intervalMs,
+    });
+    // Persist first: the wakeups below are only safe if the schedule moved.
+    seatChecks.store.save(result.records);
+    for (const wake of result.wake) this.publishSeatCheck(wake, pool);
+  }
+
+  /** Produce one directed SESSION_TASK_CHECK entry; the dispatcher decides delivery. */
+  private publishSeatCheck(wake: SeatCheckWake, pool: ReturnType<WorkerStore['pool']>) {
+    const agentId = 'runtime-' + (pool?.id ?? 'session-checks');
+    if (!this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(agentId)) {
+      this.board.registerAgent({ agentId, name: 'Swarmboard runtime' });
+    }
+    const entry = this.board.publishSystemEntryOnce({
+      agentId,
+      kind: 'MESSAGE',
+      summary: 'SESSION_TASK_CHECK: review your authorized goals and continue useful work',
+      detail: JSON.stringify({
+        kind: 'SESSION_TASK_CHECK',
+        memberId: wake.memberId, sessionRef: wake.sessionRef, dueAt: wake.dueAt, goalIds: wake.goalIds,
+        ...(wake.adapterId ? { adapterId: wake.adapterId } : {}),
+        ...(wake.registrationVersion !== undefined ? { registrationVersion: wake.registrationVersion } : {}),
+        discovery: 'Use task_list to discover the current goals in your scope; this list is a bounded sample.',
+        instruction: 'INTERNAL_ONLY. Review the authorized task list. If any goal is unclaimed, in progress or awaiting review, continue useful work with peers; after finishing a contribution, look again. Blocked, done and canceled goals need no action. If you are truly blocked on a human decision or permission, state the precise blocker. Do not merely acknowledge this message, poll, invent success, launch external harnesses or create tasks. Do not reply to the runtime identity.',
+      }),
+      ...(wake.memberId ? { recipientId: wake.memberId } : {}),
+    });
+    this.notificationDispatcher.dispatch(entry);
+  }
+
   status() {
-    const activity = this.liveness.activity(this.workers.pool());
+    const activity = this.liveness
+      ? this.liveness.activity(this.workers.pool())
+      : (() => {
+          // Per-session checks own the "wakeup" decision now; the legacy watchdog
+          // is only reported as inactive so status consumers keep the same shape.
+          const peers = this.workers.pool()?.memberIds.map(id => this.workers.get(id)) ?? this.workers.list();
+          return {
+            members: peers.length,
+            draining: peers.filter(w => w.retirement?.state === 'draining').length,
+            running: peers.filter(w => w.status === 'running').length,
+            idle: peers.filter(w => w.enabled && w.status === 'idle').length,
+            state: 'idle' as const,
+            executionMode: 'internal-only' as const,
+            watchdog: { state: 'inactive' as const, attempts: 0, nextWakeAt: null },
+          };
+        })();
     if (activity.state === 'idle' && this.ci.hasPending()) activity.state = 'waiting';
     return { mode: this.options.managementOnly ? 'management' as const : 'events' as const,
       backend: { id: this.backend.id, displayName: this.backend.displayName, deterministic: this.backend.deterministic === true, capabilities: this.backend.capabilities },
@@ -259,7 +347,9 @@ export class EventRuntime {
     // suppress recovery.
     const dispatchable = new Set(pool?.memberIds.filter(id => { const member = this.workers.get(id); return member.enabled && member.status === 'idle'; }) ?? []);
     const pending = busy || !!pool?.memberIds.some(id => { if (!dispatchable.has(id)) return false; const batch = this.batch(this.workers.get(id)); return batch.events.length > 0 || batch.hasMore; });
-    this.liveness.sync(pool, this.options.now?.() ?? Date.now(), pending, this.ci.list().filter(w => w.state === 'watching').map(w => w.taskId));
+    const now = this.options.now?.() ?? Date.now();
+    this.liveness?.sync(pool, now, pending, this.ci.list().filter(w => w.state === 'watching').map(w => w.taskId));
+    if (this.seatChecks) this.runSeatChecks(pool, now);
     // Ordinary task/shared events reach registered channels through the same
     // dispatcher as reminders. No channels registered means no extra work.
     this.notificationDispatcher.dispatchPending();

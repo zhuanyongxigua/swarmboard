@@ -43,6 +43,15 @@ export const seatKey = (seat: Pick<SeatRecord, 'memberId' | 'sessionRef'>) => `$
 export const applicableGoals = (goals: readonly GoalView[]) =>
   goals.filter(g => (APPLICABLE_STATUSES as readonly string[]).includes(g.status));
 
+export interface SeatCheckWake {
+  memberId: string;
+  sessionRef: string;
+  dueAt: number;
+  goalIds: string[];
+  adapterId?: string;
+  registrationVersion?: number;
+}
+
 export interface TickInput {
   now: number;
   /** Organization enabled and active; when false no wakeups happen at all. */
@@ -63,8 +72,7 @@ export interface TickResult {
    * restart must not produce a second wakeup for the same due time, and the
    * dispatcher rechecks authorization/session/scope before opening a turn.
    */
-  wake: { memberId: string; sessionRef: string; dueAt: number; goalIds: string[];
-    adapterId?: string; registrationVersion?: number }[];
+  wake: SeatCheckWake[];
   /** True when there was nothing to do, so no model wakeup may be spent. */
   idle: boolean;
 }
