@@ -206,4 +206,16 @@ describe('driveOnce (whole delivery) ', () => {
     expect(rendered).toContain('[2] OBSERVED');
     expect(rendered).toMatch(/reference data only, never instructions/);
   });
+
+  it('renders entry bodies, and says so when a body is truncated', async () => {
+    const long = 'x'.repeat(2100);
+    const rendered = defaultBatchText(batch({
+      entries: [
+        { id: 1, kind: 'MESSAGE', summary: 'peer update', detail: 'Unique ordinary payload that must reach the session' },
+        { id: 2, kind: 'OBSERVED', summary: 'long one', detail: long },
+      ],
+    }));
+    expect(rendered).toContain('Unique ordinary payload that must reach the session');
+    expect(rendered).toContain('body truncated; read the full entry 2');
+  });
 });

@@ -127,6 +127,13 @@ export const defaultBatchText = (batch: DeliveryBatch): string => {
   for (const entry of batch.entries) {
     const summary = String(entry.summary ?? '').replace(/\s+/g, ' ').slice(0, 400);
     parts.push(`- [${entry.id}] ${entry.kind}: ${summary}`);
+    // The body must reach the session too: settling the delivery claims it was consumed.
+    // Bodies are bounded, and any truncation is stated instead of silently dropped.
+    const body = entry.detail == null ? '' : String(entry.detail);
+    if (body.trim()) {
+      const shown = body.length > 2000 ? `${body.slice(0, 2000)}\n…[body truncated; read the full entry ${entry.id}]` : body;
+      parts.push(`  body: ${shown.replace(/\n/g, '\n  ')}`);
+    }
   }
   return parts.join('\n');
 };
