@@ -17,7 +17,7 @@ it('loads the shipped DSH module independently of the core and source checkout',
     const names = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e',
       'console.log(JSON.stringify(Object.keys(await import(process.argv[1]))))', moduleUrl],
     { cwd: root, encoding: 'utf8' })) as string[];
-    expect(names).toEqual(expect.arrayContaining(['DshLifecycle', 'renderInstructions', 'createDshInstructionBoundary', 'createDshSdkFacade', 'createDshSdkSessionPort']));
+    expect(names).toEqual(expect.arrayContaining(['DshLifecycle', 'renderInstructions', 'createDshInstructionBoundary', 'createDshSdkFacade', 'createDshSdkSessionPort', 'driveOnce', 'createDshJournals']));
     const core = readFileSync(join(unpacked, 'server/swarmboard.mjs'), 'utf8');
     expect(core).not.toContain('DSH_RECONCILIATION_REQUIRED');
     expect(core).not.toContain('DSH_INVALID_SDK_CONFIG');

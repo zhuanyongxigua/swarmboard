@@ -171,7 +171,7 @@ class DshSession implements SessionAdapter {
 
 源码中的独立模块必须显式提供 `src/harness/<module>/index.ts` 公共入口；桌面构建将这些受信仓库入口分别打包为 `server/harness/<module>/index.mjs`，不把它们导入主服务。辅助目录没有入口则不导出。公共入口导入时不得注册、启动或执行真实会话，具体启用由受信宿主显式调用。构建拒绝模块中的绝对路径 import，以及 realpath 解析后逃出源码根的输入；宿主的个人 SDK 和配置在运行组合时传入，不以本机路径打进便携包。模块自己的依赖许可与主服务一起进入 `THIRD_PARTY_NOTICES.txt`；个人 SDK 安装、认证、运行目录和配置不随包复制。
 
-DSH 的入口导出指令、生命周期、SDK 组合和会话发送边界，供已经授权的宿主显式 import 后组合。导出不等于注册、启用或启动，不提供任务文本加载本地模块的接口，也不恢复暂停的 harness。第三方可按相同目录入口约定交付独立模块，无需在构建脚本增加厂商分支。源码构建仍通过 TypeScript 输出对应模块；桌面 ZIP 的独立 bundle 可从与源码无关的目录加载。
+DSH 的入口导出指令、生命周期、SDK 组合、会话发送、整批通知驱动和耐久 journal 边界，供已经授权的宿主显式 import 后组合。导出不等于注册、启用或启动，不提供任务文本加载本地模块的接口，也不恢复暂停的 harness。第三方可按相同目录入口约定交付独立模块，无需在构建脚本增加厂商分支。源码构建仍通过 TypeScript 输出对应模块；桌面 ZIP 的独立 bundle 可从与源码无关的目录加载。
 
 `test/unit/desktop-harness-modules.test.ts` 验证任意名合成模块打包后脱离源码加载、不执行构建期模块代码；`test/mcp/desktop-harness.test.ts` 对实际 ZIP 解包后加载 DSH 导出，并确认主服务没有嵌入这些实现。上述检查不连接官方宿主或模型，不能当作真实启用与迁移验收。
 
@@ -207,6 +207,16 @@ DSH 的入口导出指令、生命周期、SDK 组合和会话发送边界，供
 `settlement` 核对同批次、同消息 ID／输入摘要的 `user/message` 位于某个已打开 turn，且该 turn 的 `turn/end.reason.kind === 'completed'`，并再次 checkpoint 和复核绑定。旧 turn、其他消息、排队记录、一次 idle、`whenIdle()`、取消／错误／中断／blocked／max-tokens 均不计成功完成。宿主重建 helper 可从保留的原 session 日志恢复证据；driver 的 submitting/unknown 仍必须先对账，不能因 helper 有稳定 ID 擅自重发。回执与未知投递处理仍由原通知服务和耐久 driver journal 负责。
 
 合成测试覆盖官方发送参数、消息与 turn 的因果关联、撤销窗口、checkpoint 故障、重建与防重；本机公开 SDK 类型另行核对兼容性。它们不启动模型，不证明当前个人宿主已经装配、租约实现已经验证、四席已迁移或产生了真实有用贡献。
+
+### 整批通知驱动与耐久 journal 组合
+
+`driveOnce({ pending, session, journal })` 只处理通知服务提供的完整 delivery 快照。受信宿主提供 PendingPort，保留 adapter、成员、原 session、sequence、全部 entryIds 及对应条目；普通更新和周期检查共用该批次，不能逐条检查却确认整个批次。默认文本包含每个条目的摘要和正文，截断时明确标记并给出完整条目的读取 ID；条目始终是参考数据，不升级为指令。
+
+驱动在提交前写耐久意图，再次核当前绑定；忙碌则保留批次而不提交。`enqueued` 只表示入队，必须保存 SDK 返回的不透明证据 token，随后通过 `settlement` 验证本批次对应的权威完成。完成后回执失败只重试原批次快照，不扩大 echo 到迟到条目，也不重新提交已经消费的事件。正常迟到合批还必须允许未消费的新条目继续推进；这项接续验收与“不误确认”的检查分别记录。未知发送和中断的 submitting 保留对账，不自动重放或清空。
+
+`createDshJournals<DeliveryBatch>({ db, sessionId })` 将同一宿主 SQLite sidecar 适配为生命周期 journal 和通知 journal。调用方使用持久文件，保留原数据库的生命周期、同步持久配置和跨进程单写租约；模块不另建 timer 或进程。写意图在返回前必须提交，不能借调用方尚未提交的事务冒充耐久成功。已存在而无法解码的意图必须抛错并保留证据；只有确实无记录时才返回缺失，避免把 unknown 当新请求重放。
+
+受信宿主显式组合 SDK facade、生命周期、SDK SessionPort、耐久 journal 与整批 driver，同时提供当前 NotificationService 的读取／精确回执端口和当前授权／租约检查。真实 SDK 的 SessionStore、身份、认证、模型、权限、启停、DB 路径及原会话迁移都留在宿主配置。导入这些模块不创建会话、不触发模型、不注册通知，也不恢复暂停的 harness。
 
 | 证据 | 位置 | 证明/不证明 |
 | --- | --- | --- |
