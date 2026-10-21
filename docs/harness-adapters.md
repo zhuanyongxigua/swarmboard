@@ -237,3 +237,31 @@ DSH 的入口导出指令、生命周期、SDK 组合、会话发送、整批通
 `createDshHostRunner` 把已有通知和 SDK 回合事件串到 `driveOnce`，不新增轮询定时器。并发事件合并为下一趟 pass，所有 pass 共用已持有的租约；异步读取后重新核所有权，SDK `isAuthorized` 仍须在实际发送点同步检查 `lease.owns()`。`stop()` 停止准入并等待在途 pass，只有宿主提供的 `canRelease()` 确认原 agent 空闲、inbox 无待执行消息且没有在途连接变更时才释放；忙碌时返回 `DSH_HOST_NOT_QUIESCENT` 并保留所有权。停止不 dispose 原 agent、不删除 journal，也不确认尚未完成的 delivery。
 
 受信宿主可从 `server/harness/protocol/index.mjs` 导入 `workerProtocol()`，取得与原生 worker 逐字相同的协议文本，再计算 SHA-256 注入指令 boundary；无需加载核心服务、依赖源码目录或手工复制旧协议。此通用入口只导出既有函数，不包含个人配置或具体厂商实现。
+### 官方 SDK 插件入口
+
+`src/harness/dsh/sdk-plugin.ts` 的 `createDshSdkPlugin` 把既有模块装配为官方 Cordis object plugin。受信宿主注入稳定成员／原 session／cwd、显式 `mode`、官方 `SessionId`／`MessageId` 构造、SDK create/resume options、持久 sidecar DB、单写 lease、整批 PendingPort、同步当前授权函数、指令准备函数、既有唤醒订阅及 runner factory。没有默认模型、权限、身份、目录、定时器或启动模式；任务文本不参与选择模块或配置。
+
+宿主自己的受信插件文件可使用官方加载器导出以下形状（`privateOptions` 来自宿主配置，不能从任务内容构造）：
+
+```ts
+import { SessionId } from '@deepseek-ai/dsh-session';
+import { MessageId } from '@deepseek-ai/dsh-llm';
+
+const entry = createDshSdkPlugin({
+  ...privateOptions,
+  sdkSessionId: SessionId,
+  messageId: MessageId,
+  createRunner: createDshHostRunner,
+});
+export const { name, inject, apply } = entry.plugin;
+```
+
+`createDshSdkPlugin` 与 `createDshHostRunner` 由受信宿主从已核验的适配模块导入。保留原官方 overlay、指令插件、setup、模型和权限配置，不用一个最小 `plugins` 对象替换原宿主配置。`prepareInstructions` 显式接入既有 `createDshInstructionBoundary(...).prepare()`，返回后原官方指令插件按既有工作区加载；入口不伪造 system/developer 消息，不在包内保存个人路径或内容。
+
+`apply(ctx)` 是唯一启动边界：先取得 lease，再准备指令并重核 lease，然后以显式模式连接原 session，组合 `ctx.agents`、`ctx.sessions.flush(agent.session)`、SDK SessionPort、耐久 journal 和 runner。缺失的 attach 目标不会降级 create/resume；连接异常保留生命周期意图及返回的完整 handle，不自动重试。`ready()` 让宿主观察初始化及首个 pass 的错误；`ownedHandles()` 保留所有权供人工对账，不自动 dispose。
+
+入口订阅官方 `agent/status` 的原对象 idle 转换、同 session 的 `turn/end`，以及宿主显式提供的既有 `subscribeWake`。这些事件只触发本地合并后的 runner pass；`turn/end` 不是直接确认依据，确认仍由 SDK SessionPort 验证本 delivery 的消息、回合和耐久 checkpoint。其他 session 的事件不触发 pass，忙时突发通知合并为一次后续检查。没有新增轮询、五分钟计时链、守护进程或 session。
+
+Cordis 正式插件的 `apply` 返回异步 cleanup effect，不依赖不存在的 ready/dispose 事件。卸载先同步关闭发送授权，再取消本地订阅并等待初始化和 pass；runner 的 `canRelease` 只有在原 registry 对象仍一致、idle 且 inbox 为空时才允许释放 lease。忙碌、初始化未决或失败时保留 lease／意图／handle，要求对账；不能通过卸载强杀原会话或清 unknown。忙碌退出拒绝后，可由宿主在明确的安全空闲边界再次调用 cleanup，不自动等待定时器或重放连接。
+
+定向测试使用合成 SDK 服务和 SQLite 验证该装配；本机公开 SDK 类型及 Cordis 插件加载另作无模型兼容检查。它们不证明个人配置已安装、宿主已安全迁移或真实四席已经消费通知并继续贡献。
