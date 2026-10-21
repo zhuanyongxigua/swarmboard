@@ -187,7 +187,10 @@ export class EventRuntime {
       // dispatch), which must NOT suppress the per-session checks: the human plan
       // explicitly keeps reviewing goals in scope. Only a stopped/terminal
       // organization disables them.
-      now, organizationActive: !!pool?.enabled && !TERMINAL_POOL_STATES.includes(pool.state),
+      now,
+      organizationActive: pool
+        ? !!pool.enabled && !TERMINAL_POOL_STATES.includes(pool.state)
+        : this.notificationDispatcher.adapters().some(adapter => adapter.enabled),
       seats, goals: this.board.taskStates(), records, intervalMs: seatChecks.intervalMs,
     });
     // Persist first, including the pending outbox entry, before anything is published.
@@ -203,6 +206,11 @@ export class EventRuntime {
     const agentId = 'runtime-' + (pool?.id ?? 'session-checks');
     if (!this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(agentId)) {
       this.board.registerAgent({ agentId, name: 'Swarmboard runtime' });
+    }
+    // A directed entry needs its recipient to exist as a board identity; register
+    // the seat once (idempotent) instead of failing the publish.
+    if (!this.board.db.prepare('SELECT id FROM agents WHERE id=?').get(wake.memberId)) {
+      this.board.registerAgent({ agentId: wake.memberId, name: wake.memberId });
     }
     const entry = this.board.publishSystemEntryOnce({
       agentId,
@@ -358,6 +366,9 @@ export class EventRuntime {
       } catch {
         this.lastError = 'Unable to dispatch notifications; next scan will retry';
       }
+      // A worker-only organization still has registered external seats, and those
+      // sessions need their own five-minute checks (human plan 2026-10-21).
+      if (this.seatChecks) this.runSeatChecks(this.workers.pool(), this.options.now?.() ?? Date.now());
       return;
     }
     clearTimeout(this.batchWake); this.nextBatchWakeAt = null;

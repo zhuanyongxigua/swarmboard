@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../../src/store.js';
 import { EventRuntime } from '../../src/event-runtime.js';
+import { NotificationAdapterStore } from '../../src/notification-adapter-store.js';
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => { for (const fn of cleanups.splice(0).reverse()) await fn(); });
@@ -74,23 +75,31 @@ describe('per-session five-minute checks (runtime wiring)', () => {
     expect(after).toBeGreaterThan(before);
   });
 
-  it('still scans cleanly when the organization has no native workers', async () => {
-    // The pure-external path used to return before the per-session checks ran; this
-    // pins that the early-return branch now runs the checks and stays inert when no
-    // seats exist. Real registered-adapter coverage lives in the integration suites
-    // written by the reviewers that host notification channels.
-    const dir = mkdtempSync(join(tmpdir(), 'swarmboard-session-check-empty-'));
+  it('gives a registered external seat its check with no native workers at all', async () => {
+    // No configurePool and no workers: this is the branch that used to return before
+    // the per-session checks ran. The channel is registered the same way the MCP
+    // notification_register tool registers it.
+    const dir = mkdtempSync(join(tmpdir(), 'swarmboard-session-check-ext-'));
     const path = join(dir, 'board.sqlite');
     const board = new Store(path);
     let now = 1_000_000;
     const runtime = new EventRuntime(board, { notificationBatchMs: 0, databasePath: path, serverEntry: 'unused',
       now: () => now, sessionCheckMs: 60_000 });
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }), () => board.close(), async () => { await runtime.close(); });
-    board.createTask({ title: 'Human goal' });
-    await runtime.scan();                    // must not throw on the empty organization
+    const goal = board.createTask({ title: 'Human goal' });
+    new NotificationAdapterStore(board.db).save({ id: 'adapter-synthetic', version: 1,
+      displayName: 'Synthetic external channel', harness: 'synthetic', enabled: true,
+      capabilities: ['durableDelivery'],
+      members: [{ memberId: 'external-1', sessionRef: 'external-session-1', taskIds: [goal.id] }] });
+    await runtime.scan();                       // anchor
     now += 60_000;
     await runtime.scan();
-    expect(board.board().entries.filter(e => e.summary.startsWith('SESSION_TASK_CHECK:'))).toHaveLength(0);
+    const published = board.board().entries.filter(e => e.summary.startsWith('SESSION_TASK_CHECK:'));
+    expect(published.length).toBeGreaterThan(0);
+    const detail = JSON.parse(published[0]!.detail!) as { memberId: string; sessionRef: string; adapterId?: string };
+    expect(detail.memberId).toBe('external-1');
+    expect(detail.sessionRef).toBe('external-session-1');
+    expect(detail.adapterId).toBe('adapter-synthetic');
   });
 
   it('survives a restart without losing the due check', async () => {
