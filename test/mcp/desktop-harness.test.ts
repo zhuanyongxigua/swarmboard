@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect, it } from 'vitest';
+import { workerProtocol } from '../../src/worker-prompt.js';
 
 it('loads the shipped DSH module independently of the core and source checkout', () => {
   const version = (JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as {version: string}).version;
@@ -17,7 +18,12 @@ it('loads the shipped DSH module independently of the core and source checkout',
     const names = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e',
       'console.log(JSON.stringify(Object.keys(await import(process.argv[1]))))', moduleUrl],
     { cwd: root, encoding: 'utf8' })) as string[];
-    expect(names).toEqual(expect.arrayContaining(['DshLifecycle', 'renderInstructions', 'createDshInstructionBoundary', 'createDshSdkFacade', 'createDshSdkSessionPort', 'driveOnce', 'createDshJournals']));
+    expect(names).toEqual(expect.arrayContaining(['DshLifecycle', 'renderInstructions', 'createDshInstructionBoundary', 'createDshSdkFacade', 'createDshSdkSessionPort', 'driveOnce', 'createDshJournals', 'createDshHostLease', 'createDshHostRunner']));
+    const protocolUrl = pathToFileURL(join(unpacked, 'server/harness/protocol/index.mjs')).href;
+    const protocol = execFileSync(process.execPath, ['--input-type=module', '-e',
+      'process.stdout.write((await import(process.argv[1])).workerProtocol())', protocolUrl],
+    { cwd: root, encoding: 'utf8' });
+    expect(protocol).toBe(workerProtocol());
     const core = readFileSync(join(unpacked, 'server/swarmboard.mjs'), 'utf8');
     expect(core).not.toContain('DSH_RECONCILIATION_REQUIRED');
     expect(core).not.toContain('DSH_INVALID_SDK_CONFIG');

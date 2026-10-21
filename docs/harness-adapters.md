@@ -235,3 +235,5 @@ DSH 的入口导出指令、生命周期、SDK 组合、会话发送、整批通
 `createDshHostLease` 在宿主自己的 SQLite sidecar 中按实际 `sessionRef` 保持唯一所有者；不同成员或通道别名不能绕过同一会话锁。锁不按经过时间过期、不自动接管崩溃所有者。发现旧锁时须由现场操作者先核原进程、SDK 会话及未决意图，再安全恢复；禁止删锁后重放 unknown。各进程必须使用同一 sidecar，官方 SDK 自身的会话写锁仍保留。
 
 `createDshHostRunner` 把已有通知和 SDK 回合事件串到 `driveOnce`，不新增轮询定时器。并发事件合并为下一趟 pass，所有 pass 共用已持有的租约；异步读取后重新核所有权，SDK `isAuthorized` 仍须在实际发送点同步检查 `lease.owns()`。`stop()` 停止准入并等待在途 pass，只有宿主提供的 `canRelease()` 确认原 agent 空闲、inbox 无待执行消息且没有在途连接变更时才释放；忙碌时返回 `DSH_HOST_NOT_QUIESCENT` 并保留所有权。停止不 dispose 原 agent、不删除 journal，也不确认尚未完成的 delivery。
+
+受信宿主可从 `server/harness/protocol/index.mjs` 导入 `workerProtocol()`，取得与原生 worker 逐字相同的协议文本，再计算 SHA-256 注入指令 boundary；无需加载核心服务、依赖源码目录或手工复制旧协议。此通用入口只导出既有函数，不包含个人配置或具体厂商实现。
