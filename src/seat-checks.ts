@@ -142,6 +142,10 @@ export function tick(input: TickInput): TickResult {
 
     if (!seat.active) {
       // Paused/revoked/stopped seats keep their record but never accumulate due time.
+      // This is also the invariant behind the `worker:<id>` sessionRef fallback: the
+      // runtime only marks a native seat active once its thread exists, so an
+      // unopened seat never reaches the wake path (608 7092 / p2 7076). If that
+      // precondition is ever relaxed, publish and consume must agree on the fallback.
       if (!existing || next.state !== 'stopped' || next.pendingMerged) {
         next = { ...next, state: 'stopped', pendingMerged: false };
         changed.push(next);

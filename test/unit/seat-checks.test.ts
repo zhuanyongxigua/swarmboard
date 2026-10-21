@@ -161,6 +161,16 @@ describe('per-session five-minute checks', () => {
     expect(idleSeat.wake).toEqual([]);
   });
 
+  it('never wakes an inactive seat even when its session label is a placeholder', () => {
+    // 608 7092: a native seat without a thread is inactive, so no wake (and therefore
+    // no published check) can carry the `worker:<id>` placeholder session label.
+    const t0 = 1_000_000;
+    const r = tick({ now: t0 + 10 * CHECK_INTERVAL_MS, organizationActive: true, goals: [goal('g1', 'todo')],
+      records: new Map(), seats: [{ ...seat('a'), sessionRef: 'worker:a', active: false }] });
+    expect(r.wake).toEqual([]);
+    expect(r.records[0]!.state).toBe('stopped');
+  });
+
   it('restart replays at most one overdue check per seat', () => {
     const t0 = 1_000_000;
     // persisted record from long ago, now far overdue
