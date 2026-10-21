@@ -26,6 +26,10 @@ export interface SeatSnapshot {
   active: boolean;
   /** A turn is running or a delivery is in flight. */
   busy: boolean;
+  /** Set for seats that came from a registered external channel. */
+  adapterId?: string;
+  /** Registration generation the seat snapshot was taken from; rechecked at dispatch. */
+  registrationVersion?: number;
 }
 
 export interface GoalView { id: string; status: string; taskIds?: readonly string[] }
@@ -53,8 +57,14 @@ export interface TickInput {
 export interface TickResult {
   /** Records to persist (only the ones that changed). */
   records: SeatRecord[];
-  /** Seats that must receive exactly one check now. */
-  wake: { memberId: string; sessionRef: string; goalIds: string[] }[];
+  /**
+   * Seats that must receive exactly one check now. The triple
+   * (memberId, sessionRef, dueAt) is the idempotency key: a repeated scan or a
+   * restart must not produce a second wakeup for the same due time, and the
+   * dispatcher rechecks authorization/session/scope before opening a turn.
+   */
+  wake: { memberId: string; sessionRef: string; dueAt: number; goalIds: string[];
+    adapterId?: string; registrationVersion?: number }[];
   /** True when there was nothing to do, so no model wakeup may be spent. */
   idle: boolean;
 }
@@ -127,7 +137,12 @@ export function tick(input: TickInput): TickResult {
       nextDueAt: input.now + intervalMs, checks: next.checks + 1, state: 'waiting',
     };
     changed.push(next);
-    wake.push({ memberId: seat.memberId, sessionRef: seat.sessionRef, goalIds: goals.slice(0, 20).map(g => g.id) });
+    wake.push({
+      memberId: seat.memberId, sessionRef: seat.sessionRef, dueAt: prior.nextDueAt,
+      goalIds: goals.slice(0, 20).map(g => g.id),
+      ...(seat.adapterId ? { adapterId: seat.adapterId } : {}),
+      ...(seat.registrationVersion !== undefined ? { registrationVersion: seat.registrationVersion } : {}),
+    });
   }
 
   return { records: changed, wake, idle: input.organizationActive && goals.length === 0 && activeSeats.length > 0 };

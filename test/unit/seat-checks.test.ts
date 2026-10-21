@@ -82,6 +82,17 @@ describe('per-session five-minute checks', () => {
     expect(r.idle).toBe(false);
   });
 
+  it('carries an idempotency key and the registration generation in the wakeup', () => {
+    const t0 = 1_000_000;
+    const first = tick({ now: t0, organizationActive: true, goals: [goal('g1', 'todo')], records: new Map(),
+      seats: [seat('a', { adapterId: 'adapter-x', registrationVersion: 7 })] });
+    const later = tick({ now: t0 + CHECK_INTERVAL_MS, organizationActive: true, goals: [goal('g1', 'todo')],
+      records: merge(first.records), seats: [seat('a', { adapterId: 'adapter-x', registrationVersion: 7 })] });
+    expect(later.wake).toHaveLength(1);
+    expect(later.wake[0]).toMatchObject({ memberId: 'a', sessionRef: 'session-a', dueAt: t0 + CHECK_INTERVAL_MS,
+      adapterId: 'adapter-x', registrationVersion: 7 });
+  });
+
   it('restart replays at most one overdue check per seat', () => {
     const t0 = 1_000_000;
     // persisted record from long ago, now far overdue
