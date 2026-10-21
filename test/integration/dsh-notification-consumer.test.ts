@@ -1,12 +1,17 @@
 // Verify the public driver against real durable notification receipts: queue
 // acceptance is not completion, and a receipt retry cannot consume a late merge.
 import { afterEach, describe, expect, it } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Store } from '../../src/store.js';
 import { CollaboratorStore } from '../../src/collaborators.js';
 import { NotificationService } from '../../src/notification-service.js';
 import { NotificationAdapterStore } from '../../src/notification-adapter-store.js';
 import { createNotificationDispatcher } from '../../src/notification-dispatch.js';
-import { driveOnce, type DeliveryBatch, type Intent, type SubmitOutcome } from '../../src/harness/dsh/notification-driver.js';
+import { driveOnce, intentKey, type DeliveryBatch, type Intent, type SubmitOutcome } from '../../src/harness/dsh/notification-driver.js';
+import { createDshJournals } from '../../src/harness/dsh/journal-store.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => { for (const close of cleanup.splice(0).reverse()) close(); });
@@ -48,6 +53,23 @@ function fixture() {
   } });
   return { board, member, collaborators, service, dispatcher, records, ports, get submits() { return submits; },
     unsettled: () => new NotificationAdapterStore(board.db).unsettled() };
+}
+
+function durableJournal() {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-consumer-journal-'));
+  const path = join(dir, 'host.sqlite');
+  let db = new DatabaseSync(path);
+  let journal = createDshJournals<DeliveryBatch>({ db, sessionId: 'original-session' }).notification;
+  cleanup.push(() => { db.close(); rmSync(dir, { recursive: true, force: true }); });
+  return {
+    get journal() { return journal; },
+    rows: () => db.prepare('SELECT slot,data FROM dsh_host_journal ORDER BY slot').all(),
+    restart() {
+      db.close();
+      db = new DatabaseSync(path);
+      journal = createDshJournals<DeliveryBatch>({ db, sessionId: 'original-session' }).notification;
+    },
+  };
 }
 
 describe('DSH driver and durable notification consumption', () => {
@@ -138,4 +160,59 @@ describe('DSH driver and durable notification consumption', () => {
     expect(f.service.pending(other.id).items).toHaveLength(0);
     expect(f.service.pending(f.member.id).items).toHaveLength(1);
   });
+
+  it('preserves an unknown consumer attempt across a real host journal reopen without resubmitting', async () => {
+    const f = fixture(); const durable = durableJournal();
+    const ports = { ...f.ports(async () => ({ status: 'unknown' })), journal: durable.journal };
+    const batch = (await ports.pending.list())[0]!;
+    await driveOnce(ports);
+    const before = durable.rows();
+    expect((await durable.journal.get(intentKey(batch)))?.state).toBe('unknown');
+    durable.restart();
+    await driveOnce({ ...ports, journal: durable.journal });
+    expect(f.submits).toBe(1);
+    expect(durable.rows()).toEqual(before);
+    expect(f.service.pending(f.member.id).items).toHaveLength(1);
+  });
+
+  it('retries only the exact receipt after reopening a completed consumer journal', async () => {
+    const f = fixture(); const durable = durableJournal();
+    const ports = { ...f.ports(async () => ({ status: 'completed', turnId: 'durable-turn' })), journal: durable.journal };
+    const batch = (await ports.pending.list())[0]!;
+    const confirm = ports.pending.confirm;
+    const echoes: number[][] = [];
+    let attempts = 0;
+    ports.pending.confirm = async current => {
+      echoes.push([...current.delivery.entryIds]);
+      if (++attempts === 1) throw new Error('Synthetic transport failure before receipt');
+      await confirm(current);
+    };
+    await driveOnce(ports);
+    expect((await durable.journal.get(intentKey(batch)))?.state).toBe('completedUnacked');
+    durable.restart();
+    await driveOnce({ ...ports, journal: durable.journal });
+    expect(f.submits).toBe(1);
+    expect(echoes).toEqual([batch.delivery.entryIds, batch.delivery.entryIds]);
+    expect(f.service.pending(f.member.id).items).toHaveLength(0);
+    expect(await durable.journal.get(intentKey(batch))).toBeUndefined();
+  });
+
+  it('retains the submitted snapshot after a host reopen when the delivery grew', async () => {
+    const f = fixture(); const durable = durableJournal();
+    const ports = { ...f.ports(async () => {
+      f.dispatcher.dispatch(f.board.publishEntry({ agentId: 'runtime-driver-test', kind: 'MESSAGE', recipientId: f.member.id,
+        summary: 'Late ordinary update after the consumer started', detail: 'Not part of the completed turn.' }));
+      return { status: 'completed', turnId: 'original-snapshot-turn' };
+    }), journal: durable.journal };
+    const batch = (await ports.pending.list())[0]!;
+    await driveOnce(ports);
+    expect((await durable.journal.get(intentKey(batch)))?.batch.delivery.entryIds).toEqual(batch.delivery.entryIds);
+    durable.restart();
+    const second = await driveOnce({ ...ports, journal: durable.journal });
+    expect(second.receiptPending).toHaveLength(1);
+    expect(f.submits).toBe(1);
+    expect((await durable.journal.get(intentKey(batch)))?.batch.delivery.entryIds).toEqual(batch.delivery.entryIds);
+    expect(f.service.pending(f.member.id).items[0]!.entryIds).toHaveLength(2);
+  });
+
 });
