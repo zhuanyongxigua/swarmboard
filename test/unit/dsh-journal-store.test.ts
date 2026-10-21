@@ -32,6 +32,8 @@ describe('durable DSH host journal', () => {
       const reopened = f.reopen();
       expect(reopened.lifecycle.read()).toEqual({ operation: 'resume', sessionId: 'session-a', cwd: '/synthetic/workspace' });
       expect(await reopened.notification.get(intent().key)).toEqual(intent());
+      await reopened.notification.put({ ...intent(), covered: [1, 2] });
+      expect((await reopened.notification.get(intent().key))?.covered).toEqual([1, 2]);
       expect(await reopened.notification.get('adapter|member-b|session-a|1')).toBeUndefined();
       await reopened.notification.del(intent().key);
       expect(await reopened.notification.get(intent().key)).toBeUndefined();
@@ -90,5 +92,18 @@ describe('journal durability fences (p3 review)', () => {
     await expect(j.notification.get(intent().key)).rejects.toThrow(/DSH_JOURNAL_CORRUPT/);
     const row = f.db.prepare('SELECT data FROM dsh_host_journal WHERE slot=?').get('notification:' + intent().key) as { data: Uint8Array };
     expect(row.data).toBeInstanceOf(Uint8Array);
+  });
+});
+
+
+describe('covered-id durability for late merge', () => {
+  it('persists covered ids across reopen and rejects malformed covered arrays', async () => {
+    const f = fixture(); const j = f.open();
+    const record = { ...intent('adapter|member-a|session-a|9'), covered: [1, 2] as const };
+    await j.notification.put(record);
+    const reopened = f.reopen();
+    expect((await reopened.notification.get(record.key))?.covered).toEqual([1, 2]);
+    await expect(reopened.notification.put({ ...record, covered: [1, -1] })).rejects.toThrow(/DSH_JOURNAL_INVALID/);
+    await expect(reopened.notification.put({ ...record, covered: [1, 1] })).rejects.toThrow(/DSH_JOURNAL_INVALID/);
   });
 });

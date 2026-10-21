@@ -19,6 +19,10 @@ export interface DshNotificationIntent<TBatch = unknown> {
   state: DshNotificationState;
   batch: TBatch;
   detail?: string;
+  /** Entry ids that already have authoritative completion for this delivery.
+   *  This is persisted with the intent so a late merge can submit only the
+   *  missing delta after a restart (p2 7237/7249). */
+  covered?: readonly number[];
 }
 
 /** Structural subset of node:sqlite used here; the host supplies its own DB. */
@@ -71,6 +75,10 @@ function notificationIntent<TBatch>(key: string, value: Record<string, unknown>)
   if (typeof value.state !== 'string' || !STATES.has(value.state)) throw new Error('DSH_JOURNAL_CORRUPT: notification state');
   if (!Object.prototype.hasOwnProperty.call(value, 'batch')) throw new Error('DSH_JOURNAL_CORRUPT: notification batch missing');
   if (value.detail !== undefined && typeof value.detail !== 'string') throw new Error('DSH_JOURNAL_CORRUPT: notification detail');
+  if (value.covered !== undefined) {
+    if (!Array.isArray(value.covered) || value.covered.some(id => !Number.isSafeInteger(id) || id < 0)
+      || new Set(value.covered).size !== value.covered.length) throw new Error('DSH_JOURNAL_CORRUPT: notification covered ids');
+  }
   return value as unknown as DshNotificationIntent<TBatch>;
 }
 
@@ -129,10 +137,15 @@ export function createDshJournals<TBatch = unknown>(input: { db: SqliteDatabase;
       assertAutocommit();
       if (!intent || typeof intent !== 'object' || typeof intent.key !== 'string' || !intent.key.trim()
         || !STATES.has(intent.state) || !Object.prototype.hasOwnProperty.call(intent, 'batch')
-        || (intent.detail !== undefined && typeof intent.detail !== 'string')) {
+        || (intent.detail !== undefined && typeof intent.detail !== 'string')
+        || (intent.covered !== undefined && (!Array.isArray(intent.covered)
+          || intent.covered.some(id => !Number.isSafeInteger(id) || id < 0)
+          || new Set(intent.covered).size !== intent.covered.length))) {
         throw new Error('DSH_JOURNAL_INVALID: notification intent');
       }
-      putRow(notificationSlot(intent.key), JSON.stringify({ key: intent.key, state: intent.state, batch: intent.batch, ...(intent.detail !== undefined ? { detail: intent.detail } : {}) }));
+      putRow(notificationSlot(intent.key), JSON.stringify({ key: intent.key, state: intent.state, batch: intent.batch,
+        ...(intent.detail !== undefined ? { detail: intent.detail } : {}),
+        ...(intent.covered !== undefined ? { covered: [...intent.covered] } : {}) }));
     },
     async del(key: string): Promise<void> {
       assertAutocommit();
