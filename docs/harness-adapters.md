@@ -265,3 +265,10 @@ export const { name, inject, apply } = entry.plugin;
 Cordis 正式插件的 `apply` 返回异步 cleanup effect，不依赖不存在的 ready/dispose 事件。卸载先同步关闭发送授权，再取消本地订阅并等待初始化和 pass；runner 的 `canRelease` 只有在原 registry 对象仍一致、idle 且 inbox 为空时才允许释放 lease。忙碌、初始化未决或失败时保留 lease／意图／handle，要求对账；不能通过卸载强杀原会话或清 unknown。忙碌退出拒绝后，可由宿主在明确的安全空闲边界再次调用 cleanup，不自动等待定时器或重放连接。
 
 定向测试使用合成 SDK 服务和 SQLite 验证该装配；本机公开 SDK 类型及 Cordis 插件加载另作无模型兼容检查。它们不证明个人配置已安装、宿主已安全迁移或真实四席已经消费通知并继续贡献。
+### 受信 MCP 通知端口
+
+`createDshNotificationPort({ callTool, getCurrentBinding, pageSize? })` 将已经绑定调用者的正式 MCP 客户端接为 `PendingPort`，不打开看板数据库、不注册通道、不创建模型或 timer。`callTool({ name, arguments })` 只调用 `notification_pending`、`context_read`、`notification_receipt`；`getCurrentBinding` 由受信宿主提供当前启用状态、adapter/member/session、注册代次与任务范围，不能从事件正文推断，也不能仅返回失去撤销感知的启动缓存。
+
+端口逐页读取 pending，并逐个 ID 用完整 `context_read` 精确读取正文；缺失、不可见、截断、重复 ID、异常分页和过期检查信封均停止该批。MCP 的第一段 JSON／`structuredContent` 才是返回值，后附同伴消息不参与解析。所有周期检查都核对当前绑定与目标交集；批次携带可序列化的 `notificationBinding`，异步读取前后均检查绑定。`isCurrent(batch)` 在提交前重新读取当前 pending 和引用事件，允许 driver 已完成覆盖后的合法差量子集；它不提供跨网络 await 与 SDK send 的原子保证，宿主仍必须在实际 send 前同步核对授权并持续持有单写租约。
+
+服务端 `unknown` 直接冻结该 pass，不能因宿主 journal 缺失而当成新工作。`confirm` 仅发送 `consumed: true` 及本批精确完整 ID 集合，保留服务端 `STALE_DELIVERY_VIEW` 等拒绝；已成功回执的响应丢失仍可精确重试。`release` 仅本地延后，不发送负回执、不弃用、不删除未知证据。当前回执 API 的序号不带通道，读到非绑定通道时拒绝，服务端多通道歧义仍须对账，不能猜通道或绕开正式接口。测试 `test/mcp/dsh-notification-port.test.ts` 使用真实 MCP Client/Server 和隔离服务；单独合成分页探针不代表当前服务允许同通道多个未结算序号，亦不代替真实 SDK／宿主安装验收。
