@@ -184,8 +184,6 @@ export interface WakerStateShape {
 
 const seatKey = (seat: SeatConfig): string => `${seat.memberId}|${seat.sessionRef}`;
 
-const APPLICABLE_STATUSES = ['todo', 'in_progress', 'in_review'] as const;
-
 /** The prompt carries the product instruction that this delivery actually holds. */
 export function promptTextFor({ sequence, entries }: { readonly sequence: number; readonly entries: readonly EntryView[] }): string {
   const check = entries
@@ -407,7 +405,7 @@ export class WakerState {
     this.state = { schema: STATE_SCHEMA, seats: {} };
     let text: string | null = null;
     try { text = readFileSync(file, 'utf8'); } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw new Error(`CONSUMER_STATE_UNREADABLE:${(error as NodeJS.ErrnoException)?.code ?? 'unknown'}`);
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw new Error(`CONSUMER_STATE_UNREADABLE:${(error as NodeJS.ErrnoException)?.code ?? 'unknown'}`, { cause: error });
     }
     if (text !== null) {
       let parsed: unknown;
@@ -444,7 +442,7 @@ export function acquireWriterLock(lockPath: string): WriterLock {
     const fd = openSync(lockPath, 'wx', 0o600);
     try { writeSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() })); } finally { closeSync(fd); }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === 'EEXIST') throw new Error('CONSUMER_WRITER_LOCK_HELD');
+    if ((error as NodeJS.ErrnoException)?.code === 'EEXIST') throw new Error('CONSUMER_WRITER_LOCK_HELD', { cause: error });
     throw error;
   }
   return { release: () => { try { unlinkSync(lockPath); } catch { /* already gone */ } } };
