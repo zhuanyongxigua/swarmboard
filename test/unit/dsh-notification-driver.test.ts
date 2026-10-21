@@ -114,4 +114,32 @@ describe('driveOnce', () => {
     expect(isAddressable({ dueAt: 0, goalIds: ['g'] })).toBe(true);
     expect(isAddressable({ dueAt: 1, goalIds: [] })).toBe(false);
   });
+
+  it('does not submit when the binding is revoked while the durable intent is written', async () => {
+    let current = true;
+    const journal = new Map<string, { key: string; state: string; check: PendingCheck }>();
+    const calls = { submit: 0, release: [] as string[] };
+    const result = await driveOnce({
+      pending: {
+        list: async () => [check()],
+        confirm: async () => {},
+        release: async (_check: PendingCheck, reason: string) => { calls.release.push(reason); },
+      },
+      session: {
+        isCurrent: async () => current,
+        isBusy: async () => false,
+        submit: async () => { calls.submit += 1; return { status: 'completed' as const, turnId: 't1' }; },
+        settlement: async () => ({ settled: true as const }),
+      },
+      journal: {
+        get: async (key: string) => journal.get(key),
+        put: async (intent: { key: string; state: string; check: PendingCheck }) => { journal.set(intent.key, intent); current = false; },
+        del: async (key: string) => { journal.delete(key); },
+      },
+    });
+    expect(calls.submit).toBe(0);
+    expect(calls.release).toEqual(['stale-session']);
+    expect(result.skipped).toEqual([intentKey(check())]);
+    expect(journal.size).toBe(0);
+  });
 });

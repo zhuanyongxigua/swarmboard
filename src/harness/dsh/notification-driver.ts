@@ -192,6 +192,17 @@ export async function driveOnce(
 
     await ports.journal.put({ key, state: 'submitting', check });
 
+    // Committing fence: the durable intent write is asynchronous, so the binding that was
+    // current before it may already be gone. Re-check immediately before the side effect;
+    // nothing has been sent yet, so the safest action is to drop the intent and skip
+    // (p8 7140/7141). A submit port must still verify its own lease atomically.
+    if (!(await ports.session.isCurrent(check))) {
+      await ports.journal.del(key);
+      await ports.pending.release(check, 'stale-session');
+      result.skipped.push(key);
+      continue;
+    }
+
     let outcome: SubmitOutcome;
     try {
       outcome = await ports.session.submit(check, render(check));
