@@ -13,6 +13,7 @@ import { codexBackend } from '../../src/codex-session.js';
 import type { HarnessBackend, SessionAdapter } from '../../src/harness/contract.js';
 import { UncertainDelivery } from '../../src/harness/contract.js';
 import { approvalPauseMessage } from '../../src/worker-store.js';
+import { registerHarnessBackend, unregisterHarnessBackend } from '../../src/harness/registry.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
@@ -49,6 +50,25 @@ function echoTurns(path: string) {
 const idle = (runtime: EventRuntime, id: string) => vi.waitFor(() => expect(runtime.workers.get(id).status).toBe('idle'), { timeout: 4000 });
 
 describe('harness backend identity at the runtime boundary', () => {
+  it('registers an arbitrary-named adapter and runs it through the default resolution seam', async () => {
+    const original = process.env.SWARMBOARD_HARNESS;
+    const synthetic: HarnessBackend = { ...echoBackend, id: 'synthetic-integration', displayName: 'Synthetic integration' };
+    try {
+      registerHarnessBackend(synthetic);
+      process.env.SWARMBOARD_HARNESS = synthetic.id;
+      const f = fixture();
+      const worker = f.runtime.register({ name: 'Synthetic peer', workspacePath: f.dir });
+      f.store.createTask({ title: 'Synthetic integration goal' });
+      await f.runtime.scan(); await idle(f.runtime, worker.id);
+      expect(f.runtime.status().backend).toMatchObject({ id: synthetic.id, displayName: synthetic.displayName });
+      expect(f.runtime.workers.get(worker.id)).toMatchObject({ status: 'idle', backendId: synthetic.id });
+      expect(echoTurns(f.path)).toHaveLength(1);
+      expect(echoTurns(f.path)[0]!.prompt).toContain('Synthetic integration goal');
+    } finally {
+      if (original === undefined) delete process.env.SWARMBOARD_HARNESS; else process.env.SWARMBOARD_HARNESS = original;
+      try { unregisterHarnessBackend(synthetic.id); } catch { /* cleanup */ }
+    }
+  });
   it('reports the selected backend and capabilities in runtime status', () => {
     expect(fixture().runtime.status().backend).toEqual({ id: 'codex', displayName: codexBackend.displayName, deterministic: false, capabilities: { inspection: true, approvalSignals: true, sessionInstructions: true } });
     expect(fixture({ backend: echoBackend }).runtime.status().backend).toMatchObject({ id: 'echo', deterministic: true, capabilities: { inspection: true, approvalSignals: false } });
