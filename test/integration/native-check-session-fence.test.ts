@@ -14,10 +14,11 @@ async function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'native-check-fence-'));
   const board = new Store(join(dir, 'board.sqlite'));
   const turns: { thread: string; prompt: string }[] = [];
+  let beforeOpen: (() => Promise<void>) | undefined;
   const runtime = new EventRuntime(board, {
     databasePath: join(dir, 'board.sqlite'), serverEntry: 'unused',
     notificationBatchMs: 0, sessionCheckMs: 300000, now: () => 1000000,
-    adapter: () => ({ open: async worker => worker.threadId ?? 'original-session',
+    adapter: () => ({ open: async worker => { await beforeOpen?.(); return worker.threadId ?? 'original-session'; },
       run: async (thread, prompt) => { turns.push({ thread, prompt }); }, close: async () => {} }),
   });
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }), () => board.close(), () => runtime.close());
@@ -35,7 +36,14 @@ async function fixture() {
     summary: 'SESSION_TASK_CHECK: queued-period-probe',
     detail: JSON.stringify({ kind: 'SESSION_TASK_CHECK', memberId: worker.id,
       sessionRef: worker.threadId, dueAt: 900000, goalIds: [goal.id] }) });
-  return { runtime, board, turns, worker, goal, publish, settle };
+  return { runtime, board, turns, worker, goal, publish, settle,
+    holdOpen: () => {
+      let entered = false, release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      beforeOpen = async () => { entered = true; await gate; };
+      cleanup.push(() => release());
+      return { entered: () => entered, release };
+    } };
 }
 
 it('continues a current-session check on the original native session', async () => {
@@ -57,5 +65,13 @@ it('does not consume a queued native check after its last goal becomes blocked',
   const f = await fixture(); f.publish();
   f.board.updateTask(f.goal.id, { expectedVersion: f.board.readTask(f.goal.id).version, status: 'blocked' });
   await f.settle();
+  expect(f.turns.some(turn => turn.prompt.includes('queued-period-probe'))).toBe(false);
+});
+
+it('rechecks periodic goal scope after asynchronous session preparation', async () => {
+  const f = await fixture(); f.publish(); const gate = f.holdOpen();
+  await f.runtime.scan(); await vi.waitFor(() => expect(gate.entered()).toBe(true));
+  f.board.updateTask(f.goal.id, { expectedVersion: f.board.readTask(f.goal.id).version, status: 'blocked' });
+  gate.release(); await f.settle();
   expect(f.turns.some(turn => turn.prompt.includes('queued-period-probe'))).toBe(false);
 });
