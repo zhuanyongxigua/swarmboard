@@ -279,21 +279,34 @@ describe('generation and startup boundaries', () => {
 
   it('builds a board port over the bound MCP notification tools', async () => {
     const toolCalls: string[] = [];
-    const board = createMcpBoardPort({
-      callTool: async ({ name }) => {
-        toolCalls.push(name);
-        if (name === 'notification_pending') return { items: [{ sequence: 4, entryIds: [21, 22] }] };
-        if (name === 'notification_binding_read') return { binding: { adapterId: 'synthetic-adapter', sessionRef: seat.sessionRef, registrationVersion: 1, enabled: true, taskIds: ['goal-1'] } };
-        if (name === 'context_read') return { items: [{ id: 21, detail: JSON.stringify({ kind: 'SESSION_TASK_CHECK', instruction: 'Check the authorized goals.' }) }] };
-        return {};
-      },
-    });
+    const pendingRow = (state: 'pending' | 'unknown') => ({ adapterId: seat.adapterId, memberId: seat.memberId, sequence: 4, entryIds: [21, 22], state });
+    const respond = (state: 'pending' | 'unknown') => async ({ name }: { name: string }) => {
+      toolCalls.push(name);
+      if (name === 'notification_pending') return { items: [pendingRow(state)], cursor: 4, hasMore: false };
+      if (name === 'notification_binding_read') return { binding: { adapterId: seat.adapterId, memberId: seat.memberId, sessionRef: seat.sessionRef, registrationVersion: 1, enabled: true, taskIds: ['goal-1'] } };
+      if (name === 'context_read') return { items: [{ id: 21, detail: JSON.stringify({ kind: 'SESSION_TASK_CHECK', instruction: 'Check the authorized goals.' }) }, { id: 22, detail: '{}' }] };
+      return {};
+    };
+    const board = createMcpBoardPort({ callTool: respond('pending') });
     const prompts: { text: string }[] = [];
     const result = await runPass({ seats: [seat], board, transport: transportFor({ prompts }), state: emptyState(), now });
     expect(result.actions[0]?.action).toBe('prompted');
     expect(prompts[0]?.text).toContain('Check the authorized goals.');
     expect(toolCalls).toContain('notification_pending');
     expect(toolCalls).toContain('notification_binding_read');
+
+    // A standard MCP envelope decodes through the shared payload helper.
+    const enveloped = createMcpBoardPort({ callTool: async (request) => ({ content: [{ type: 'text', text: JSON.stringify(await respond('pending')(request)) }] }) });
+    const envelopePrompts: { text: string }[] = [];
+    const envelopePass = await runPass({ seats: [seat], board: enveloped, transport: transportFor({ prompts: envelopePrompts }), state: emptyState(), now });
+    expect(envelopePass.actions[0]?.action).toBe('prompted');
+
+    // A service-side unknown delivery is preserved and never re-prompted.
+    const unknownPrompts: { text: string }[] = [];
+    const unknownState = emptyState();
+    const unknownPass = await runPass({ seats: [seat], board: createMcpBoardPort({ callTool: respond('unknown') }), transport: transportFor({ prompts: unknownPrompts }), state: unknownState, now });
+    expect(unknownPrompts).toHaveLength(0);
+    expect(unknownPass.actions.map((action) => action.action)).toContain('unknown-delivery');
 
     const missing = createMcpBoardPort({ callTool: async () => ({ binding: null }) });
     expect((await missing.binding(seat)).ok).toBe(false);

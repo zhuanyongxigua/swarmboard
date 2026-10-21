@@ -177,3 +177,5 @@ export function createDshNotificationPort(options: DshNotificationPortOptions): 
     },
   };
 }
+
+export { payload as notificationPayload };

@@ -15,6 +15,7 @@
 import { mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync, closeSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
+import { notificationPayload } from './notification-port.js';
 
 export const STATE_SCHEMA = 1;
 export const DEFAULT_POLL_MS = 10_000;
@@ -43,6 +44,8 @@ export interface ConsumerConfig {
 
 export interface UnsettledDelivery {
   readonly sequence: number;
+  /** Server-side delivery state; `unknown` must never be replayed. */
+  readonly state?: 'pending' | 'unknown';
   readonly entryIds: readonly number[];
   readonly adapterId?: string;
   readonly sessionRef?: string;
@@ -251,6 +254,25 @@ export async function runPass(input: {
       const target = unsettled.reduce((a, b) => (a.sequence > b.sequence ? a : b));
       if (record && record.sequence === target.sequence && ['sending', 'accepted', 'unknown'].includes(record.state)) {
         actions.push({ seat: key, action: 'awaiting-member', sequence: target.sequence, state: record.state, rpcId: record.rpcId ?? null });
+        continue;
+      }
+      // The service already marks a delivery unknown when its own attempt is
+      // unreconciled. Preserve it and refuse to drive it: never re-prompt.
+      if (target.state === 'unknown') {
+        input.state.seats[key] = {
+          sequence: target.sequence,
+          entryIds: target.entryIds,
+          rpcId: '',
+          adapterId: seat.adapterId,
+          registrationVersion: record?.registrationVersion ?? 0,
+          sessionRef: seat.sessionRef,
+          asOfSeq: record?.asOfSeq ?? null,
+          nextSeq: record?.nextSeq ?? null,
+          state: 'unknown',
+          at: input.now(),
+        };
+        persist();
+        actions.push({ seat: key, action: 'unknown-delivery', sequence: target.sequence, state: 'unknown' });
         continue;
       }
       const binding = await input.board.binding(seat);
@@ -507,34 +529,73 @@ export interface McpCallTool {
   (request: { name: string; arguments: Record<string, unknown> }): Promise<unknown>;
 }
 
+export interface McpBoardPortOptions {
+  readonly callTool: McpCallTool;
+  readonly pageSize?: number;
+}
+
+const MAX_PENDING_PAGES = 20;
+
 /**
- * Board port backed by the caller-bound MCP notification tools. `notification_pending`
- * returns deliveries already filtered by the service's `currentIntent()`, so the port
- * can treat scope as server-guaranteed; binding_read supplies the current generation.
+ * Board port backed by the caller-bound MCP notification tools. Standard RPC
+ * envelopes are decoded through the same helper the existing DSH delivery port
+ * uses, so `structuredContent`, a text-only result and `isError` all behave the
+ * same way here. `notification_pending` applies the service's `currentIntent()`
+ * filter only at read time, which is not a promise about the moment after a slow
+ * `describe`: `intentCurrent` therefore polls again instead of returning a
+ * constant, and an `unknown` delivery is surfaced as unknown, never as pending.
  */
-export function createMcpBoardPort(options: { readonly callTool: McpCallTool }): BoardPort {
+export function createMcpBoardPort(options: McpBoardPortOptions): BoardPort {
+  const pageSize = options.pageSize ?? 50;
+  // A host may hand back the raw MCP result (`content`/`structuredContent`/`isError`)
+  // or an already-unwrapped payload. Both go through the same decoder so error codes
+  // and envelope rules cannot silently diverge.
   const call = async (name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const value = await options.callTool({ name, arguments: args });
-    return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+    const raw = value as Record<string, unknown> | null | undefined;
+    const envelope = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+      && (Array.isArray(raw.content) || raw.structuredContent !== undefined || raw.isError !== undefined);
+    return notificationPayload(envelope ? raw : { structuredContent: raw });
+  };
+  const pending = async (seat: SeatConfig): Promise<readonly { sequence: number; entryIds: number[]; state: 'pending' | 'unknown' }[]> => {
+    const out: { sequence: number; entryIds: number[]; state: 'pending' | 'unknown' }[] = [];
+    let after = 0;
+    for (let page = 0; page < MAX_PENDING_PAGES; page += 1) {
+      const value = await call('notification_pending', { after, limit: pageSize });
+      if (!Array.isArray(value.items) || typeof value.hasMore !== 'boolean') throw new Error('INVALID_NOTIFICATION_RESPONSE');
+      const start = after;
+      for (const raw of value.items) {
+        const item = raw as { adapterId?: unknown; memberId?: unknown; sequence?: unknown; entryIds?: unknown; state?: unknown };
+        if (item.adapterId !== seat.adapterId || item.memberId !== seat.memberId) throw new Error('AMBIGUOUS_NOTIFICATION_BINDING');
+        if (!Number.isSafeInteger(item.sequence) || (item.sequence as number) <= after) throw new Error('INVALID_NOTIFICATION_RESPONSE');
+        const entryIds = Array.isArray(item.entryIds) && item.entryIds.length > 0 && item.entryIds.length <= 200
+          ? item.entryIds.filter((id): id is number => Number.isSafeInteger(id) && (id as number) >= 1)
+          : [];
+        if (entryIds.length !== (item.entryIds as unknown[]).length) throw new Error('INVALID_NOTIFICATION_RESPONSE');
+        const state = item.state === 'pending' ? 'pending' as const : item.state === 'unknown' ? 'unknown' as const : undefined;
+        if (!state) throw new Error('INVALID_NOTIFICATION_RESPONSE');
+        after = item.sequence as number;
+        out.push({ sequence: item.sequence as number, entryIds, state });
+      }
+      if (!value.hasMore) return out;
+      // A growing channel may return an empty page with hasMore set; the cursor
+      // still has to advance for the loop to stay bounded and honest.
+      if (after === start) throw new Error('INVALID_NOTIFICATION_RESPONSE:cursor-stalled');
+    }
+    throw new Error('PENDING_PAGINATION_LIMIT');
   };
   return {
-    async unsettled() {
-      const value = await call('notification_pending', { after: 0, limit: 50 });
-      const items = Array.isArray(value.items) ? value.items : [];
-      return items.flatMap((item) => {
-        const row = item as { sequence?: unknown; entryIds?: unknown };
-        if (!Number.isSafeInteger(row.sequence)) return [];
-        const entryIds = Array.isArray(row.entryIds) ? row.entryIds.filter((id): id is number => Number.isSafeInteger(id)) : [];
-        return [{ sequence: row.sequence as number, entryIds }];
-      });
+    async unsettled(seat) {
+      return (await pending(seat)).map(({ sequence, entryIds, state }) => ({ sequence, entryIds, state }));
     },
     async binding(seat) {
       const value = await call('notification_binding_read', { adapterId: seat.adapterId });
       const binding = value.binding as { adapterId?: unknown; memberId?: unknown; sessionRef?: unknown; registrationVersion?: unknown; enabled?: unknown; taskIds?: unknown } | null | undefined;
       if (!binding) return { ok: false, reason: 'binding-missing' };
       if (binding.enabled !== true) return { ok: false, reason: 'adapter-disabled' };
+      if (binding.memberId !== undefined && binding.memberId !== seat.memberId) return { ok: false, reason: 'member-mismatch' };
       if (binding.sessionRef !== seat.sessionRef) return { ok: false, reason: 'session-mismatch' };
-      if (!Number.isSafeInteger(binding.registrationVersion)) return { ok: false, reason: 'generation-missing' };
+      if (!Number.isSafeInteger(binding.registrationVersion) || (binding.registrationVersion as number) < 1) return { ok: false, reason: 'generation-missing' };
       const taskIds = Array.isArray(binding.taskIds) ? binding.taskIds.filter((id): id is string => typeof id === 'string') : [];
       return {
         ok: true,
@@ -544,14 +605,26 @@ export function createMcpBoardPort(options: { readonly callTool: McpCallTool }):
         admissionTaskIds: taskIds,
       };
     },
-    async intentCurrent() { return { ok: true }; },
+    async intentCurrent(seat, delivery) {
+      try {
+        const row = (await pending(seat)).find((item) => item.sequence === delivery.sequence);
+        if (!row) return { ok: false, reason: 'not-visible' };
+        if (row.state === 'unknown') return { ok: false, reason: 'delivery-unknown' };
+        if (!delivery.entryIds.every((id) => row.entryIds.includes(id))) return { ok: false, reason: 'entry-set-changed' };
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, reason: `pending-unreadable:${String((error as Error)?.message ?? error)}` };
+      }
+    },
     async entries(ids) {
       const out: EntryView[] = [];
       for (const id of ids) {
         const value = await call('context_read', { after: id - 1, limit: 1 });
         const items = Array.isArray(value.items) ? value.items : [];
-        const item = items[0] as { id?: unknown; detail?: unknown } | undefined;
-        if (item?.id !== id) continue;
+        const item = items[0] as { id?: unknown; detail?: unknown; detailTruncated?: unknown } | undefined;
+        // An exact seek also catches filtered or missing ids instead of silently
+        // taking the next visible row; a truncated detail is incomplete content.
+        if (item?.id !== id || item.detailTruncated === true) continue;
         const detail = typeof item.detail === 'string' ? item.detail : JSON.stringify(item.detail ?? null);
         out.push({ id, detail });
       }
