@@ -48,6 +48,8 @@ export interface DeliveryBatch {
 }
 
 export type SubmitOutcome =
+  /** The optional `detail` / `messageId` is an OPAQUE settlement token: the driver never
+   *  parses it, only stores it and hands it back to `settlement` (p3 7214). */
   | { status: 'enqueued'; messageId?: string; detail?: string }
   | { status: 'completed'; turnId: string; detail?: string }
   | { status: 'unknown'; detail?: string }
@@ -65,8 +67,9 @@ export interface SessionPort {
   isCurrent(batch: DeliveryBatch): Promise<boolean>;
   isBusy(batch: DeliveryBatch): Promise<boolean>;
   submit(batch: DeliveryBatch, text: string): Promise<SubmitOutcome>;
-  /** Prove that the turn which consumed `messageId` (returned by submit) has completed. */
-  settlement(batch: DeliveryBatch, messageId: string): Promise<DeliverySettlement>;
+  /** Prove that the turn behind `token` (whatever `submit` returned for this batch) completed.
+   *  `token` is opaque to the driver: it is stored verbatim in the journal and replayed. */
+  settlement(batch: DeliveryBatch, token: string): Promise<DeliverySettlement>;
 }
 
 export type IntentState = 'submitting' | 'unknown' | 'enqueued' | 'completedUnacked' | 'acceptedUnacked';
@@ -235,7 +238,7 @@ export async function driveOnce(
       continue;
     }
     if (outcome.status === 'enqueued') {
-      // The message/turn id the host will use to prove completion; kept verbatim for settlement.
+      // Opaque settlement token from the port; kept verbatim and replayed to `settlement`.
       await ports.journal.put({ key, state: 'enqueued', batch, detail: outcome.messageId ?? outcome.detail });
       result.awaitingCompletion.push(key);
       continue;
