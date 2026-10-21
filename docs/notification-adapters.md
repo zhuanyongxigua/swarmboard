@@ -6,6 +6,38 @@
 
 模块：`src/notification-adapters.ts`（纯函数，无 I/O、不启动进程、不调用模型）。
 
+## DSH 启动控制通道
+
+独立的 `src/harness/dsh/launcher-channels.ts` 导出
+`createDshLauncherChannels({nodeCommand,server:{path,sha256},boardDatabasePath,runtimeDirectory})`。
+构造不连接、不读文件；显式 `openManagement()`、`openMember(memberId)` 才核对
+入口普通文件、规范路径和摘要，并通过官方 MCP SDK 打开 stdio。它是稳定启动入口
+使用的组件，本身不编排人数、创建 session、选择模型或声称实际接入。
+
+- 管理通道仅允许 runtime_read、collaborator_configure、双提示词读取和 task_read。
+  它显式使用 MANAGEMENT_ONLY=1、DISABLE_RUNTIME=0，清空 pool/worker/collaborator
+  选择器；正式服务构造管理接口，但不启动事件运行时、watcher 或 owner。
+  普通成员通道的 DISABLE_RUNTIME=1 不提供正式准入管理工具，不能混用。
+- 成员通道固定当前 memberId，清空 worker 选择器并禁用事件运行时；只开放内部
+  通知接线所需的读取、注册及回执工具。`memberMcpConfig(memberId)` 返回独立
+  官方 MCP plugin config，供模型侧正常加载完整 caller-bound 工具；严格启动，
+  禁止自动重连。管理通道不交给模型。
+- node、服务入口、board 和专属 runtime 路径均显式给出；HOME 指向该 runtime，
+  不复制父环境或凭据。官方 SDK 自己的常规环境继承仍存在；模型 MCP 插件另有
+  官方父环境筛选，不能把显式配置称作完整环境隔离。HARNESS/WIDGET 空覆盖选择
+  core 官方默认及包内资产，避免继承陈旧选择器。
+- 每条连接提供 callTool、解析首个结果信封的 call 和 close；通道只执行调用者
+  明确请求的一次 RPC，不自动准入、注册、创建身份或重试。`collaborator_configure`
+  新建时不接受预分配 memberId；服务返回正式 id，后续绑定按版本更新。
+  编排者必须在写调用之前耐久保存意图，保存回证；未知结果交对账处理。
+- close 拒绝新调用并等待已发出的 RPC 结算，然后关闭自己打开的传输，不释放
+  其他事件 owner、不清历史。工具回执、身份登记、真实 session、进程、ready、
+  消费与有效贡献仍须分别验收。
+
+`test/integration/dsh-launcher-channels.test.ts` 使用本次源码打包的真实 stdio
+服务、隔离 SQLite 和官方客户端核对管理/成员角色、正式新建与注册读回、入口
+pin 变化拒绝、已有 live owner 保持及结果解析；不启动 SDK Agent 或模型。
+
 ## 注册
 
 `NotificationAdapterRegistration`：
