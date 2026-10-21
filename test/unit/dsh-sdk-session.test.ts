@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDshSdkSessionPort, type DshSdkSessionAgent, type DshSdkBatch, type DshSdkEvent, type DshSdkUserMessage } from '../../src/harness/dsh/sdk-session.js';
 
-function fixture() {
+function fixture(identity: Partial<Pick<DshSdkBatch, 'adapterId' | 'memberId' | 'sessionRef'>> = {}) {
   const batch: DshSdkBatch = { adapterId: 'synthetic-adapter', memberId: 'synthetic-member', sessionRef: 'synthetic-session',
-    delivery: { sequence: 1, entryIds: [11, 12] }, entries: [{ id: 11, kind: 'MESSAGE', summary: 'one' }, { id: 12, kind: 'FACT', summary: 'two' }] };
+    delivery: { sequence: 1, entryIds: [11, 12] }, entries: [{ id: 11, kind: 'MESSAGE', summary: 'one' }, { id: 12, kind: 'FACT', summary: 'two' }], ...identity };
   const events: DshSdkEvent[] = [];
   const send = vi.fn((message: DshSdkUserMessage<string>) => {
     events.push({ seq: events.length, type: 'agent/inbox/spliced', data: { target: 'next-turn', start: 0, inserted: [message] } });
@@ -24,6 +24,23 @@ function fixture() {
 }
 
 describe('official DSH SDK session port', () => {
+  it.each([
+    { name: 'omitted adapter versus literal native', left: { adapterId: undefined }, right: { adapterId: 'native' } },
+    { name: 'delimiter-bearing identity fields', left: { memberId: 'member|part', sessionRef: 'session' },
+      right: { memberId: 'member', sessionRef: 'part|session' } },
+  ])('keeps message IDs and completion tokens distinct for $name', async ({ left, right }) => {
+    const a = fixture(left); const b = fixture(right);
+    const first = await a.make().submit(a.batch, 'same text');
+    const second = await b.make().submit(b.batch, 'same text');
+    expect(first.status).toBe('enqueued'); expect(second.status).toBe('enqueued');
+    expect(a.send.mock.calls[0][0].id).not.toBe(b.send.mock.calls[0][0].id);
+    a.complete(); b.complete();
+    expect(await a.make().settlement(a.batch, first.detail!)).toEqual({ settled: true });
+    expect(await b.make().settlement(b.batch, second.detail!)).toEqual({ settled: true });
+    expect(await a.make().settlement(a.batch, second.detail!)).toEqual({ settled: false });
+    expect(await b.make().settlement(b.batch, first.detail!)).toEqual({ settled: false });
+  });
+
   it('queues one whole batch as an identified plugin user message and flushes, without claiming completion', async () => {
     const f = fixture(); const port = f.make();
     expect(f.send).not.toHaveBeenCalled();
