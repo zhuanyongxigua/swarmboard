@@ -34,7 +34,7 @@ function fixture() {
   const agent: DshSdkSessionAgent<string> = { id: 'original', status: 'idle', session: { id: 'original', header: { cwd }, events: [] }, inbox: { hasPending: false }, send: vi.fn() };
   let live: typeof agent | undefined;
   const permission = { set: vi.fn(), current: () => 'explicit' };
-  const ctx = { get: vi.fn(() => ({ await: async () => {} })), provide: vi.fn(), permissionPresets: permission,
+  const ctx = { sessionPersistence: { root: persistenceRoot, locate: () => ({ path: nativePath }) }, get: vi.fn(() => ({ await: async () => {} })), provide: vi.fn(), permissionPresets: permission,
     agents: { get: () => live, create: vi.fn(async () => { throw Error('forbidden'); }),
       resume: vi.fn(async (options: { resumeSessionId: string; [key: string]: unknown }) => {
         (options.setup as (ctx: unknown) => void)({}); live = agent; return { agent, dispose: async () => {} };
@@ -106,4 +106,17 @@ it('captures Loader options before asynchronous startup and rejects an unknown c
   other.options.configSha256 = hash(fs.readFileSync(other.configPath));
   other.child.plugin.apply(other.ctx, other.options); await expect(other.child.ready()).rejects.toThrow();
   expect(other.loadSdk).not.toHaveBeenCalled(); expect(other.openPorts).not.toHaveBeenCalled();
+});
+
+it('binds the actual official persistence service after awaits to the original root and native path', async () => {
+  const f = fixture(); const foreignRoot = join(f.root, 'foreign-sessions'); fs.mkdirSync(foreignRoot);
+  f.openPorts.mockImplementationOnce(async () => {
+    f.ctx.sessionPersistence = { root: foreignRoot, locate: () => ({ path: join(foreignRoot, 'foreign.jsonl') }) };
+    return f.ports;
+  });
+  const close = f.child.plugin.apply(f.ctx, f.options);
+  await expect(f.child.ready()).rejects.toThrow('ACTUAL_PERSISTENCE_CONFLICT');
+  expect(f.ctx.agents.resume).not.toHaveBeenCalled();
+  expect(fs.existsSync(join(f.config.stageDirectory, 'child-ready.json'))).toBe(false);
+  await expect(close()).rejects.toThrow('NOT_QUIESCENT');
 });
