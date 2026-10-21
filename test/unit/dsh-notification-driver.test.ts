@@ -264,4 +264,23 @@ describe('driveOnce (whole delivery) ', () => {
     });
     expect(submits).toEqual([]);       // nothing to re-run after reopen
   });
+
+  it('continues from an enqueued attempt when the delivery grew meanwhile', async () => {
+    const f = harness({ outcome: { status: 'enqueued', detail: 'tok-1' }, settled: true });
+    await driveOnce(f.ports);                       // enqueued [1,2]
+    f.setListed([batch({ delivery: { sequence: 7, entryIds: [1, 2, 99] } })]);
+    const submits: number[][] = [];
+    const confirms: number[][] = [];
+    await driveOnce({
+      ...f.ports,
+      pending: { ...f.ports.pending, confirm: async (b: DeliveryBatch) => { confirms.push([...b.delivery.entryIds]); } },
+      session: {
+        ...f.ports.session,
+        submit: async (b: DeliveryBatch) => { submits.push([...b.delivery.entryIds]); return { status: 'enqueued' as const, detail: 'tok-2' }; },
+      },
+    });
+    expect(submits).toEqual([[99]]);               // only the late entry is sent
+    expect(f.journal.get(intentKey(batch()))?.batch.delivery.entryIds).toEqual([1, 2, 99]);
+    expect(confirms).toEqual([]);                  // still awaiting the delta's completion
+  });
 });

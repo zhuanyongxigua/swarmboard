@@ -192,6 +192,7 @@ export async function driveOnce(
     let workBatch: DeliveryBatch = batch;
     let covered = intent ? coveredOf(intent) : new Set<number>();
     let deltaOf: DeliveryBatch | undefined;
+    // (the enqueued branch below may also set workBatch to a delta and fall through)
     if (intent?.state === 'completedUnacked' || intent?.state === 'acceptedUnacked') {
       const missing = batch.delivery.entryIds.filter(id => !covered.has(id));
       if (missing.length === 0) {
@@ -222,15 +223,29 @@ export async function driveOnce(
     if (intent?.state === 'enqueued') {
       const settlement = await ports.session.settlement(intent.batch, intent.detail ?? '');
       if (!settlement.settled) { result.awaitingCompletion.push(key); continue; }
-      try {
-        await ports.pending.confirm(intent.batch);
-        await ports.journal.del(key);
-        result.receiptsConfirmed.push(key);
-      } catch {
-        await ports.journal.put({ key, state: 'completedUnacked', batch: intent.batch, detail: intent.detail });
-        result.receiptPending.push(key);
+      // The submitted attempt is now authoritatively complete; fold it into `covered` and
+      // let the normal flow decide: confirm the whole current delivery, or continue with a
+      // delta when it grew in the meantime (p1 7255 / p2 7258).
+      for (const id of intent.batch.delivery.entryIds) covered.add(id);
+      const stillMissing = batch.delivery.entryIds.filter(id => !covered.has(id));
+      if (stillMissing.length === 0) {
+        try {
+          await ports.pending.confirm(batch);
+          await ports.journal.del(key);
+          result.receiptsConfirmed.push(key);
+        } catch {
+          await ports.journal.put(durableIntent(key, 'completedUnacked', batch, covered, intent.detail));
+          result.receiptPending.push(key);
+        }
+        continue;
       }
-      continue;
+      deltaOf = batch;
+      workBatch = {
+        ...batch,
+        delivery: { sequence: batch.delivery.sequence, entryIds: stillMissing },
+        entries: batch.entries.filter(entry => stillMissing.includes(entry.id)),
+      };
+      // fall through and submit only the still-missing entries
     }
 
     // An interrupted attempt becomes unknown rather than being replayed.
