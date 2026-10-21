@@ -12,11 +12,13 @@ import { boardInstructions } from './board-instructions.js';
 import { WorkerPool } from './worker-pool.js';
 import { PoolLiveness } from './pool-liveness.js';
 import { SeatCheckStore } from './seat-check-store.js';
-import { tick as tickSeatChecks, pendingWakes, seatKey, type SeatSnapshot, type SeatCheckWake } from './seat-checks.js';
+import { tick as tickSeatChecks, pendingWakes, seatKey, type SeatRecord, type SeatSnapshot, type SeatCheckWake } from './seat-checks.js';
 import { createNotificationDispatcher } from './notification-dispatch.js';
 import { PipelineEvents, type PipelineReader } from './pipeline-events.js';
 import { ExecutionGrants } from './execution-grants.js';
-import { CollaboratorStore } from './collaborators.js';
+import { CollaboratorStore, collaboratorTaskIds } from './collaborators.js';
+import { NotificationAdapterStore } from './notification-adapter-store.js';
+import { isSessionTaskCheck, readSessionTaskCheck } from './notification-adapters.js';
 import { notificationDelay, notificationSettings, type NotificationOptions } from './notification-batch.js';
 import { actionableWake, boardPreferencesChanged, wakePolicySettings, type WakePolicyOptions } from './wake-policy.js';
 
@@ -77,7 +79,7 @@ export class EventRuntime {
     this.collaborators = new CollaboratorStore(this.statePath);
     // Reminders are also offered to registered notification channels as durable
     // intents; the core never delivers or starts anything itself.
-    this.notificationDispatcher = createNotificationDispatcher(board, this.collaborators);
+    this.notificationDispatcher = createNotificationDispatcher(board, this.collaborators, this.workers);
     const sessionCheckMs = options.sessionCheckMs ?? 5 * 60 * 1000;
     if (sessionCheckMs > 0) {
       // Per-session checks replace the global reminder; constructing the legacy
@@ -150,20 +152,39 @@ export class EventRuntime {
   private runSeatChecks(pool: ReturnType<WorkerStore['pool']>, now: number) {
     const seatChecks = this.seatChecks;
     if (!seatChecks) return;
-    const seats: SeatSnapshot[] = [];
+    const seats = new Map<string, SeatSnapshot>();
+    const scopes = new Map<string, Set<string>>();
+    const goals = this.board.taskStates();
+    const channels = new NotificationAdapterStore(this.board.db);
+    const add = (seat: SeatSnapshot, ids: string[]) => {
+      const key = seatKey(seat);
+      // An ambiguous channel binding needs host reconciliation, never selection
+      // by registry iteration order.
+      if (seats.has(key)) { seats.get(key)!.active = false; scopes.set(key, new Set()); return; }
+      seats.set(key, seat); scopes.set(key, new Set(ids));
+    };
     for (const memberId of pool?.memberIds ?? []) {
       const worker = this.workers.get(memberId);
-      if (!worker?.enabled) continue;
+      if (!worker) continue;
       // Native seats are identified by their worker id and the backend thread it
       // currently owns; a rebind changes threadId, which must not resume silently.
-      seats.push({ memberId, sessionRef: worker.threadId ?? `worker:${worker.id}`, active: worker.status !== 'error',
-        busy: ['running', 'uncertain'].includes(worker.status) });
+      add({ memberId, sessionRef: worker.threadId ?? `worker:${worker.id}`,
+        active: worker.enabled && !!worker.threadId && worker.status !== 'error' && !worker.retirement
+          && worker.backendId === this.backend.id,
+        busy: ['running', 'uncertain'].includes(worker.status) },
+      goals.filter(goal => (!pool!.taskIds.length || pool!.taskIds.includes(goal.id))
+        && (!worker.taskIds.length || worker.taskIds.includes(goal.id))).map(goal => goal.id));
     }
     for (const adapter of this.notificationDispatcher.adapters()) {
       if (!adapter.enabled || !adapter.capabilities.includes('durableDelivery')) continue;
       for (const member of adapter.members) {
-        seats.push({ memberId: member.memberId, sessionRef: member.sessionRef, active: true, busy: false,
-          adapterId: adapter.id, registrationVersion: adapter.version });
+        const admitted = (() => { try { return this.collaborators.get(member.memberId); } catch { return undefined; } })();
+        const ids = admitted ? collaboratorTaskIds(admitted, this.workers) : [];
+        const state = channels.reconcile(adapter.id, member.memberId).state?.state;
+        add({ memberId: member.memberId, sessionRef: member.sessionRef,
+          active: !!admitted?.enabled && !admitted.revokedAt && admitted.sessionRef === member.sessionRef,
+          busy: state === 'pending' || state === 'unknown', adapterId: adapter.id, registrationVersion: adapter.version },
+        goals.filter(goal => (ids === undefined || ids.includes(goal.id)) && member.taskIds.includes(goal.id)).map(goal => goal.id));
       }
     }
     // Outstanding checks from an earlier scan (or an earlier process) are retried
@@ -173,32 +194,40 @@ export class EventRuntime {
     // A native worker's session identity moves from `worker:<id>` to its threadId on
     // first open. Retire rows whose member kept the same id under an older session so
     // the new seat starts from a clean schedule instead of inheriting a stale one.
-    const liveKeys = new Set(seats.map(seat => seatKey(seat)));
+    const liveKeys = new Set(seats.keys());
     for (const [key, record] of records) {
       if (liveKeys.has(key)) continue;
-      if (seats.some(seat => seat.memberId === record.memberId)) {
+      if ([...seats.values()].some(seat => seat.memberId === record.memberId)) {
         seatChecks.store.remove(record as unknown as { memberId: string; sessionRef: string });
         records.delete(key);
       }
     }
-    const owed = pendingWakes(records);
-    const result = tickSeatChecks({
-      // `in_review`-only boards report pool.state 'waiting' (nothing left to
-      // dispatch), which must NOT suppress the per-session checks: the human plan
-      // explicitly keeps reviewing goals in scope. Only a stopped/terminal
-      // organization disables them.
-      now,
-      organizationActive: pool
-        ? !!pool.enabled && !TERMINAL_POOL_STATES.includes(pool.state)
-        : this.notificationDispatcher.adapters().some(adapter => adapter.enabled),
-      seats, goals: this.board.taskStates(), records, intervalMs: seatChecks.intervalMs,
-    });
-    // Persist first, including the pending outbox entry, before anything is published.
-    seatChecks.store.save(result.records);
-    for (const wake of [...owed, ...result.wake]) {
+    // A waiting review remains applicable. External-only boards need no fake
+    // native pool; each channel still needs a current formal admission below.
+    const organizationActive = !pool || pool.enabled && !TERMINAL_POOL_STATES.includes(pool.state);
+    const changed: SeatRecord[] = [];
+    const wakes = pendingWakes(records);
+    for (const [key, seat] of seats) {
+      // Apply scope before eligibility and before building the bounded sample.
+      const result = tickSeatChecks({ now, organizationActive, seats: [seat],
+        goals: goals.filter(goal => scopes.get(key)!.has(goal.id)), records, intervalMs: seatChecks.intervalMs });
+      changed.push(...result.records); wakes.push(...result.wake);
+    }
+    seatChecks.store.save(changed);
+    for (const wake of wakes) {
+      const key = seatKey(wake), seat = seats.get(key);
+      const goalIds = wake.goalIds.filter(id => scopes.get(key)?.has(id)
+        && goals.some(goal => goal.id === id && ['todo', 'in_progress', 'in_review'].includes(goal.status)));
+      // Revalidate the durable outbox too. Dropping an unsubmitted check never
+      // clears or replays the adapter's independent unknown delivery receipt.
+      if (!organizationActive || !seat?.active || !goalIds.length
+        || seat.adapterId !== wake.adapterId || seat.registrationVersion !== wake.registrationVersion) {
+        seatChecks.store.confirmPending(wake); continue;
+      }
+      if (seat.busy) continue;
       // A transient dispatch failure leaves the pending entry in place; it is
       // retried on the next scan rather than lost.
-      if (this.publishSeatCheck(wake, pool)) seatChecks.store.confirmPending(wake);
+      if (this.publishSeatCheck({ ...wake, goalIds }, pool)) seatChecks.store.confirmPending(wake);
     }
   }
 
@@ -301,7 +330,21 @@ export class EventRuntime {
   }
   requestReconcile(input: unknown) { const worker = this.workers.requestReconcile(input); this.notify(); return worker; }
   update(input: unknown) { const worker = this.workers.update(input); this.notify(); return worker; }
+  private nativeCheckRelevant(worker: Worker, entry: Entry, preparedSession?: string): boolean {
+    const check = readSessionTaskCheck(entry), pool = this.workers.pool();
+    if (!check || check.adapterId || !pool?.enabled || !pool.memberIds.includes(worker.id)
+      || TERMINAL_POOL_STATES.includes(pool.state) || !worker.enabled || worker.retirement
+      || check.memberId !== worker.id || check.sessionRef !== worker.threadId
+      || preparedSession !== undefined && preparedSession !== worker.threadId) return false;
+    const allowed = (id: string) => (!pool.taskIds.length || pool.taskIds.includes(id))
+      && (!worker.taskIds.length || worker.taskIds.includes(id));
+    return check.goalIds.every(allowed) && check.goalIds.some(id => {
+      try { return ['todo', 'in_progress', 'in_review'].includes(this.board.readTask(id).status); }
+      catch { return false; }
+    });
+  }
   private relevant(worker: Worker, entry: Entry) {
+    if (isSessionTaskCheck(entry) && !this.nativeCheckRelevant(worker, entry)) return false;
     if (worker.poolId) {
       if (entry.agentId === worker.id) return false;
       const pool = this.workers.pool();
@@ -542,6 +585,15 @@ export class EventRuntime {
         const poolStopped = !!worker.poolId && (!pool?.enabled || !this.board.taskStates().some(t =>
           (!pool.taskIds.length || pool.taskIds.includes(t.id)) && !['done', 'canceled'].includes(t.status)));
         if (!current.enabled || poolStopped) { this.workers.save({ ...current, threadId, status: 'idle', deliveryId: null, deliveryCursor: null, turnId: null, deliveryPhase: undefined }); return; }
+        // Session preparation awaited vendor work: a queued check may have lost
+        // its session binding or last actionable goal in that gap. Discard only
+        // the stale checks, retaining ordinary messages from the same batch.
+        events = events.filter(entry => !isSessionTaskCheck(entry) || this.nativeCheckRelevant(current, entry, threadId!));
+        if (!events.length) {
+          this.workers.save({ ...current, status: 'idle', cursor: worker.deliveryCursor!,
+            deliveryId: null, deliveryCursor: null, turnId: null, deliveryPhase: undefined });
+          return;
+        }
         current = this.workers.save({ ...current, threadId });
         const latest = this.board.readPromptSettings();
         if (boardInstructions(latest.systemPrompt, latest.userPrompt).revision === revision) { ready = true; break; }

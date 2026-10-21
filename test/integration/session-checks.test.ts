@@ -19,7 +19,7 @@ function fixture(over: { sessionCheckMs?: number } = {}) {
   const make = () => new EventRuntime(board, {
     notificationBatchMs: 0, databasePath: path, serverEntry: 'unused', now: () => now,
     sessionCheckMs: over.sessionCheckMs ?? 60_000,
-    adapter: worker => ({ open: async w => w.threadId ?? 'thread-' + w.id,
+    adapter: _worker => ({ open: async w => w.threadId ?? 'thread-' + w.id,
       run: async () => {}, close: async () => {} }),
   });
   let runtime = make();
@@ -87,17 +87,19 @@ describe('per-session five-minute checks (runtime wiring)', () => {
       now: () => now, sessionCheckMs: 60_000 });
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }), () => board.close(), async () => { await runtime.close(); });
     const goal = board.createTask({ title: 'Human goal' });
+    const member = runtime.configureCollaborator({ expectedVersion: 0, name: 'Synthetic external',
+      harness: 'synthetic', sessionRef: 'external-session-1', taskIds: [goal.id], enabled: true });
     new NotificationAdapterStore(board.db).save({ id: 'adapter-synthetic', version: 1,
       displayName: 'Synthetic external channel', harness: 'synthetic', enabled: true,
       capabilities: ['durableDelivery'],
-      members: [{ memberId: 'external-1', sessionRef: 'external-session-1', taskIds: [goal.id] }] });
+      members: [{ memberId: member.id, sessionRef: member.sessionRef, taskIds: [goal.id] }] });
     await runtime.scan();                       // anchor
     now += 60_000;
     await runtime.scan();
     const published = board.board().entries.filter(e => e.summary.startsWith('SESSION_TASK_CHECK:'));
     expect(published.length).toBeGreaterThan(0);
     const detail = JSON.parse(published[0]!.detail!) as { memberId: string; sessionRef: string; adapterId?: string };
-    expect(detail.memberId).toBe('external-1');
+    expect(detail.memberId).toBe(member.id);
     expect(detail.sessionRef).toBe('external-session-1');
     expect(detail.adapterId).toBe('adapter-synthetic');
   });
