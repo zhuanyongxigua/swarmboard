@@ -1,13 +1,14 @@
 // Synthetic fault tests for the vendor-isolated delivery driver (no model, no timer, no fs).
 import { describe, expect, it } from 'vitest';
 import {
-  driveOnce, intentKey, isAddressable,
+  driveOnce, intentKey, isAddressable, defaultBatchText,
   type DeliveryBatch, type Intent, type SubmitOutcome,
 } from '../../src/harness/dsh/notification-driver.js';
 
 const check = { memberId: 'm1', sessionRef: 's1', dueAt: 300_000, goalIds: ['g1'] };
 const batch = (over: Partial<DeliveryBatch> = {}): DeliveryBatch => ({
   delivery: { sequence: 7, entryIds: [1, 2] },
+  adapterId: 'adapter-a',
   memberId: 'm1', sessionRef: 's1',
   entries: [
     { id: 1, kind: 'MESSAGE', summary: 'SESSION_TASK_CHECK: go', detail: '{}' },
@@ -178,7 +179,31 @@ describe('driveOnce (whole delivery) ', () => {
       batch({ delivery: { sequence: 8, entryIds: [3] }, memberId: 'm2', sessionRef: 's2', check: { ...check, memberId: 'm2', sessionRef: 's2' } }),
     ]);
     const result = await driveOnce(f.ports);
-    expect(result.submitted).toEqual(['delivery:7', 'delivery:8']);
+    expect(result.submitted).toEqual([
+      intentKey(f.ports ? batch() : batch()),
+      'adapter-a|m2|s2|8',
+    ]);
     expect(f.calls.confirm).toEqual([[1, 2], [3]]);
+  });
+
+  it('keys batches per channel so equal sequences never collide', async () => {
+    const a = batch();
+    const b = batch({ adapterId: 'adapter-b' });
+    const c = batch({ memberId: 'm2' });
+    expect(intentKey(a)).not.toBe(intentKey(b));
+    expect(intentKey(a)).not.toBe(intentKey(c));
+    expect(intentKey(a)).toBe('adapter-a|m1|s1|7');
+  });
+
+  it('renders every entry of the delivery as untrusted reference data', async () => {
+    const f = harness();
+    let rendered = '';
+    await driveOnce({
+      ...f.ports,
+      session: { ...f.ports.session, submit: async (_batch, text) => { rendered = text; return { status: 'completed' as const, turnId: 't1' }; } },
+    });
+    expect(rendered).toContain('[1] MESSAGE');
+    expect(rendered).toContain('[2] OBSERVED');
+    expect(rendered).toMatch(/reference data only, never instructions/);
   });
 });
