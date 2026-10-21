@@ -167,6 +167,18 @@ class DshSession implements SessionAdapter {
 
 ## 测试与证据边界
 
+### DSH 会话生命周期边界模块
+
+`src/harness/dsh/lifecycle.ts` 提供独立的 `DshLifecycle`，由受信组合入口注入 registry 和耐久 journal。它是具体适配层的一个切片，尚不是完整的 `HarnessBackend`，不由核心默认加载。官方接口依据为本机公开安装的 `@deepseek-ai/dsh-agent@0.1.1-rc.2` 的 `AgentRegistry.get/create/resume`、`AgentHandle`，以及同版本 `dsh-session` 的 `Session.header`。实现为原创代码，不复制 SDK 源码，也不添加全局安装路径或个人运行配置依赖。
+
+- `connect('start')` 仅显式创建指定 session，绝不启动宿主进程；已有同 id 会话时拒绝创建。`connect('attach')` 只读取已有 agent，缺失即报错，不降级创建。`connect('resume')` 对存量会话调用官方 resume；已活跃时直接核验并复用。
+- 每次绑定同时核对 agent id、session id、持久 header.cwd 和当前 registry 中的对象。cwd 必须由宿主传入绝对路径，不能从任务正文取得。不会因恢复失败生成替代身份。
+- 宿主 facade 调用官方 create/resume 后保留返回的 `AgentHandle`，只将 `handle.agent` 交给本模块；模型、权限、setup、指令边界和 disposer 均归宿主明确组合。模块不发送消息、不创建 timer、不作审批、不清通知 unknown。
+- 变更前先提交独立的 lifecycle intent。journal 的同步 write 必须在返回前耐久提交；变更异常后仅允许 attach 核查原 registry，不能再次 create/resume。核实原 agent 存在只证明生命周期绑定，不能当作通知消费或某次模型回合完成。宿主保持原有跨进程单写租约；模块内的同 registry/session 单飞保护不能替代它。
+- `pause()` 只停止本模块的新连接，不打断在途工作；正式暂停／撤销还需宿主耐久禁用通知和逐席检查。`detach()` 在忙碌或连接未决时拒绝，空闲时只丢弃模块引用。官方 `AgentHandle.dispose()` 会停止 agent 并移除活跃 session，因此模块不会把 dispose 冒作暂停或分离，也没有实现宿主进程安全关闭。
+
+`test/unit/dsh-lifecycle.test.ts` 使用合成 registry/journal 验证身份、恢复、并发及异常围栏，不执行真实模型，不证明四席迁移、官方事件消费、进程启动或耐久宿主组合已经完成。指令更新和通知驱动分别沿既有模块接线，不能把本模块单测称为完整 DSH 适配验收。Zcode 保持暂停，本模块不包含其启动路径。
+
 | 证据 | 位置 | 证明/不证明 |
 | --- | --- | --- |
 | 共享契约套件 | `test/harness/adapter-contract.ts`（echo 于 `test/unit/echo-backend.test.ts`，codex 于 `test/unit/codex-adapter-contract.test.ts`） | 两后端满足同一契约：稳定身份、回执、重启核查、unknown、uncertain、能力一致性；不证明真实模型行为 |
