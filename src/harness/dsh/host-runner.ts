@@ -21,7 +21,7 @@ export function createDshHostRunner(options: DshHostRunnerOptions) {
   let again = false;
   let stopping = false;
   let released = false;
-  const fence = () => { if (!lease.owns()) throw new Error('DSH_HOST_LEASE_LOST'); };
+  const fence = () => { if (lease.owns() !== true) throw new Error('DSH_HOST_LEASE_LOST'); };
   const guarded = {
     pending: {
       list: async () => { fence(); const batch = await ports.pending.list(); fence(); return batch; },
@@ -44,7 +44,7 @@ export function createDshHostRunner(options: DshHostRunnerOptions) {
     pass(): Promise<DriveResult> {
       if (stopping) return Promise.reject(new Error('DSH_HOST_STOPPING'));
       if (running) { again = true; return running; }
-      if (!lease.acquire()) return Promise.reject(new Error('DSH_HOST_OWNED'));
+      if (lease.acquire() !== true) return Promise.reject(new Error('DSH_HOST_OWNED'));
       running = (async () => {
         let result: DriveResult | undefined;
         do {
@@ -63,7 +63,7 @@ export function createDshHostRunner(options: DshHostRunnerOptions) {
       // state; it does not turn the subsequent quiescence check into success.
       try { await running; } catch { /* The journal and lease remain intact. */ }
       if (released) return;
-      if (!options.canRelease()) throw new Error('DSH_HOST_NOT_QUIESCENT');
+      if (options.canRelease() !== true) throw new Error('DSH_HOST_NOT_QUIESCENT');
       lease.release(); released = true;
     },
   });
