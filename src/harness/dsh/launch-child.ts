@@ -14,7 +14,7 @@ import type { DshSdkSessionAgent, DshSdkBatch } from './sdk-session.js';
 import type { DshNotificationPortOptions } from './notification-port.js';
 import { createDshLauncherChannels } from './launcher-channels.js';
 import { openDshLauncherMemberPorts } from './launcher-member-ports.js';
-import { workerProtocol } from '../../worker-prompt.js';
+import { dshLaunchProtocol } from './launch-instructions.js';
 
 const text = z.string().min(1), sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const moduleRef = z.strictObject({ path: text, sha256 });
@@ -62,6 +62,7 @@ function pinned(ref: { path: string; sha256: string }) {
 /** Read one fixed descriptor snapshot and its original session provenance. */
 export function readDshChildConfig(options: { configPath: string; configSha256: string }) {
   const config = dshChildConfigSchema.parse(JSON.parse(pinned({ path: options.configPath, sha256: options.configSha256 }).toString('utf8')));
+  ensure(new Set(config.goalBindings.map(goal => goal.poolId)).size === 1, 'DSH_CHILD_SINGLE_POOL_REQUIRED');
   for (const dir of [config.stageDirectory, config.runtimeDirectory, config.persistenceRoot, config.identity.cwd, config.sdk.root]) directory(dir);
   ensure(dirname(options.configPath) === config.stageDirectory, 'DSH_CHILD_CONFIG_STAGE_REQUIRED');
   const dirs = [config.stageDirectory, config.runtimeDirectory, config.identity.cwd];
@@ -168,9 +169,10 @@ export function createDshLaunchChild(dependencies: Partial<DshChildDependencies>
         syncDirectory(sidecar);
         db = new DatabaseSync(sidecar);
         const lease = createDshHostLease({ db, ...config.identity });
-        const protocolText = workerProtocol();
+        const protocol = dshLaunchProtocol({ ...config.identity, poolId: config.goalBindings[0].poolId,
+          taskIds: config.goalBindings.map(goal => goal.taskId) });
         const boundary = createDshInstructionBoundary({ directory: config.runtimeDirectory, workspace: config.identity.cwd,
-          sessionCwd: config.identity.cwd, protocolText, protocolDigest: hash(protocolText),
+          sessionCwd: config.identity.cwd, protocolText: protocol.text, protocolDigest: protocol.digest,
           readPreferences: async () => snapshot(await ports!.callTool({ name: 'preferences_read', arguments: {} })),
           readUserPrompt: async () => snapshot(await ports!.callTool({ name: 'user_prompt_read', arguments: {} })),
           ensureOpen: () => ensure(!closed, 'DSH_CHILD_CLOSED') });
