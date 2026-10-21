@@ -13,6 +13,17 @@
 //  5. an authoritative completion whose receipt failed only retries the receipt;
 //  6. the idempotency key is (memberId, sessionRef, dueAt).
 
+/**
+ * A check carries the identity of the delivery it belongs to. Receipts are settled per
+ * DELIVERY (one immutable `sequence` plus the exact `entryIds` echoed back), never per
+ * check: a batch can grow by later merges, and confirming a single check would settle
+ * entries that were never consumed (p2 7132).
+ */
+export interface DeliveryRef {
+  sequence: number;
+  entryIds: readonly number[];
+}
+
 export interface PendingCheck {
   memberId: string;
   sessionRef: string;
@@ -20,23 +31,38 @@ export interface PendingCheck {
   goalIds: readonly string[];
   adapterId?: string;
   registrationVersion?: number;
+  delivery?: DeliveryRef;
 }
 
-export type SubmitOutcome = { status: 'accepted' | 'unknown' | 'rejected'; detail?: string };
+/**
+ * `enqueued` only means the official session accepted the prompt into its durable queue.
+ * Per docs/harness-adapters.md an accepted prompt is NOT a model result: the delivery is
+ * settled only when the host observes authoritative turn completion for that same delivery.
+ */
+export type SubmitOutcome =
+  | { status: 'enqueued'; detail?: string }
+  | { status: 'completed'; turnId: string; detail?: string }
+  | { status: 'unknown'; detail?: string }
+  | { status: 'rejected'; detail?: string };
+
+export type DeliverySettlement = { settled: true } | { settled: false; detail?: string };
 
 export interface PendingPort {
   list(): Promise<readonly PendingCheck[]>;
-  confirm(check: PendingCheck): Promise<void>;
-  release(check: PendingCheck, reason: 'stale-session' | 'rejected' | 'scope-empty'): Promise<void>;
+  /** Settle one delivery: the exact immutable sequence and the full entryIds snapshot. */
+  confirm(delivery: DeliveryRef, check: PendingCheck): Promise<void>;
+  release(check: PendingCheck, reason: 'stale-session' | 'rejected' | 'scope-empty' | 'stale-delivery-view'): Promise<void>;
 }
 
 export interface SessionPort {
   isCurrent(check: PendingCheck): Promise<boolean>;
   isBusy(check: PendingCheck): Promise<boolean>;
   submit(check: PendingCheck, text: string): Promise<SubmitOutcome>;
+  /** Authoritative completion check for a turn submitted for this delivery. */
+  settlement(check: PendingCheck, turnId: string): Promise<DeliverySettlement>;
 }
 
-export type IntentState = 'submitting' | 'unknown' | 'acceptedUnacked';
+export type IntentState = 'submitting' | 'unknown' | 'enqueued' | 'completedUnacked' | 'acceptedUnacked';
 
 export interface Intent {
   key: string;
@@ -64,6 +90,8 @@ export interface DriveResult {
   unknown: string[];
   receiptPending: string[];
   receiptsConfirmed: string[];
+  /** Accepted into the official queue but no authoritative completion seen yet. */
+  awaitingCompletion: string[];
 }
 
 export const intentKey = (check: Pick<PendingCheck, 'memberId' | 'sessionRef' | 'dueAt'>) =>
@@ -80,7 +108,7 @@ export async function driveOnce(
 ): Promise<DriveResult> {
   const result: DriveResult = {
     submitted: [], merged: [], skipped: [], rejected: [], unknown: [],
-    receiptPending: [], receiptsConfirmed: [],
+    receiptPending: [], receiptsConfirmed: [], awaitingCompletion: [],
   };
   const render = options.text ?? defaultCheckText;
 
@@ -88,10 +116,12 @@ export async function driveOnce(
     const key = intentKey(check);
     const intent = await ports.journal.get(key);
 
-    // 5. An authoritative completion whose receipt failed only retries the receipt.
-    if (intent?.state === 'acceptedUnacked') {
+    // A delivery whose authoritative completion was seen but whose receipt failed: retry
+    // ONLY the receipt (idempotent, delivery-scoped) and never run the model again.
+    if (intent?.state === 'completedUnacked' || intent?.state === 'acceptedUnacked') {
+      if (!check.delivery) { result.receiptPending.push(key); continue; }
       try {
-        await ports.pending.confirm(check);
+        await ports.pending.confirm(check.delivery, check);
         await ports.journal.del(key);
         result.receiptsConfirmed.push(key);
       } catch {
@@ -100,33 +130,50 @@ export async function driveOnce(
       continue;
     }
 
-    // 4. An inconclusive submission is never replayed; the caller reconciles it out of band.
+    // An inconclusive submission is never replayed; the caller reconciles it out of band.
     if (intent?.state === 'unknown') {
       result.unknown.push(key);
       continue;
     }
 
-    // 3. A leftover 'submitting' intent means a crash mid-submit: keep it unknown, do not replay.
+    // A prompt already accepted into the official queue is NOT a completed turn: keep the
+    // delivery unresolved until the host reports authoritative completion for it.
+    if (intent?.state === 'enqueued') {
+      const settlement = await ports.session.settlement(check, intent.detail ?? '');
+      if (!settlement.settled) {
+        result.awaitingCompletion.push(key);
+        continue;
+      }
+      if (!check.delivery) { result.receiptPending.push(key); continue; }
+      try {
+        await ports.pending.confirm(check.delivery, check);
+        await ports.journal.del(key);
+        result.receiptsConfirmed.push(key);
+      } catch {
+        await ports.journal.put({ key, state: 'completedUnacked', check, detail: intent.detail });
+        result.receiptPending.push(key);
+      }
+      continue;
+    }
+
+    // A leftover 'submitting' intent means a crash mid-submit: keep it unknown, never replay.
     if (intent?.state === 'submitting') {
       await ports.journal.put({ ...intent, state: 'unknown' });
       result.unknown.push(key);
       continue;
     }
 
-    // 2. The session the check was addressed to must still be the current one.
     if (!(await ports.session.isCurrent(check))) {
       await ports.pending.release(check, 'stale-session');
       result.skipped.push(key);
       continue;
     }
 
-    // 1. A busy session is left alone: the check stays pending for the next scan.
     if (await ports.session.isBusy(check)) {
       result.merged.push(key);
       continue;
     }
 
-    // 3. Durable intent strictly before the side effect.
     await ports.journal.put({ key, state: 'submitting', check });
 
     let outcome: SubmitOutcome;
@@ -148,15 +195,35 @@ export async function driveOnce(
       continue;
     }
 
-    result.submitted.push(key);
-    try {
-      await ports.pending.confirm(check);
-      await ports.journal.del(key);
-    } catch (error) {
-      await ports.journal.put({ key, state: 'acceptedUnacked', check, detail: String((error as Error)?.message ?? error) });
-      result.receiptPending.push(key);
+    if (outcome.status === 'enqueued') {
+      await ports.journal.put({ key, state: 'enqueued', check, detail: outcome.detail });
+      result.awaitingCompletion.push(key);
+      continue;
     }
+
+    // Authoritative completion reported with the submission itself.
+    result.submitted.push(key);
+    await ports.journal.put({ key, state: 'completedUnacked', check, detail: outcome.turnId });
+    await settleCompleted(ports, result, key, check, outcome.turnId);
   }
 
   return result;
+}
+
+async function settleCompleted(
+  ports: { pending: PendingPort; journal: Journal },
+  result: DriveResult,
+  key: string,
+  check: PendingCheck,
+  turnId: string,
+): Promise<void> {
+  if (!check.delivery) { result.receiptPending.push(key); return; }
+  try {
+    await ports.pending.confirm(check.delivery, check);
+    await ports.journal.del(key);
+    result.receiptsConfirmed.push(key);
+  } catch {
+    await ports.journal.put({ key, state: 'completedUnacked', check, detail: turnId });
+    result.receiptPending.push(key);
+  }
 }
