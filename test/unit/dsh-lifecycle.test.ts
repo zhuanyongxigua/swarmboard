@@ -143,6 +143,23 @@ describe('DSH lifecycle boundary', () => {
     expect(lifecycle.status()).toBe('disconnected');
   });
 
+  it('lets an accepted connection settle when paused in flight without admitting another operation', async () => {
+    const f = fixture(); const lifecycle = f.make(); let release!: (a: DshAgent) => void;
+    f.registry.resume.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const pending = lifecycle.connect('resume'); lifecycle.pause();
+    const a = f.agent(); f.agents.set(a.id, a); release(a);
+    expect(await pending).toBe(a); expect(lifecycle.status()).toBe('paused');
+    expect(f.journal.read()).toBeNull();
+    await expect(lifecycle.connect('attach')).rejects.toThrow('DSH_PAUSED');
+  });
+
+  it('reports a conflict when the same live object no longer has the validated metadata', async () => {
+    const f = fixture(); const a = f.agent(); f.agents.set(a.id, a);
+    const lifecycle = f.make(); await lifecycle.connect('attach');
+    Object.defineProperty(a.session.header, 'cwd', { value: '/different-workspace' });
+    expect(() => lifecycle.status()).toThrow('DSH_SESSION_CONFLICT');
+  });
+
   it('rejects malformed trusted configuration and a journal for another session', () => {
     const f = fixture();
     expect(() => new DshLifecycle({ sessionId: '', cwd: 'relative', registry: f.registry, journal: f.journal })).toThrow('DSH_INVALID_CONFIG');
