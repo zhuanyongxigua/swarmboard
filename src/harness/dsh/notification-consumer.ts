@@ -454,7 +454,13 @@ export async function startNotificationConsumer(options: {
     throw error;
   }
   let inFlight: Promise<PassResult> | null = null;
-  const pass = async (dryRun = false): Promise<PassResult> => {
+  // A tick that overlaps an active pass must reuse that pass instead of claiming
+  // (and later clearing) its ownership: otherwise stop() waits on a short
+  // "pass-in-flight" result, releases the lock early, and the real pass keeps
+  // sending afterwards (review FAIL 8908).
+  const pass = (dryRun = false): Promise<PassResult> => {
+    const active = inFlight;
+    if (active) return active;
     const run = (async () => {
       const result = await runPass({
         seats: options.config.seats,
@@ -469,7 +475,9 @@ export async function startNotificationConsumer(options: {
       return result;
     })();
     inFlight = run;
-    try { return await run; } finally { if (inFlight === run) inFlight = null; }
+    const clear = () => { if (inFlight === run) inFlight = null; };
+    run.then(clear, clear);
+    return run;
   };
   let first: PassResult;
   try {
