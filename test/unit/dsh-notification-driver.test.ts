@@ -105,13 +105,23 @@ describe('driveOnce (whole delivery) ', () => {
     expect(f.calls.settlement).toBe(0);
   });
 
-  it('never widens a receipt retry to entries merged after the submission', async () => {
+  it('consumes a late-merged entry before settling the grown delivery', async () => {
     const f = harness({ confirmFails: true });
-    await driveOnce(f.ports);
+    await driveOnce(f.ports);                                   // [1,2] completed, receipt rejected
     f.setListed([batch({ delivery: { sequence: 7, entryIds: [1, 2, 99] } })]);
-    await driveOnce(f.ports);
-    expect(f.calls.confirm[0]).toEqual([1, 2]);
-    expect(f.calls.confirm.at(-1)).toEqual([1, 2]);
+    const submits: number[][] = [];
+    const confirms: number[][] = [];
+    await driveOnce({
+      ...f.ports,
+      pending: { ...f.ports.pending, confirm: async (b: DeliveryBatch) => { confirms.push([...b.delivery.entryIds]); } },
+      session: {
+        ...f.ports.session,
+        submit: async (b: DeliveryBatch) => { submits.push([...b.delivery.entryIds]); return { status: 'completed' as const, turnId: 't2' }; },
+      },
+    });
+    // Entry 99 must be submitted (really consumed) before it can be acknowledged.
+    expect(submits).toEqual([[99]]);
+    expect(confirms.at(-1)).toEqual([1, 2, 99]);
   });
 
   it('drops a batch addressed to a session that is no longer current', async () => {
@@ -229,4 +239,5 @@ describe('driveOnce (whole delivery) ', () => {
     expect(f.calls.submit).toBe(0);
     expect(f.calls.confirm).toEqual([]);
   });
+
 });

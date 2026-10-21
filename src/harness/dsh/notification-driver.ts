@@ -79,6 +79,9 @@ export interface Intent {
   state: IntentState;
   batch: DeliveryBatch;
   detail?: string;
+  /** Entry ids of this delivery that already have authoritative completion (p2 7237).
+   *  When the delivery grows by a later merge, only the missing entries are submitted. */
+  covered?: readonly number[];
 }
 
 export interface Journal {
@@ -162,16 +165,32 @@ export async function driveOnce(
     const key = intentKey(batch);
     const intent = await ports.journal.get(key);
 
-    // A completed batch whose receipt failed: retry only the receipt, against the snapshot.
-    if (intent && (intent.state === 'completedUnacked' || intent.state === 'acceptedUnacked')) {
-      try {
-        await ports.pending.confirm(intent.batch);
-        await ports.journal.del(key);
-        result.receiptsConfirmed.push(key);
-      } catch {
-        result.receiptPending.push(key);
+    // Work out whether this delivery still owes a model turn: entries that never got an
+    // authoritative completion (a later ordinary merge grows the delivery, p2 7237).
+    let workBatch: DeliveryBatch = batch;
+    let covered = new Set<number>(intent?.covered ?? intent?.batch.delivery.entryIds ?? []);
+    let deltaOf: DeliveryBatch | undefined;
+    if (intent?.state === 'completedUnacked' || intent?.state === 'acceptedUnacked') {
+      const missing = batch.delivery.entryIds.filter(id => !covered.has(id));
+      if (missing.length === 0) {
+        // Everything has completed: settle the whole (possibly grown) snapshot once.
+        try {
+          await ports.pending.confirm(batch);
+          await ports.journal.del(key);
+          result.receiptsConfirmed.push(key);
+        } catch {
+          await ports.journal.put({ ...intent, covered: [...covered] });
+          result.receiptPending.push(key);
+        }
+        continue;
       }
-      continue;
+      // Submit only the entries that were never consumed, keeping the same sequence.
+      deltaOf = batch;
+      workBatch = {
+        ...batch,
+        delivery: { sequence: batch.delivery.sequence, entryIds: missing },
+        entries: batch.entries.filter(entry => missing.includes(entry.id)),
+      };
     }
 
     // An inconclusive submission is never replayed.
@@ -200,25 +219,25 @@ export async function driveOnce(
     }
 
     // A batch carrying a check must have a usable check envelope.
-    if (batch.check && !isAddressable(batch.check)) {
+    if (workBatch.check && !isAddressable(workBatch.check)) {
       await ports.pending.release(batch, 'stale-session');
       result.skipped.push(key);
       continue;
     }
 
-    if (!(await ports.session.isCurrent(batch))) {
+    if (!(await ports.session.isCurrent(workBatch))) {
       await ports.pending.release(batch, 'stale-session');
       result.skipped.push(key);
       continue;
     }
 
-    if (await ports.session.isBusy(batch)) { result.merged.push(key); continue; }
+    if (await ports.session.isBusy(workBatch)) { result.merged.push(key); continue; }
 
-    await ports.journal.put({ key, state: 'submitting', batch });
+    await ports.journal.put({ key, state: 'submitting', batch: workBatch, covered: [...covered] });
 
     // Committing fence: the durable write is asynchronous, so the binding that was current
     // before it may already be gone (p8 7140/7141). Nothing was sent, so drop the intent.
-    if (!(await ports.session.isCurrent(batch))) {
+    if (!(await ports.session.isCurrent(workBatch))) {
       await ports.journal.del(key);
       await ports.pending.release(batch, 'stale-session');
       result.skipped.push(key);
@@ -227,13 +246,13 @@ export async function driveOnce(
 
     let outcome: SubmitOutcome;
     try {
-      outcome = await ports.session.submit(batch, render(batch));
+      outcome = await ports.session.submit(workBatch, render(workBatch));
     } catch (error) {
       outcome = { status: 'unknown', detail: String((error as Error)?.message ?? error) };
     }
 
     if (outcome.status === 'unknown') {
-      await ports.journal.put({ key, state: 'unknown', batch, detail: outcome.detail });
+      await ports.journal.put({ key, state: 'unknown', batch: workBatch, detail: outcome.detail, covered: [...covered] });
       result.unknown.push(key);
       continue;
     }
@@ -245,15 +264,18 @@ export async function driveOnce(
     }
     if (outcome.status === 'enqueued') {
       // Opaque settlement token from the port; kept verbatim and replayed to `settlement`.
-      await ports.journal.put({ key, state: 'enqueued', batch, detail: outcome.messageId ?? outcome.detail });
+      await ports.journal.put({ key, state: 'enqueued', batch: workBatch, detail: outcome.messageId ?? outcome.detail, covered: [...covered] });
       result.awaitingCompletion.push(key);
       continue;
     }
 
     result.submitted.push(key);
-    await ports.journal.put({ key, state: 'completedUnacked', batch, detail: outcome.turnId });
+    for (const id of workBatch.delivery.entryIds) covered.add(id);
+    // Settle against the newest snapshot (a delta submit still settles the grown delivery).
+    const settleTarget = deltaOf ?? batch;
+    await ports.journal.put({ key, state: 'completedUnacked', batch: settleTarget, detail: outcome.turnId, covered: [...covered] });
     try {
-      await ports.pending.confirm(batch);
+      await ports.pending.confirm(settleTarget);
       await ports.journal.del(key);
       result.receiptsConfirmed.push(key);
     } catch {
