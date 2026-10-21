@@ -197,7 +197,7 @@ export async function driveOnce(
       // that would re-run a delivery whose turn may already have happened (p8 7360).
       const legacy = await ports.journal.get(legacyIntentKey(batch));
       if (legacy) {
-        throw new Error(`LEGACY_INTENT_KEY: a v1 journal record exists for ${legacyIntentKey(batch)}; operator reconciliation is required; preserve the existing intent before driving this delivery`);
+        throw new Error(`LEGACY_INTENT_KEY: a v1 journal record exists for ${legacyIntentKey(batch)}; reconcile the original delivery and preserve its record before migrating, and do not replay or clear unresolved intents`);
       }
     }
 
