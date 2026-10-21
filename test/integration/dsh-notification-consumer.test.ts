@@ -28,7 +28,7 @@ function fixture() {
   board.registerAgent({ agentId: 'runtime-driver-test', name: 'Synthetic runtime' });
   const service = new NotificationService(board, collaborators);
   service.register(member.id, { id: 'driver-channel', version: 1, displayName: 'Synthetic channel', harness: 'synthetic',
-    enabled: true, capabilities: ['durableDelivery', 'receipt'],
+    enabled: true, capabilities: ['durableDelivery', 'receipt', 'timedReminder'],
     members: [{ memberId: member.id, sessionRef: member.sessionRef, taskIds: [goal.id] }] });
   const dispatcher = createNotificationDispatcher(board, collaborators);
   const entry = board.publishEntry({ agentId: 'runtime-driver-test', kind: 'MESSAGE', recipientId: member.id,
@@ -159,7 +159,7 @@ describe('DSH driver and durable notification consumption', () => {
       sessionRef: 'second-session', taskIds: [otherGoal.id], enabled: true }, f.board).collaborator;
     f.board.registerAgent({ agentId: other.id, name: other.name });
     f.service.register(other.id, { id: 'other-channel', version: 1, displayName: 'Second channel', harness: 'synthetic',
-      enabled: true, capabilities: ['durableDelivery', 'receipt'],
+      enabled: true, capabilities: ['durableDelivery', 'receipt', 'timedReminder'],
       members: [{ memberId: other.id, sessionRef: other.sessionRef, taskIds: [otherGoal.id] }] });
     const otherEntry = f.board.publishEntry({ agentId: 'runtime-driver-test', kind: 'MESSAGE', recipientId: other.id,
       summary: 'Work for the second consumer', detail: 'Independent second delivery.' });
