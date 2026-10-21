@@ -125,4 +125,25 @@ describe('DSH launcher member authority', () => {
     } finally { await ports.close(); await f.ports.close(); rmSync(directory, { recursive: true, force: true }); }
     expect(f.member.close).toHaveBeenCalledOnce(); expect(f.management.close).toHaveBeenCalledOnce();
   });
+
+  it('snapshots the board and channel references before asynchronous management connection', async () => {
+    const f = fixture(), directory = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-port-snapshot-')));
+    const boardDatabasePath = join(directory, 'board.sqlite');
+    writeFileSync(boardDatabasePath, 'synthetic board'); writeFileSync(boardDatabasePath + '.runtime.sqlite', 'synthetic runtime');
+    let release!: () => void;
+    const gate = new Promise<void>(done => { release = done; });
+    const openMember = vi.fn(async () => f.member);
+    const channels = { boardDatabasePath, openManagement: async () => { await gate; return f.management; }, openMember } as unknown as DshLauncherChannels;
+    const options = { channels, identity: f.identity, boardDatabasePath, goalBindings: [f.goal] };
+    const opening = openDshLauncherMemberPorts(options);
+    options.boardDatabasePath = join(directory, 'different-board.sqlite');
+    options.channels = { openMember: () => { throw Error('Changed caller channel'); } } as unknown as DshLauncherChannels;
+    options.identity = { ...f.identity, memberId: 'replacement' }; release();
+    try {
+      const ports = await opening;
+      try { expect(await ports.getCurrentBinding()).toMatchObject({ memberId: 'member' }); }
+      finally { await ports.close(); }
+      expect(openMember).toHaveBeenCalledExactlyOnceWith('member');
+    } finally { await f.ports.close(); rmSync(directory, { recursive: true, force: true }); }
+  });
 });

@@ -43,6 +43,8 @@ boardDatabasePath,goalBindings})` 将该通道组合成实际 child 通知端口
 legacy config、外置 authority 模块或固定 nativeWorkerId。board 路径必须与
 channels 内固定路径一致；goalBindings 由受信配置显式提供精确 task/pool/
 project/workspace 绑定，cwd 必须落在其中一个授权工作区。
+身份、目标、board 路径和通道引用在首次 await 前固定，调用者随后改写配置对象
+不会替换正在建立的权限或文件事件来源。
 
 每次读取都重新取得 caller 的 notification_binding_read，并通过管理
 runtime_read 核 pool、正式准入及 grants，通过 task_read 核当前任务状态，随后
