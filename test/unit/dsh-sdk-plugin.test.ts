@@ -145,10 +145,12 @@ describe('official SDK plugin entry', () => {
     await expect(close()).rejects.toThrow('DSH_HOST_NOT_QUIESCENT'); expect(f.lease.owns()).toBe(true);
   });
 
-  it('rechecks ownership after asynchronous instructions before touching the original session', async () => {
+  it('rechecks ownership after asynchronous instructions before mutating the original session', async () => {
     const gate = deferred(); const f = fixture({ prepareInstructions: () => gate.promise });
     const close = f.boundary.plugin.apply(f.ctx); f.lease.release(); gate.resolve();
-    await expect(f.boundary.ready()).rejects.toThrow('DSH_HOST_LEASE_LOST'); expect(f.sdk.get).not.toHaveBeenCalled();
+    await expect(f.boundary.ready()).rejects.toThrow('DSH_HOST_LEASE_LOST');
+    expect(f.sdk.create).not.toHaveBeenCalled(); expect(f.sdk.resume).not.toHaveBeenCalled();
+    expect(f.agent.send).not.toHaveBeenCalled();
     await expect(close()).rejects.toThrow('DSH_HOST_NOT_QUIESCENT');
   });
 
@@ -187,5 +189,24 @@ describe('official SDK plugin entry', () => {
     const close = f.boundary.plugin.apply(f.ctx); await f.boundary.ready();
     expect(checks).toBe(2); expect(f.agent.send).not.toHaveBeenCalled(); expect(f.flush).not.toHaveBeenCalled();
     await close();
+  });
+
+  it('does not release a busy original session when cleanup interrupts instruction preparation before attach', async () => {
+    const gate = deferred(); const f = fixture({ prepareInstructions: () => gate.promise });
+    f.agent.status = 'running'; const close = f.boundary.plugin.apply(f.ctx); const closing = close();
+    gate.resolve(); await expect(closing).rejects.toThrow('DSH_HOST_NOT_QUIESCENT');
+    expect(f.lease.owns()).toBe(true); expect(f.pass).not.toHaveBeenCalled();
+    f.agent.status = 'idle'; await close(); expect(f.lease.owns()).toBe(false); expect(f.dispose).not.toHaveBeenCalled();
+  });
+
+  it('retains an unresolved lifecycle intent if cleanup arrives before attach reconciliation', async () => {
+    const gate = deferred(); const f = fixture({ prepareInstructions: () => gate.promise });
+    f.db.exec('CREATE TABLE dsh_host_journal(slot TEXT PRIMARY KEY, data TEXT NOT NULL)');
+    const data = JSON.stringify({ operation: 'resume', sessionId: 'original', cwd: '/synthetic' });
+    f.db.prepare('INSERT INTO dsh_host_journal VALUES(?,?)').run('lifecycle:original', data);
+    const close = f.boundary.plugin.apply(f.ctx); const closing = close(); gate.resolve();
+    await expect(closing).rejects.toThrow('DSH_HOST_NOT_QUIESCENT'); expect(f.lease.owns()).toBe(true);
+    expect(f.db.prepare('SELECT data FROM dsh_host_journal WHERE slot=?').get('lifecycle:original')).toEqual({ data });
+    expect(f.sdk.create).not.toHaveBeenCalled(); expect(f.sdk.resume).not.toHaveBeenCalled();
   });
 });

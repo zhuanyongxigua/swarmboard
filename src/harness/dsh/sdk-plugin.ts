@@ -71,7 +71,7 @@ export function createDshSdkPlugin<S extends string, M extends string, A extends
   let pumping: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
   let runner: DshPluginRunner | undefined;
-  let quiescent = () => !failed;
+  let quiescent = () => false;
   let handles: () => readonly DshSdkHandle<A>[] = () => [];
   const subscriptions: (() => unknown)[] = [];
   const fail = (error: unknown) => {
@@ -115,14 +115,23 @@ export function createDshSdkPlugin<S extends string, M extends string, A extends
         const journals = createDshJournals<DeliveryBatch>({ db: options.db, sessionId: options.sessionRef });
         const lifecycle = new DshLifecycle({ sessionId: options.sessionRef, cwd: options.cwd,
           registry: facade.registry, journal: journals.lifecycle });
+        let retained = ctx.agents.get(options.sdkSessionId(options.sessionRef));
+        // Cleanup can arrive before connect(), while instruction preparation
+        // awaits I/O. Check the original live object and any unresolved intent
+        // from the beginning, rather than assuming this phase is quiescent.
+        quiescent = () => {
+          if (failed || journals.lifecycle.read() !== null) return false;
+          const current = ctx.agents.get(options.sdkSessionId(options.sessionRef));
+          if (current !== retained) return false;
+          return !current || (current.id === options.sessionRef && current.session.id === options.sessionRef
+            && current.session.header.cwd === options.cwd && current.status === 'idle' && !current.inbox.hasPending);
+        };
         await options.prepareInstructions();
         if (closed) return;
         if (options.lease.owns() !== true) throw new Error('DSH_HOST_LEASE_LOST');
         const bound = await lifecycle.connect(options.mode);
-        quiescent = () => {
-          const current = ctx.agents.get(options.sdkSessionId(options.sessionRef));
-          return !failed && current === bound && current.status === 'idle' && !current.inbox.hasPending;
-        };
+        retained = ctx.agents.get(options.sdkSessionId(options.sessionRef));
+        if (retained !== bound) throw new Error('DSH_SESSION_CONFLICT');
         if (closed) return;
         const sdkSession = createDshSdkSessionPort({ adapterId: options.adapterId, memberId: options.memberId,
           sessionRef: options.sessionRef, cwd: options.cwd,
