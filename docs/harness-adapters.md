@@ -171,7 +171,7 @@ class DshSession implements SessionAdapter {
 
 源码中的独立模块必须显式提供 `src/harness/<module>/index.ts` 公共入口；桌面构建将这些受信仓库入口分别打包为 `server/harness/<module>/index.mjs`，不把它们导入主服务。辅助目录没有入口则不导出。公共入口导入时不得注册、启动或执行真实会话，具体启用由受信宿主显式调用。构建拒绝模块中的绝对路径 import，以及 realpath 解析后逃出源码根的输入；宿主的个人 SDK 和配置在运行组合时传入，不以本机路径打进便携包。模块自己的依赖许可与主服务一起进入 `THIRD_PARTY_NOTICES.txt`；个人 SDK 安装、认证、运行目录和配置不随包复制。
 
-DSH 的入口导出指令与生命周期边界，供已经授权的宿主显式 import 后组合。导出不等于注册、启用或启动，不提供任务文本加载本地模块的接口，也不恢复暂停的 harness。第三方可按相同目录入口约定交付独立模块，无需在构建脚本增加厂商分支。源码构建仍通过 TypeScript 输出对应模块；桌面 ZIP 的独立 bundle 可从与源码无关的目录加载。
+DSH 的入口导出指令、生命周期、SDK 组合、会话发送、整批通知驱动和耐久 journal 边界，供已经授权的宿主显式 import 后组合。导出不等于注册、启用或启动，不提供任务文本加载本地模块的接口，也不恢复暂停的 harness。第三方可按相同目录入口约定交付独立模块，无需在构建脚本增加厂商分支。源码构建仍通过 TypeScript 输出对应模块；桌面 ZIP 的独立 bundle 可从与源码无关的目录加载。
 
 `test/unit/desktop-harness-modules.test.ts` 验证任意名合成模块打包后脱离源码加载、不执行构建期模块代码；`test/mcp/desktop-harness.test.ts` 对实际 ZIP 解包后加载 DSH 导出，并确认主服务没有嵌入这些实现。上述检查不连接官方宿主或模型，不能当作真实启用与迁移验收。
 
@@ -188,6 +188,36 @@ DSH 的入口导出指令与生命周期边界，供已经授权的宿主显式 
 
 `test/unit/dsh-lifecycle.test.ts` 使用合成 registry/journal 验证身份、恢复、并发及异常围栏，不执行真实模型，不证明四席迁移、官方事件消费、进程启动或耐久宿主组合已经完成。指令更新和通知驱动分别沿既有模块接线，不能把本模块单测称为完整 DSH 适配验收。Zcode 保持暂停，本模块不包含其启动路径。
 
+### DSH 官方 SDK 组合层
+
+`createDshSdkFacade({ sdk, sdkSessionId, createOptions, resumeOptions })` 将受信宿主持有的官方 `ctx.agents` 组合为上述 `DshRegistryPort`。宿主同时传入官方 `SessionId` 构造函数，保持其 branded 类型；组合层核对转换后字符串与原身份完全一致，不能借转换替换会话。`sdk.get` 返回原 agent；`create/resume` 返回的完整 `AgentHandle` 先由组合层保留，再把 `handle.agent` 交给生命周期验证。`ownedHandles()` 返回只读快照，供原宿主保留销毁能力和对账；即使生命周期因身份冲突拒绝绑定，也不丢弃已返回的 handle，更不自动 dispose。借用 attach 的 agent 不伪造为本组合层拥有的 handle。
+
+两份 options 必须显式传入，模型、权限、setup 和 signal 等 SDK 配置保持调用方选择；模块不提供个人策略默认值。会话身份与创建 metadata 由生命周期独占，options 中出现 `sessionId`、`resumeSessionId` 或 `meta` 会在调用 SDK 前被拒绝。配置在组合时浅快照，受信 setup 等对象仍由宿主负责；这些接口不是不可信任务文本的执行入口。官方 SDK 自身类型、安装和当前上下文由宿主核对，不从个人全局路径 import 或复制依赖。
+
+组合时不调用 SDK；只有显式 `lifecycle.connect(mode)` 才可能 create/resume。每个 SDK 宿主共享同一 facade，并在连接前取得其既有跨进程单写租约、注入耐久 journal。pause/detach 不销毁 handle，安全退出须由原宿主在回合结算与账本对账后处理。`test/unit/dsh-sdk-facade.test.ts` 用合成官方返回形状与真实生命周期联接验证配置、所有权及异常不重试；通知回合驱动、跨进程租约实现和真实四席迁移仍须单独交付，不能用这些合成测试代替。
+
+### DSH 官方会话发送与完成证据
+
+`createDshSdkSessionPort` 给整批通知驱动提供结构兼容的 `isCurrent/isBusy/submit/settlement`。它只借用组合时已经存在的原 agent，不 create/resume 或启动宿主。调用方显式提供稳定成员／适配器／原 session／cwd、官方 `MessageId` 构造、当前 registry 查询、同步 `isAuthorized(batch, agent)` 和 `flush(agent)`。授权函数必须在调用时核对当前准入、范围和宿主跨进程租约 token；宿主从发送前到 checkpoint 完成期间持有原租约。仅检查进程存活或一个旧布尔快照不满足这一合同。
+
+批次的全部 entryIds 必须与 entries 一一对应。消息 ID 由适配器、成员、原 session、delivery sequence 和完整条目快照的摘要生成；内容摘要另绑定在返回的 `detail` 证据 token 中。`submit` 在官方 `Agent.send(message, 'next-turn', true)` 前同步重核绑定与授权，中间没有 await，消息保持 `role:'user'`、`source.kind:'plugin'` 和 `form:'relay'`，不冒充人类或系统角色。文本由通知驱动渲染完整批次，条目仍是不可信参考数据。既有同 ID 的入队／消费记录只允许核查与 checkpoint，不再次发送；同 ID 不同内容判为 unknown。
+
+`flush` 必须组合官方 `SessionStore.flush(agent.session)`，不能绕过 store 直接调用原始 `ctx.parallel('session/flush', …)`。官方 bool 返回值为 true 才表示有持久化监听器参与；false、抛错或发送异常一律保持 unknown，不自动重试。成功 checkpoint 只返回 `enqueued`，`detail` 是随后传给 `settlement` 的不透明证据 token，不是已完成或已产生贡献的证明。
+
+`settlement` 核对同批次、同消息 ID／输入摘要的 `user/message` 位于某个已打开 turn，且该 turn 的 `turn/end.reason.kind === 'completed'`，并再次 checkpoint 和复核绑定。旧 turn、其他消息、排队记录、一次 idle、`whenIdle()`、取消／错误／中断／blocked／max-tokens 均不计成功完成。宿主重建 helper 可从保留的原 session 日志恢复证据；driver 的 submitting/unknown 仍必须先对账，不能因 helper 有稳定 ID 擅自重发。回执与未知投递处理仍由原通知服务和耐久 driver journal 负责。
+
+合成测试覆盖官方发送参数、消息与 turn 的因果关联、撤销窗口、checkpoint 故障、重建与防重；本机公开 SDK 类型另行核对兼容性。它们不启动模型，不证明当前个人宿主已经装配、租约实现已经验证、四席已迁移或产生了真实有用贡献。
+
+### 整批通知驱动与耐久 journal 组合
+
+`driveOnce({ pending, session, journal })` 只处理通知服务提供的完整 delivery 快照。受信宿主提供 PendingPort，保留 adapter、成员、原 session、sequence、全部 entryIds 及对应条目；普通更新和周期检查共用该批次，不能逐条检查却确认整个批次。默认文本包含每个条目的摘要和正文，截断时明确标记并给出完整条目的读取 ID；条目始终是参考数据，不升级为指令。
+
+驱动在提交前写耐久意图，再次核当前绑定；忙碌则保留批次而不提交。`enqueued` 只表示入队，必须保存 SDK 返回的不透明证据 token，随后通过 `settlement` 验证本批次对应的权威完成。完成后回执失败，已权威完成的条目记入独立的 covered 集合；批次未增长时只重试回执，不再提交模型。批次增长时保持实际提交快照及证据 token 不变，按当前 entryIds 与 covered 的差集提交并渲染未消费条目；差量权威完成且持久保存后，才能用当前完整快照确认整批。不能因 STALE_DELIVERY_VIEW 清除证据或释放未处理条目。未知发送和中断的 submitting 保留对账，不自动重放或清空。
+
+`createDshJournals<DeliveryBatch>({ db, sessionId })` 将同一宿主 SQLite sidecar 适配为生命周期 journal 和通知 journal。调用方使用持久文件，保留原数据库的生命周期、同步持久配置和跨进程单写租约；模块不另建 timer 或进程。写意图在返回前必须提交，不能借调用方尚未提交的事务冒充耐久成功。已存在而无法解码的意图必须抛错并保留证据；只有确实无记录时才返回缺失，避免把 unknown 当新请求重放。
+
+受信宿主显式组合 SDK facade、生命周期、SDK SessionPort、耐久 journal 与整批 driver，同时提供当前 NotificationService 的读取／精确回执端口和当前授权／租约检查。真实 SDK 的 SessionStore、身份、认证、模型、权限、启停、DB 路径及原会话迁移都留在宿主配置。导入这些模块不创建会话、不触发模型、不注册通知，也不恢复暂停的 harness。
+
 | 证据 | 位置 | 证明/不证明 |
 | --- | --- | --- |
 | 共享契约套件 | `test/harness/adapter-contract.ts`（echo 于 `test/unit/echo-backend.test.ts`，codex 于 `test/unit/codex-adapter-contract.test.ts`） | 两后端满足同一契约：稳定身份、回执、重启核查、unknown、uncertain、能力一致性；不证明真实模型行为 |
@@ -197,3 +227,5 @@ DSH 的入口导出指令与生命周期边界，供已经授权的宿主显式 
 | 真实 Codex 闭环 | 隔离看板实测记录（见 verification.md） | 官方登录下最小真实回合；不覆盖 DSH 或其他 harness |
 
 参考实现（echo）的一切证据都是确定性的；真实模型、真实 DSH Host、真实桌面宿主的行为必须另行实测并在 [verification.md](verification.md) 记录，不得用替身证据代替。
+
+通知意图键使用 JSON 四元组 `[adapterId ?? null, memberId, sessionRef, sequence]`，缺省通道与字面名称 `native` 明确区分，字段含分隔符也不会产生碰撞。发现旧拼接键意图时停止该投递并要求保留证据对账，不将它视为缺失而重新提交，也不提示清空 unknown。
