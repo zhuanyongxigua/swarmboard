@@ -1,11 +1,22 @@
 // Verify the synthetic consumer against the actual formatter, including data
 // that resembles delimiters and the runtime's trailing preferences snapshot.
 import { describe, expect, it } from 'vitest';
-import { workerPrompt } from '../../src/worker-prompt.js';
+import { workerPrompt, workerProtocol } from '../../src/worker-prompt.js';
 import type { Entry } from '../../src/store.js';
 import { readReferenceEvents } from '../fixtures/reference-events.js';
 
 describe('synthetic reference events consumer', () => {
+  it('supplies the same current protocol to native delivery and trusted adapter composition', () => {
+    const protocol = workerProtocol();
+    const native = workerPrompt('native-delivery', [], 'Synthetic native session');
+    expect(native).toContain(protocol);
+    expect(protocol).toContain('user_prompt_read');
+    expect(protocol).toContain('todo/in_progress/in_review');
+    expect(protocol).not.toContain('Swarmboard delivery');
+    expect(protocol).not.toContain('synthetic-peer');
+    expect(protocol).not.toContain('Blocked and in_review goals are waiting');
+  });
+
   it.each(['Synthetic native session', 'Synthetic external session'])('keeps periodic checks useful and authorized for %s', intro => {
     const prompt = workerPrompt('synthetic-check', [], intro);
     expect(prompt).toContain('todo/in_progress/in_review');
