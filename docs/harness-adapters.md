@@ -161,7 +161,7 @@ class DshSession implements SessionAdapter {
 
 源码中的独立模块必须显式提供 `src/harness/<module>/index.ts` 公共入口；桌面构建将这些受信仓库入口分别打包为 `server/harness/<module>/index.mjs`，不把它们导入主服务。辅助目录没有入口则不导出。公共入口导入时不得注册、启动或执行真实会话，具体启用由受信宿主显式调用。构建拒绝模块中的绝对路径 import，以及 realpath 解析后逃出源码根的输入；宿主的个人 SDK 和配置在运行组合时传入，不以本机路径打进便携包。模块自己的依赖许可与主服务一起进入 `THIRD_PARTY_NOTICES.txt`；个人 SDK 安装、认证、运行目录和配置不随包复制。
 
-DSH 的入口导出指令与生命周期边界，供已经授权的宿主显式 import 后组合。导出不等于注册、启用或启动，不提供任务文本加载本地模块的接口，也不恢复暂停的 harness。第三方可按相同目录入口约定交付独立模块，无需在构建脚本增加厂商分支。源码构建仍通过 TypeScript 输出对应模块；桌面 ZIP 的独立 bundle 可从与源码无关的目录加载。
+DSH 的入口导出指令、生命周期、SDK 组合和会话发送边界，供已经授权的宿主显式 import 后组合。导出不等于注册、启用或启动，不提供任务文本加载本地模块的接口，也不恢复暂停的 harness。第三方可按相同目录入口约定交付独立模块，无需在构建脚本增加厂商分支。源码构建仍通过 TypeScript 输出对应模块；桌面 ZIP 的独立 bundle 可从与源码无关的目录加载。
 
 `test/unit/desktop-harness-modules.test.ts` 验证任意名合成模块打包后脱离源码加载、不执行构建期模块代码；`test/mcp/desktop-harness.test.ts` 对实际 ZIP 解包后加载 DSH 导出，并确认主服务没有嵌入这些实现。上述检查不连接官方宿主或模型，不能当作真实启用与迁移验收。
 
@@ -185,6 +185,18 @@ DSH 的入口导出指令与生命周期边界，供已经授权的宿主显式 
 两份 options 必须显式传入，模型、权限、setup 和 signal 等 SDK 配置保持调用方选择；模块不提供个人策略默认值。会话身份与创建 metadata 由生命周期独占，options 中出现 `sessionId`、`resumeSessionId` 或 `meta` 会在调用 SDK 前被拒绝。配置在组合时浅快照，受信 setup 等对象仍由宿主负责；这些接口不是不可信任务文本的执行入口。官方 SDK 自身类型、安装和当前上下文由宿主核对，不从个人全局路径 import 或复制依赖。
 
 组合时不调用 SDK；只有显式 `lifecycle.connect(mode)` 才可能 create/resume。每个 SDK 宿主共享同一 facade，并在连接前取得其既有跨进程单写租约、注入耐久 journal。pause/detach 不销毁 handle，安全退出须由原宿主在回合结算与账本对账后处理。`test/unit/dsh-sdk-facade.test.ts` 用合成官方返回形状与真实生命周期联接验证配置、所有权及异常不重试；通知回合驱动、跨进程租约实现和真实四席迁移仍须单独交付，不能用这些合成测试代替。
+
+### DSH 官方会话发送与完成证据
+
+`createDshSdkSessionPort` 给整批通知驱动提供结构兼容的 `isCurrent/isBusy/submit/settlement`。它只借用组合时已经存在的原 agent，不 create/resume 或启动宿主。调用方显式提供稳定成员／适配器／原 session／cwd、官方 `MessageId` 构造、当前 registry 查询、同步 `isAuthorized(batch, agent)` 和 `flush(agent)`。授权函数必须在调用时核对当前准入、范围和宿主跨进程租约 token；宿主从发送前到 checkpoint 完成期间持有原租约。仅检查进程存活或一个旧布尔快照不满足这一合同。
+
+批次的全部 entryIds 必须与 entries 一一对应。消息 ID 由适配器、成员、原 session、delivery sequence 和完整条目快照的摘要生成；内容摘要另绑定在返回的 `detail` 证据 token 中。`submit` 在官方 `Agent.send(message, 'next-turn', true)` 前同步重核绑定与授权，中间没有 await，消息保持 `role:'user'`、`source.kind:'plugin'` 和 `form:'relay'`，不冒充人类或系统角色。文本由通知驱动渲染完整批次，条目仍是不可信参考数据。既有同 ID 的入队／消费记录只允许核查与 checkpoint，不再次发送；同 ID 不同内容判为 unknown。
+
+`flush` 必须组合官方 `SessionStore.flush(agent.session)`，不能绕过 store 直接调用原始 `ctx.parallel('session/flush', …)`。官方 bool 返回值为 true 才表示有持久化监听器参与；false、抛错或发送异常一律保持 unknown，不自动重试。成功 checkpoint 只返回 `enqueued`，`detail` 是随后传给 `settlement` 的不透明证据 token，不是已完成或已产生贡献的证明。
+
+`settlement` 核对同批次、同消息 ID／输入摘要的 `user/message` 位于某个已打开 turn，且该 turn 的 `turn/end.reason.kind === 'completed'`，并再次 checkpoint 和复核绑定。旧 turn、其他消息、排队记录、一次 idle、`whenIdle()`、取消／错误／中断／blocked／max-tokens 均不计成功完成。宿主重建 helper 可从保留的原 session 日志恢复证据；driver 的 submitting/unknown 仍必须先对账，不能因 helper 有稳定 ID 擅自重发。回执与未知投递处理仍由原通知服务和耐久 driver journal 负责。
+
+合成测试覆盖官方发送参数、消息与 turn 的因果关联、撤销窗口、checkpoint 故障、重建与防重；本机公开 SDK 类型另行核对兼容性。它们不启动模型，不证明当前个人宿主已经装配、租约实现已经验证、四席已迁移或产生了真实有用贡献。
 
 | 证据 | 位置 | 证明/不证明 |
 | --- | --- | --- |
