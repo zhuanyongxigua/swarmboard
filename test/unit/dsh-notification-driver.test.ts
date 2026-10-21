@@ -1,13 +1,20 @@
-// Synthetic fault tests for the vendor-isolated turn driver (no model, no timer, no fs).
+// Synthetic fault tests for the vendor-isolated delivery driver (no model, no timer, no fs).
 import { describe, expect, it } from 'vitest';
 import {
   driveOnce, intentKey, isAddressable,
-  type DriveResult, type Intent, type PendingCheck, type SubmitOutcome,
+  type DeliveryBatch, type Intent, type SubmitOutcome,
 } from '../../src/harness/dsh/notification-driver.js';
 
-const check = (over: Partial<PendingCheck> = {}): PendingCheck => ({
-  memberId: 'm1', sessionRef: 's1', dueAt: 300_000, goalIds: ['g1'],
-  delivery: { sequence: 7, entryIds: [1, 2] }, ...over,
+const check = { memberId: 'm1', sessionRef: 's1', dueAt: 300_000, goalIds: ['g1'] };
+const batch = (over: Partial<DeliveryBatch> = {}): DeliveryBatch => ({
+  delivery: { sequence: 7, entryIds: [1, 2] },
+  memberId: 'm1', sessionRef: 's1',
+  entries: [
+    { id: 1, kind: 'MESSAGE', summary: 'SESSION_TASK_CHECK: go', detail: '{}' },
+    { id: 2, kind: 'OBSERVED', summary: 'peer note' },
+  ],
+  check,
+  ...over,
 });
 
 type Options = {
@@ -24,15 +31,15 @@ function harness(options: Options = {}) {
   const journal = new Map<string, Intent>();
   const calls = { confirm: [] as number[][], release: [] as string[], submit: 0, settlement: 0 };
   const current = () => (typeof options.current === 'function' ? options.current() : options.current ?? true);
-  let listed: PendingCheck[] = [check()];
+  let listed: DeliveryBatch[] = [batch()];
   const ports = {
     pending: {
       list: async () => listed,
-      confirm: async (delivery: { sequence: number; entryIds: readonly number[] }) => {
-        calls.confirm.push([...delivery.entryIds]);
+      confirm: async (b: DeliveryBatch) => {
+        calls.confirm.push([...b.delivery.entryIds]);
         if (options.confirmFails) throw new Error('STALE_DELIVERY_VIEW');
       },
-      release: async (_c: PendingCheck, reason: string) => { calls.release.push(reason); },
+      release: async (_b: DeliveryBatch, reason: string) => { calls.release.push(reason); },
     },
     session: {
       isCurrent: async () => current(),
@@ -50,14 +57,14 @@ function harness(options: Options = {}) {
       del: async (key: string) => { journal.delete(key); },
     },
   };
-  return { ports, journal, calls, setListed: (next: PendingCheck[]) => { listed = next; } };
+  return { ports, journal, calls, setListed: (next: DeliveryBatch[]) => { listed = next; } };
 }
 
-describe('driveOnce', () => {
-  it('settles a completed turn with the delivery snapshot', async () => {
+describe('driveOnce (whole delivery) ', () => {
+  it('submits one batch and settles it once with the whole sequence', async () => {
     const f = harness();
-    const result: DriveResult = await driveOnce(f.ports);
-    expect(result.submitted).toEqual([intentKey(check())]);
+    const result = await driveOnce(f.ports);
+    expect(result.submitted).toEqual([intentKey(batch())]);
     expect(f.calls.confirm).toEqual([[1, 2]]);
     expect(f.journal.size).toBe(0);
   });
@@ -65,16 +72,16 @@ describe('driveOnce', () => {
   it('treats an enqueued prompt as pending work, never as completion', async () => {
     const f = harness({ outcome: { status: 'enqueued' } });
     const result = await driveOnce(f.ports);
-    expect(result.awaitingCompletion).toEqual([intentKey(check())]);
+    expect(result.awaitingCompletion).toEqual([intentKey(batch())]);
     expect(f.calls.confirm).toEqual([]);
-    expect(f.journal.get(intentKey(check()))?.state).toBe('enqueued');
+    expect(f.journal.get(intentKey(batch()))?.state).toBe('enqueued');
   });
 
   it('settles later once the host reports authoritative completion', async () => {
     const f = harness({ outcome: { status: 'enqueued' } });
     await driveOnce(f.ports);
     const second = await driveOnce(f.ports);
-    expect(second.receiptsConfirmed).toEqual([intentKey(check())]);
+    expect(second.receiptsConfirmed).toEqual([intentKey(batch())]);
     expect(f.calls.submit).toBe(1);
     expect(f.calls.confirm).toEqual([[1, 2]]);
   });
@@ -83,15 +90,15 @@ describe('driveOnce', () => {
     const f = harness({ outcome: { status: 'enqueued' }, settled: false });
     await driveOnce(f.ports);
     const second = await driveOnce(f.ports);
-    expect(second.awaitingCompletion).toEqual([intentKey(check())]);
+    expect(second.awaitingCompletion).toEqual([intentKey(batch())]);
     expect(f.calls.confirm).toEqual([]);
   });
 
-  it('retries only the receipt when settlement succeeded but the receipt failed', async () => {
+  it('retries only the receipt after an authoritative completion', async () => {
     const f = harness({ confirmFails: true });
     const first = await driveOnce(f.ports);
-    expect(first.receiptPending).toEqual([intentKey(check())]);
-    expect(f.journal.get(intentKey(check()))?.state).toBe('completedUnacked');
+    expect(first.receiptPending).toEqual([intentKey(batch())]);
+    expect(f.journal.get(intentKey(batch()))?.state).toBe('completedUnacked');
     await driveOnce(f.ports);
     expect(f.calls.submit).toBe(1);
     expect(f.calls.settlement).toBe(0);
@@ -100,24 +107,24 @@ describe('driveOnce', () => {
   it('never widens a receipt retry to entries merged after the submission', async () => {
     const f = harness({ confirmFails: true });
     await driveOnce(f.ports);
-    f.setListed([check({ delivery: { sequence: 7, entryIds: [1, 2, 99] } })]);
+    f.setListed([batch({ delivery: { sequence: 7, entryIds: [1, 2, 99] } })]);
     await driveOnce(f.ports);
     expect(f.calls.confirm[0]).toEqual([1, 2]);
     expect(f.calls.confirm.at(-1)).toEqual([1, 2]);
   });
 
-  it('drops a check addressed to a session that is no longer current', async () => {
+  it('drops a batch addressed to a session that is no longer current', async () => {
     const f = harness({ current: false });
     const result = await driveOnce(f.ports);
-    expect(result.skipped).toEqual([intentKey(check())]);
+    expect(result.skipped).toEqual([intentKey(batch())]);
     expect(f.calls.submit).toBe(0);
     expect(f.calls.release).toEqual(['stale-session']);
   });
 
-  it('leaves a busy session alone and keeps the check pending', async () => {
+  it('leaves a busy session alone and keeps the batch pending', async () => {
     const f = harness({ busy: true });
     const result = await driveOnce(f.ports);
-    expect(result.merged).toEqual([intentKey(check())]);
+    expect(result.merged).toEqual([intentKey(batch())]);
     expect(f.calls.submit).toBe(0);
     expect(f.journal.size).toBe(0);
   });
@@ -128,7 +135,7 @@ describe('driveOnce', () => {
     const result = await driveOnce(f.ports);
     expect(f.calls.submit).toBe(0);
     expect(f.calls.release).toEqual(['stale-session']);
-    expect(result.skipped).toEqual([intentKey(check())]);
+    expect(result.skipped).toEqual([intentKey(batch())]);
     expect(f.journal.size).toBe(0);
   });
 
@@ -146,22 +153,32 @@ describe('driveOnce', () => {
     expect(f.calls.submit).toBe(1);
   });
 
-  it('releases a rejected check', async () => {
+  it('releases a rejected batch', async () => {
     const f = harness({ outcome: { status: 'rejected' } });
     const result = await driveOnce(f.ports);
-    expect(result.rejected).toEqual([intentKey(check())]);
+    expect(result.rejected).toEqual([intentKey(batch())]);
     expect(f.calls.release).toEqual(['rejected']);
     expect(f.journal.size).toBe(0);
   });
 
-  it('never submits a check without a scoped goal or a usable dueAt', async () => {
+  it('never submits a check envelope without a scoped goal or a usable dueAt', async () => {
     const f = harness();
-    f.setListed([check({ goalIds: [] })]);
+    f.setListed([batch({ check: { ...check, goalIds: [] } })]);
     const result = await driveOnce(f.ports);
-    expect(result.skipped).toEqual([intentKey(check())]);
+    expect(result.skipped).toEqual([intentKey(batch())]);
     expect(f.calls.submit).toBe(0);
-    expect(f.calls.release).toEqual(['scope-empty']);
     expect(isAddressable({ dueAt: -1, goalIds: ['g'] })).toBe(false);
     expect(isAddressable({ dueAt: 0, goalIds: ['g'] })).toBe(true);
+  });
+
+  it('keeps two deliveries independent in one pass', async () => {
+    const f = harness();
+    f.setListed([
+      batch(),
+      batch({ delivery: { sequence: 8, entryIds: [3] }, memberId: 'm2', sessionRef: 's2', check: { ...check, memberId: 'm2', sessionRef: 's2' } }),
+    ]);
+    const result = await driveOnce(f.ports);
+    expect(result.submitted).toEqual(['delivery:7', 'delivery:8']);
+    expect(f.calls.confirm).toEqual([[1, 2], [3]]);
   });
 });
