@@ -209,4 +209,20 @@ describe('official SDK plugin entry', () => {
     expect(f.db.prepare('SELECT data FROM dsh_host_journal WHERE slot=?').get('lifecycle:original')).toEqual({ data });
     expect(f.sdk.create).not.toHaveBeenCalled(); expect(f.sdk.resume).not.toHaveBeenCalled();
   });
+
+  it.each(['running', 'queued'] as const)('retains ownership when closed during instruction preflight with an existing %s session', async state => {
+    const gate = deferred();
+    const f = fixture({ prepareInstructions: () => gate.promise });
+    f.agent.status = state === 'running' ? 'running' : 'idle';
+    f.agent.inbox.hasPending = state === 'queued';
+    const close = f.boundary.plugin.apply(f.ctx);
+    expect(f.lease.owns()).toBe(true);
+    const closing = close();
+    const refused = expect(closing).rejects.toThrow('DSH_HOST_NOT_QUIESCENT');
+    gate.resolve(); await refused;
+    expect(f.lease.owns()).toBe(true);
+    expect(f.lease.release).not.toHaveBeenCalled();
+    expect(f.sdk.create).not.toHaveBeenCalled(); expect(f.sdk.resume).not.toHaveBeenCalled();
+    expect(f.pass).not.toHaveBeenCalled(); expect(f.dispose).not.toHaveBeenCalled();
+  });
 });
