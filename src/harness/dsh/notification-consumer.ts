@@ -35,8 +35,6 @@ export interface SeatConfig {
 }
 
 export interface ConsumerConfig {
-  readonly boardDatabasePath: string;
-  readonly runtimeDatabasePath: string;
   readonly statePath: string;
   readonly intervalMs?: number;
   readonly seats: readonly SeatConfig[];

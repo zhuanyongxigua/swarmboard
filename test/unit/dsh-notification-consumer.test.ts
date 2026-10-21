@@ -263,7 +263,7 @@ describe('generation and startup boundaries', () => {
       entries: () => [],
     };
     await expect(startNotificationConsumer({
-      config: { boardDatabasePath: 'b', runtimeDatabasePath: 'r', statePath, seats: [seat] },
+      config: { statePath, seats: [seat] },
       board: failing,
       transport: transportFor({ prompts: [] }),
       now: () => { throw new Error('NOW_BOOM'); },
@@ -272,7 +272,7 @@ describe('generation and startup boundaries', () => {
     lock.release();
 
     const ok: BoardPort = { unsettled: () => [], binding: () => ({ ok: true, adapterId: 'synthetic-adapter', registrationVersion: 1, memberTaskIds: [], admissionTaskIds: [] }), intentCurrent: () => ({ ok: true }), entries: () => [] };
-    const consumer = await startNotificationConsumer({ config: { boardDatabasePath: 'b', runtimeDatabasePath: 'r', statePath, seats: [seat] }, board: ok, transport: transportFor({ prompts: [] }), once: true });
+    const consumer = await startNotificationConsumer({ config: { statePath, seats: [seat] }, board: ok, transport: transportFor({ prompts: [] }), once: true });
     await consumer.stop();
     expect(readFileSync(statePath, 'utf8')).toContain('"schema": 1');
   });

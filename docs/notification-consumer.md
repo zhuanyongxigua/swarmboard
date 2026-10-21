@@ -10,14 +10,12 @@
 
 - 内核（任务、调度、事件、共享面板）不感知本模块，也没有任何厂商专用分支；
 - 本模块只依赖两类已发布契约：看板的 `notification_deliveries`/`notification_adapters`/准入记录（只读），以及官方本地 DSH Web API 的 `session.list` / `session.prompt`；
-- 个人成员、会话、端口、数据库路径与账本路径全部由外部配置提供，仓库不保存任何真实身份或运行数据。
+- 个人成员、会话、端口与账本路径全部由外部配置提供，仓库不保存任何真实身份或运行数据；本模块不打开看板数据库，状态由宿主经端口提供。
 
 ## 配置
 
 ```ts
 interface ConsumerConfig {
-  boardDatabasePath: string;
-  runtimeDatabasePath: string;
   statePath: string;            // 独立消费账本；同 path 唯一 writer
   intervalMs?: number;          // 默认 10s 的低成本轮询
   seats: Array<{
@@ -34,7 +32,7 @@ interface ConsumerConfig {
 
 - `TransportPort`：随仓库交付官方实现 `createOfficialWebTransport({fetchImpl?, clientTimeZone?})`，只封装官方本地 `session.list` / `session.prompt`；厂商协议留在 DSH 适配模块，核心不感知。
 - 启动顺序：`startNotificationConsumer` 先 `mkdir` 状态目录、再取写锁、锁内加载账本；首轮失败释放锁，`stop()` 会等待在途 pass 结束再交锁。`describe()` 之后会复核 binding 的 adapter 与 registrationVersion，代次变化即 0 发送。
-- `BoardPort`：方法返回 `T | Promise<T>`（调度侧会 `await`），由宿主用**既有已绑定的 MCP 通知工具**实现。随模块提供 `createMcpBoardPort({callTool})`：`notification_pending` 返回的未结算投递**已由服务端按 `currentIntent()` 过滤**（scope/状态/代际），因此该实现把 `intentCurrent` 视为服务端保证；`binding_read` 提供 adapter/版本/启用与 session 校验，`context_read` 读取批内条目（含 `SESSION_TASK_CHECK` 指令）。若宿主选择自建 SQL 读取，则必须自行完整镜像 `currentIntent()` 的语义，否则会出现“成员可见但不被唤醒”或“已失效仍唤醒”的偏差；临时 SQLite 直读不作为公开适配器契约。
+- `BoardPort`：方法返回 `T | Promise<T>`（调度侧会 `await`），由宿主用**既有已绑定的 MCP 通知工具**实现。随模块提供 `createMcpBoardPort({callTool, pageSize?})`：标准 MCP 响应（`structuredContent`、首个 text 片段或已解包 payload）都经 `notification-port` 同一解码器解析，`isError` 直接失败关闭；`notification_pending` 的分页 `items` 带 `state`，`unknown` 投递只被记录为 unknown 并继续显示，绝不当作新投递重放；`intentCurrent` 在 `describe` 前后各重新轮询一次（服务端 `currentIntent()` 只保证读取当时可见），条目集合或可见性变化即 0 发送；`binding_read` 提供 adapter/member/版本/启用与 session 校验，`context_read` 精确 seek 批内条目（含 `SESSION_TASK_CHECK` 指令，截断条目视为不完整）。若宿主选择自建 SQL 读取，则必须自行完整镜像 `currentIntent()` 的语义，否则会出现“成员可见但不被唤醒”或“已失效仍唤醒”的偏差；临时 SQLite 直读不作为公开适配器契约。
 
 
 
