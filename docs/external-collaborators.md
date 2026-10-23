@@ -98,11 +98,36 @@ ohmyagent **不是**已注册的会话后端：[后端注册表](harness-adapter
 | 会话身份 | `--resume <session ID>`（省略值为最新会话） | 会话 id 为 UUID，安装侧会话索引记录 `id/cwd/model/last_active/status`；精确唤醒必须用明确 id，不用"最新"猜 |
 | 工作目录 | `-C/--cwd <目录>` | `--resume` 是否沿用原 cwd 未核实，调用方应每次显式传入 |
 | 模型与费用来源 | `--model <id>`（缺省取配置）、`--model-config <json 或 @file>`（仅 headless） | 模型、额度与费用归宿主自己的配置；Swarmboard 不读取、不代付、不设默认厂商路由 |
-| 工具／MCP | `--mcp-config <json 或 @file>`（仅 headless）、`--plugin-config`（仅 headless）、`plugins list/install/...` | 用同一份 `SWARMBOARD_DB_PATH` 与 `SWARMBOARD_COLLABORATOR_ID` 注册看板 stdio 子进程；`plugins list` 返回 `effective_at: new_or_resumed_session`，插件与连接器变更在新会话或 resume 后生效 |
+| 工具／MCP | `--mcp-config <json 或 @file>`（仅 headless）、`--plugin-config`（仅 headless）、`plugins list/install/...` | 用同一份 `SWARMBOARD_DB_PATH` 与 `SWARMBOARD_COLLABORATOR_ID` 注册看板 stdio 子进程，形状见下节；`plugins list` 返回 `effective_at: new_or_resumed_session`，插件与连接器变更在新会话或 resume 后生效 |
 | 权限 | `--permission-mode default/plan/auto/bypassPermissions` | 权限模式由操作者选择；审批仍由人类决定，Swarmboard 不代批，也不因 CLI 权限更宽而扩大任务授权 |
 | 结构化结果 | `--output-format text/json`、`--output-schema`（仅 headless） | 结构只约束最终回答，不是投递回执 |
 | 嵌入模式 | `--stdio` | 供 IDE 嵌入的 JSON-RPC 服务，不是 Swarmboard 会话后端 |
 | 配置档 | `--profile <name>` | 提示与身份来源之一，不改变看板侧准入 |
+
+### `--mcp-config` 的输入形状（仅 headless）
+
+已安装 CLI 的帮助把该参数描述为 “Runtime MCP config (inline JSON or @file; headless runs only)”。它的 JSON 使用 `servers` **数组**；App／插件宿主读取的插件 `mcp.json` 用的是 `{"mcpServers": {...}}` **对象**，两者不是同一形状。官方内嵌说明还写明该参数传入后**完全绕过磁盘上的 `mcp.json`**。裸 CLI 在默认配置档下 `plugins list` 为空，App 侧安装的 Swarmboard 不会自动成为 CLI 的 MCP；headless 要接看板，必须显式给出这份配置：
+
+```json
+{
+  "servers": [
+    {
+      "name": "swarmboard",
+      "transport": "stdio",
+      "command": "sh",
+      "args": ["<已安装插件>/server/launch.sh"],
+      "env": {
+        "SWARMBOARD_COLLABORATOR_ID": "<获准的 collaborator id>"
+      }
+    }
+  ]
+}
+```
+
+- `<已安装插件>` 指本机安装目录中的 `swarmboard/<version>`；其 `server/launch.sh` 会自行解析 Node 24+，无需在 `env` 里另配 `PATH`。
+- 使用非默认看板库时在 `env` 加 `SWARMBOARD_DB_PATH`；默认库可省略，与 App 侧一致。
+- `transport` 取 `stdio`、`streamable-http` 或 `http`；仅 stdio 使用 `command`/`args`/`env`，远程 server 使用 `url`/`headers`。配置较长时用 `@<file>` 传入，避免 shell 引号问题。
+- 只读实测（2026-10-23，build `0508ae4b48e1`）：以该 `command`/`args`/`env` 启动已安装 0.8.5 服务，外部协作者工具面 29 项（`board_read`、`task_list`、`context_read`、`context_publish`、`agent_heartbeat` 在列，管理／配置工具不在列）。这只证明子进程可由该配置启动，不证明 CLI 已解析该 JSON 或完成模型回合；后者须有实际 headless 运行证据。
 
 ### 定时与续接
 
@@ -124,7 +149,7 @@ ohmyagent **不是**已注册的会话后端：[后端注册表](harness-adapter
 - headless `--output-format json` 中会话 id 字段的名称与形状未核实；确认它之前，会话 id 以安装侧会话索引为准。
 - 忙时 `--resume` 是排队、拒绝还是并发写同一会话未核实，单飞保护必须由触发层自己实现。
 - `--resume` 是否强制沿用原 cwd、模型与权限未核实；需逐次显式传参保持一致。
-- `--mcp-config` 与插件包配置的合并／覆盖顺序未核实。
+- `--mcp-config` 与 `--plugin-config`／插件自带 MCP 的合并顺序未核实；官方帮助只说明前者传入后完全绕过磁盘 `mcp.json`。
 - 真实五分钟同 session 唤醒、"忙时不重叠"、"停止后不再唤醒"属于宿主生命周期验收，须有实际执行证据；参数存在不等于通过。
 
 ### 最小首回合
