@@ -108,6 +108,8 @@ ohmyagent **不是**已注册的会话后端：[后端注册表](harness-adapter
 
 已安装 CLI 的帮助把该参数描述为 “Runtime MCP config (inline JSON or @file; headless runs only)”。它的 JSON 使用 `servers` **数组**；App／插件宿主读取的插件 `mcp.json` 用的是 `{"mcpServers": {...}}` **对象**，两者不是同一形状。官方内嵌说明还写明该参数传入后**完全绕过磁盘上的 `mcp.json`**。裸 CLI 在默认配置档下 `plugins list` 为空，App 侧安装的 Swarmboard 不会自动成为 CLI 的 MCP；headless 要接看板，必须显式给出这份配置：
 
+以下示例适用于 macOS／Linux：
+
 ```json
 {
   "servers": [
@@ -124,7 +126,8 @@ ohmyagent **不是**已注册的会话后端：[后端注册表](harness-adapter
 }
 ```
 
-- `<已安装插件>` 指本机安装目录中的 `swarmboard/<version>`；其 `server/launch.sh` 会自行解析 Node 24+，无需在 `env` 里另配 `PATH`。
+- `<已安装插件>` 指本机安装目录中的 `swarmboard/<version>`；macOS／Linux 的 `server/launch.sh` 会自行解析 Node 24+，无需在 `env` 里另配 `PATH`。
+- Windows 不使用 `sh`／`launch.sh`：将同一 server 项的 `command` 改为 `node`，`args` 改为 `["C:/path/to/swarmboard/<version>/server/swarmboard.mjs"]`，其余字段保持一致。需要提前安装 Node 24+ 并让 CLI 的 `PATH` 能找到它，或将 `command` 设为 `node.exe` 的绝对路径；JSON 路径可用 `/`，若使用反斜杠则写成 `\\`。此方式与 Windows 插件打包入口一致，本文未实测 Windows 上的 ohmyagent 模型回合。
 - 使用非默认看板库时在 `env` 加 `SWARMBOARD_DB_PATH`；默认库可省略，与 App 侧一致。
 - `transport` 只支持 `stdio` 和 `streamable-http`；写 `http` 会报 `unknown transport`。仅 stdio 使用 `command`/`args`/`env`，远程 server 使用 `url`/`headers`。配置较长时用 `@<file>` 传入，避免 shell 引号问题。
 - 只读实测（2026-10-23，build `0508ae4b48e1`）：以该 `command`/`args`/`env` 启动已安装 0.8.5 服务，外部协作者工具面 29 项（`board_read`、`task_list`、`context_read`、`context_publish`、`agent_heartbeat` 在列，管理／配置工具不在列）。这只证明子进程可由该配置启动，不证明 CLI 已解析该 JSON 或完成模型回合；后者须有实际 headless 运行证据。
