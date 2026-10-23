@@ -17,13 +17,15 @@ describe('synthetic reference events consumer', () => {
     expect(protocol).not.toContain('Blocked and in_review goals are waiting');
   });
 
-  it.each(['Synthetic native session', 'Synthetic external session'])('keeps periodic checks useful and authorized for %s', intro => {
+  it.each(['Synthetic native session', 'Synthetic external session'])('documents adapter-owned checks without promising a core timer for %s', intro => {
     const prompt = workerPrompt('synthetic-check', [], intro);
     expect(prompt).toContain('todo/in_progress/in_review');
     expect(prompt).toContain('blocked/done/canceled');
-    expect(prompt).toContain('After each contribution, rediscover');
-    expect(prompt).toContain('Busy or queued sessions merge one pending check');
-    expect(prompt).toContain('Do not bypass human acceptance, budgets, approvals or paused harnesses');
+    expect(prompt).toContain('Session timers and original-session continuation belong to the configured CLI adapter');
+    expect(prompt).toContain('The shared core does not generate periodic model wakeups');
+    expect(prompt).toContain('no output is required for every reminder');
+    expect(prompt).toContain('Respect human acceptance, budgets, approvals and paused harnesses');
+    expect(prompt).not.toContain('The runtime maintains an independent five-minute task check');
     expect(prompt).not.toContain('Blocked and in_review goals are waiting');
     expect(readReferenceEvents(prompt)).toEqual([]);
   });
