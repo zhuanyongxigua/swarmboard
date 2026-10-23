@@ -1,4 +1,4 @@
-// The idle reminder must also enqueue durable intents for registered channels,
+// Ordinary events must enqueue durable intents for registered channels,
 // without the core delivering, spawning or starting anything itself.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -18,9 +18,7 @@ function fixture() {
   const path = join(dir, 'board.sqlite');
   const board = new Store(path);
   const turns: string[] = [];
-  let now = 1000;
-  // Legacy global reminder contract: opt in explicitly; per-seat checks are the default.
-  const runtime = new EventRuntime(board, { notificationBatchMs: 0, databasePath: path, serverEntry: 'unused', now: () => now, idleMs: 100, sessionCheckMs: 0,
+  const runtime = new EventRuntime(board, { notificationBatchMs: 0, databasePath: path, serverEntry: 'unused', now: () => 1000,
     adapter: worker => ({ open: async w => w.threadId ?? 'thread-' + w.id,
       run: async () => { turns.push(worker.id); }, close: async () => {} }),
   });
@@ -28,7 +26,7 @@ function fixture() {
   runtime.configurePool({ workspacePath: dir });
   board.createTask({ title: 'Human goal' });
   const settle = async () => { await runtime.scan(); await vi.waitFor(() => expect(runtime.workers.list().every(w => w.status === 'idle')).toBe(true)); await runtime.scan(); };
-  return { board, runtime, settle, tick: (ms = 100) => { now += ms; } };
+  return { board, runtime, settle };
 }
 
 const registration = (memberId: string, patch: Partial<NotificationAdapterRegistration> = {}): NotificationAdapterRegistration => ({
@@ -90,7 +88,7 @@ describe('external-only board (no native workers)', () => {
   });
 });
 
-describe('reminder dispatch to registered notification channels', () => {
+describe('ordinary event dispatch to registered notification channels', () => {
   it('records one durable intent for the addressed member and skips disabled channels', async () => {
     const f = fixture(); await f.settle();
     // Channels belong to admitted collaborators, not to internal pool workers.
@@ -102,24 +100,26 @@ describe('reminder dispatch to registered notification channels', () => {
     channels.save({ id: 'disabled-channel', version: 1, displayName: 'Disabled', harness: 'anything', enabled: false,
       capabilities: ['durableDelivery', 'receipt'], members: [{ memberId: admitted.id, sessionRef: admitted.sessionRef, taskIds: [], boardWide: true }] });
 
-    f.tick(); await f.settle();
+    f.board.registerAgent({ agentId: 'reviewer', name: 'Reviewer' });
+    f.board.registerAgent({ agentId: admitted.id, name: 'External member' });
+    const first = f.board.publishEntry({ kind: 'MESSAGE', agentId: 'reviewer', taskId: goal.id, recipientId: admitted.id, summary: 'Review the implementation', detail: '' });
+    await f.settle();
 
-    // The reminder is directed to exactly one healthy member, so exactly one
+    // The message is directed to exactly one admitted member, so exactly one
     // adapter/member intent exists for it; the disabled channel is excluded.
     const intents = channels.unsettled();
     expect(intents).toHaveLength(1);
     expect(intents[0]!.intent.memberId).toBe(admitted.id);
-    expect(intents[0]!.intent.entryIds.length).toBeGreaterThanOrEqual(1);
+    expect(intents[0]!.intent.entryIds).toEqual([first.id]);
     expect(intents[0]!.state).toEqual({ state: 'pending', sequence: 1 });
 
-    // A later idle interval reminds again. While the first delivery is still
-    // unconfirmed the new entries are merged into it (busy batching) instead of
-    // opening a second sequence, which the cross-sequence fence would refuse.
-    const beforeCount = intents[0]!.intent.entryIds.length;
-    f.tick(); await f.settle();
+    // New ordinary messages still merge into an unconfirmed delivery instead
+    // of opening a second sequence across the unsettled-delivery fence.
+    const second = f.board.publishEntry({ kind: 'MESSAGE', agentId: 'reviewer', taskId: goal.id, recipientId: admitted.id, summary: 'Additional review evidence', detail: '' });
+    await f.settle();
     const all = channels.unsettled();
     expect(all).toHaveLength(1);
-    expect(all[0]!.intent.entryIds.length).toBeGreaterThan(beforeCount);
+    expect(all[0]!.intent.entryIds).toEqual([first.id, second.id]);
     expect(all[0]!.intent.sequence).toBe(1);
     expect(f.runtime.status().error).toBe('');
   });

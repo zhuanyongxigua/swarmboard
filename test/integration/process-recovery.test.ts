@@ -122,23 +122,6 @@ describe.skipIf(process.platform === 'win32')('real process fault recovery', () 
     expect(f.workers.list().map(w=>[w.id,w.threadId])).toEqual(identities);
     await second.request('scan');expect(f.count()).toBe(6);expect(f.board.board().tasks[0]!.status).toBe('todo');
   });
-  it.each(['before-signal', 'after-signal'])('recovers one idle wakeup after SIGKILL at %s without creating new sessions or duplicate messages', async gate => {
-    const f = fixture(true); f.board.createTask({ title: 'Stranded human goal' });
-    const first = await f.spawn(); await first.request('start', { gate });
-    await until(() => f.count() === 3 && f.idle() && f.workers.liveness()?.idleSince === 1000, Boolean, 'initial peers idle');
-    const identities = f.workers.list().map(w => [w.id, w.threadId]);
-    await first.request('advance');
-    await until(() => existsSync(f.ledger.location() + '.signal-gate'), Boolean, 'durable signal boundary');
-    expect(f.workers.liveness()?.pending).toBeTruthy();
-    await first.kill(); const second = await f.spawn(); await second.request('start');
-    await until(() => f.count() === 4 && f.idle(), Boolean, 'one recovery turn');
-    await until(() => f.workers.liveness()?.pending === null, Boolean, 'outbox acknowledged');
-    const signals = f.board.board().entries.filter(e => e.summary.startsWith('IDLE_RECOVERY'));
-    expect(signals).toHaveLength(1);
-    expect(f.effects().filter(e => e.eventId === signals[0]!.id)).toHaveLength(1);
-    expect(f.workers.list().map(w => [w.id, w.threadId])).toEqual(identities);
-    expect(f.board.board().tasks).toHaveLength(1); expect(f.board.board().resources).toHaveLength(0);
-  });
   it.each(['before-ack', 'after-ack'])('recovers completed effects after SIGKILL at %s without executing them twice', async gate => {
     const f = fixture(); const goal = f.board.createTask({ title: 'Synthetic goal' });
     const first = await f.spawn(); await first.request('start', { gate });
