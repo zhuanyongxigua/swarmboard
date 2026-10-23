@@ -17,7 +17,7 @@ async function fixture() {
   let beforeOpen: (() => Promise<void>) | undefined;
   const runtime = new EventRuntime(board, {
     databasePath: join(dir, 'board.sqlite'), serverEntry: 'unused',
-    notificationBatchMs: 0, sessionCheckMs: 300000, now: () => 1000000,
+    notificationBatchMs: 0, now: () => 1000000,
     adapter: () => ({ open: async worker => { await beforeOpen?.(); return worker.threadId ?? 'original-session'; },
       run: async (thread, prompt) => { turns.push({ thread, prompt }); }, close: async () => {} }),
   });

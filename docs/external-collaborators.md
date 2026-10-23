@@ -86,6 +86,51 @@ DSH 当前不经由会话后端驱动（[harness 适配](harness-adapters.md)中
 
 **边界与停止**：范围/历史/身份围栏与成员计数分离按上文各节执行；撤销协作者或目标终态后，非清理写入被 `COLLABORATOR_STOPPED` 围栏，control 变为 `stop-after-safe-boundary`。宿主配置入口永远仅宿主可用；不得直写看板/sidecar，也不得以成员身份代行宿主配置。
 
+## 百智办公 ohmyagent CLI 最小入口（接口存在 ≠ 已通过唤醒验收）
+
+本节的参数面取自本机安装的 `ohmyagent` CLI 的只读输出（2026-10-23，`ohmyagent --version` = `0508ae4b48e1`）。它只证明命令行接口存在，**不证明**任何一次真实模型回合、同 session 唤醒或"停止后不再唤醒"已经通过；真实生命周期验收须另行记录。
+
+ohmyagent **不是**已注册的会话后端：[后端注册表](harness-adapters.md)当前只有 `codex` 与 `echo`，`SWARMBOARD_HARNESS` 配一个未注册 id 会启动报错，不会静默回落到其他后端。CLI 以**外部协作者**身份经自己的 MCP client 使用同一看板；Swarmboard 不启动、不唤醒、不恢复、不付费该 CLI 会话。
+
+| 最小入口要素 | CLI 实际参数（已核实存在） | 边界与说明 |
+| --- | --- | --- |
+| 非交互执行 | `-p/--prompt "<提示>"` | 无 TTY 的后台运行只走 headless；不得以交互 TUI 代替 |
+| 会话身份 | `--resume <session ID>`（省略值为最新会话） | 会话 id 为 UUID，安装侧会话索引记录 `id/cwd/model/last_active/status`；精确唤醒必须用明确 id，不用"最新"猜 |
+| 工作目录 | `-C/--cwd <目录>` | `--resume` 是否沿用原 cwd 未核实，调用方应每次显式传入 |
+| 模型与费用来源 | `--model <id>`（缺省取配置）、`--model-config <json 或 @file>`（仅 headless） | 模型、额度与费用归宿主自己的配置；Swarmboard 不读取、不代付、不设默认厂商路由 |
+| 工具／MCP | `--mcp-config <json 或 @file>`（仅 headless）、`--plugin-config`（仅 headless）、`plugins list/install/...` | 用同一份 `SWARMBOARD_DB_PATH` 与 `SWARMBOARD_COLLABORATOR_ID` 注册看板 stdio 子进程；`plugins list` 返回 `effective_at: new_or_resumed_session`，插件与连接器变更在新会话或 resume 后生效 |
+| 权限 | `--permission-mode default/plan/auto/bypassPermissions` | 权限模式由操作者选择；审批仍由人类决定，Swarmboard 不代批，也不因 CLI 权限更宽而扩大任务授权 |
+| 结构化结果 | `--output-format text/json`、`--output-schema`（仅 headless） | 结构只约束最终回答，不是投递回执 |
+| 嵌入模式 | `--stdio` | 供 IDE 嵌入的 JSON-RPC 服务，不是 Swarmboard 会话后端 |
+| 配置档 | `--profile <name>` | 提示与身份来源之一，不改变看板侧准入 |
+
+### 定时与续接
+
+`ohmyagent --help` 的顶层命令列出 `completion`、`help`、`plugins`，没有列出调度子命令。这个观测只覆盖顶层命令行入口，不能推出会话内没有定时工具，也不能据此否定 CLI 内置定时能力。
+
+接入方应进一步核对当前版本、当前原会话的工具清单与定义。若会话提供 `CronCreate`、`CronList`、`CronDelete` 等内置工具，优先通过该会话的原生定时能力执行检查，并核实任务所属 session、是否重复、停用与删除语义。工具可见、创建成功、自然到期后同 session 实际读取面板，以及停止后不再唤醒是不同证据，须分别报告；本节不把工具存在写成真实验收通过。
+
+可用性须按实际运行模式核实：App 会话提供 Cron 工具，不代表后台 headless CLI 启用了相同工具，也不证明一次性 `-p` 退出后仍有调度进程运行。自然触发、忙时和停止行为须在待交付的运行方式下取证。
+
+仅在当前会话缺少可用内置定时能力、且确有外部触发需求和授权时，采用**外部触发 + 官方 CLI 原 session 续接**，并确保没有另一套定时器同时工作：
+
+- 获授权的触发方先确认该会话当前没有在途回合，再执行 `ohmyagent -p "<增量提示>" --resume <已记录的 session ID> -C <工作目录> --mcp-config <同一看板>`；
+- 同一 session 至多一个在途续接，忙时不打断，也不并发写同一会话；
+- 停止后不再触发；触发方每次重查启停状态，不把"上次成功"当作继续唤醒的授权；
+- 触发失败或结果不明时保留原 session 与记录，先核查再决定，不盲目重放。
+
+### 未核实缺口（不得写成已支持）
+
+- headless `--output-format json` 中会话 id 字段的名称与形状未核实；确认它之前，会话 id 以安装侧会话索引为准。
+- 忙时 `--resume` 是排队、拒绝还是并发写同一会话未核实，单飞保护必须由触发层自己实现。
+- `--resume` 是否强制沿用原 cwd、模型与权限未核实；需逐次显式传参保持一致。
+- `--mcp-config` 与插件包配置的合并／覆盖顺序未核实。
+- 真实五分钟同 session 唤醒、"忙时不重叠"、"停止后不再唤醒"属于宿主生命周期验收，须有实际执行证据；参数存在不等于通过。
+
+### 最小首回合
+
+与 DSH 一节相同：`board_read` → `task_read` → `context_read`/`context_search` → `CLAIM` → 实际工作 → `FACT`/`PATCH_SUMMARY`。每次工具返回附带范围内增量更新（游标持久、按 entry id 去重）。
+
 ## 测试边界
 
 `test/integration/equal-collaboration.test.ts` 对比真实 SQLite/MCP 中两类身份的工具面、显式组织订阅/后续目标、空交集、私信、真实作者、peer 预算/去重、CI origin/scope 与执行授权过滤；打包子进程验证显式订阅切换和无 runtime owner。模拟凭据、CI 和模型适配器不能替代实际跨 harness 连接验收。

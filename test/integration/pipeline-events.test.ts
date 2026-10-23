@@ -16,21 +16,13 @@ function fixture() {
   execFileSync('git', ['init', dir], { stdio: 'ignore' }); execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://gitlab.example.invalid/group/project.git']);
   let now = 1000, status = 'running'; const reader = vi.fn(async () => ({ status, sha }));
   const turns: { id: string; prompt: string; thread: string }[] = [];
-  // This suite asserts the legacy IDLE_RECOVERY/IDLE_ATTENTION contract.
-  const make = () => new EventRuntime(board, { notificationBatchMs: 0, sessionCheckMs: 0, databasePath: path, serverEntry: 'unused', now: () => now, pipelineReader: reader, adapter: w => ({ open: async worker => worker.threadId ?? 'thread-' + worker.id, run: async (thread, prompt) => { turns.push({ id: w.id, prompt, thread }); }, close: async () => {} }) });
+  const make = () => new EventRuntime(board, { notificationBatchMs: 0, databasePath: path, serverEntry: 'unused', now: () => now, pipelineReader: reader, adapter: w => ({ open: async worker => worker.threadId ?? 'thread-' + worker.id, run: async (thread, prompt) => { turns.push({ id: w.id, prompt, thread }); }, close: async () => {} }) });
   let runtime = make(); runtime.configurePool({ workspacePath: dir }); const goal = board.createTask({ title: 'CI-gated human goal' });
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }), () => board.close(), () => runtime.close());
   const settle = async () => { await runtime.scan(); await vi.waitFor(() => expect(runtime.workers.list().every(w => w.status === 'idle')).toBe(true)); };
   return { dir, board, goal, reader, turns, settle, get runtime() { return runtime; }, tick: (ms=60000) => { now += ms; }, result: (value: string) => { status = value; }, restart: async () => { await runtime.close(); runtime = make(); }, watch: (pipelineId = 100) => runtime.ci.register({ taskId: goal.id, pipelineId, sha }) };
 }
 describe('durable CI events', () => {
-  it('does not hide another stranded goal behind an unrelated running CI subscription',async()=>{
-    const f=fixture();await f.settle();f.watch();const other=f.board.createTask({title:'Another actionable goal'});
-    await f.settle();await f.settle();f.tick(660000);await f.settle();
-    const signal=f.board.board().entries.find(e=>e.summary.startsWith('IDLE_RECOVERY'));
-    expect(signal).toBeDefined();expect(JSON.parse(signal!.detail).goalIds).toEqual([other.id]);
-    expect(f.runtime.ci.list()[0]!.state).toBe('watching');
-  });
   it('announces manual action once and keeps watching until an actual terminal result',async()=>{
     const f=fixture();await f.settle();f.watch();f.result('manual');await f.settle();
     f.tick();await f.settle();expect(f.board.board().entries.filter(e=>e.summary.startsWith('PIPELINE_RESULT'))).toHaveLength(1);

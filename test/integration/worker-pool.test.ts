@@ -15,8 +15,7 @@ function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'swarmboard-pool-')); const board = new Store(join(dir, 'board.sqlite'));
   const turns: { worker: string; prompt: string; threadId: string }[] = [], closed: string[] = [], finishes = new Map<string, () => void>();
   let hold = false;
-  // These cases pin the legacy reminder-driven turns: opt in explicitly.
-  const runtime = new EventRuntime(board, { notificationBatchMs: 0, sessionCheckMs: 0, databasePath: join(dir, 'board.sqlite'), serverEntry: 'unused', adapter: worker => ({
+  const runtime = new EventRuntime(board, { notificationBatchMs: 0, databasePath: join(dir, 'board.sqlite'), serverEntry: 'unused', adapter: worker => ({
     open: async w => w.threadId ?? 'thread-' + w.id,
     run: async (threadId, prompt, started) => { turns.push({ worker: worker.id, prompt, threadId }); started('turn-' + turns.length); if (hold) await new Promise<void>(resolve => { finishes.set(worker.id, resolve); }); },
     close: async () => { closed.push(worker.id); },

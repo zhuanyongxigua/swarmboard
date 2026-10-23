@@ -2,17 +2,19 @@
 
 [返回架构说明](architecture.md) · [事件工作会话](event-workers.md)
 
-Swarmboard 的协作内核（共享目标/上下文、事件投递、稳定身份、持久检查点、生命周期、容量、空闲恢复、执行授权）不依赖任何具体 harness。会话创建/续接、回合执行、状态核查、审批信号等宿主差异全部放在适配层：内核只面向 `src/harness/contract.ts` 定义的通用契约，正式运行入口通过 `src/harness/registry.ts` 这一唯一装配缝选择后端。
+Swarmboard 按界面、核心、适配三层协作：界面让人类添加目标并查看任务与共享上下文；核心维护共享数据、事件、授权和组织启停；适配层管理具体工具的会话生命周期、定时检查和原会话续接。成员从同一面板自主讨论和选择贡献，不由核心预设主管、固定职责或一人一任务。
+
+现有原生会话后端使用 `src/harness/contract.ts` 的通用契约，经 `src/harness/registry.ts` 装配。外部 CLI 按实际需要做最小接入，不必先实现完整后端或另造统一平台。五分钟检查优先使用 CLI 内置会话定时能力；确需外部触发时，必须使用官方 CLI 明确的原 session resume 与增量提示，核心不另起逐会话计时。
 
 ## 可复用适配器与个人配置边界
 
-可复用的具体 harness 适配器可以作为独立模块随仓库交付，包括官方指令加载、start/attach/resume、通知接线、忙时排队、状态／能力映射、暂停和安全退出。核心调度、任务和共享事件只依赖通用契约，不导入具体厂商 CLI/SDK 或按厂商名分支；具体模块依赖契约，再由受信配置的注册／组合入口显式启用。第三方通过同一契约注册，任务正文和外部文本不能隐式加载模块。不得为此另起一套逐席调度链。
+可复用的具体 harness 适配器可以作为独立模块随仓库交付，包括官方指令加载、start/attach/resume、通知接线、忙时排队、状态／能力映射、暂停和安全退出。核心任务和共享事件只依赖通用契约，不导入具体厂商 CLI/SDK 或按厂商名分支；具体模块依赖契约，再由受信配置的注册／组合入口显式启用。第三方通过同一契约注册，任务正文和外部文本不能隐式加载模块。不得为此另起一套逐席调度链。
 
 个人凭据、认证状态、真实身份/session、账本与运行目录、人数启停、模型和权限选择、任务授权及私有输入仍在仓库外配置。只迁移去个人化的最小代码、合成示例和测试，保留原作者及依赖许可；不能整体复制临时个人目录或把历史人数／模型／权限写成默认值。旧接入在安全回合边界迁移，保留健康原 session、历史和 unknown，确保只有一个宿主和一套逐会话计时在工作。
 
 通用协作正文由 `src/worker-prompt.ts` 的 `workerProtocol()` 唯一生成，原生 `workerPrompt()` 直接复用；受信适配组合把同一文本及其内容摘要传给适配器的正式指令接口。该正文不包含个人提示词、执行 grant、身份或事件负载，这些仍经各自正式入口读取。适配器不要再维护手工复制的旧 `protocol.txt`；否则摘要只能证明旧字节未变，不能证明它符合当前协议。更新既有基线时保留来源、版本与陈旧写入围栏，在安全回合边界迁移，不把未知或外来文件当作可覆盖的旧版本。
 
-指令应用必须报告真实的官方通道和角色：Codex 的 developer 注入不代表其他后端也支持。若具体 harness 的正式扩展以 user-role 指令消息提供上下文，应明确其能力、更新／清空语义和限制，不冒充 system/developer，也不以普通聊天静默替代声明的会话指令能力。缺失能力、审批拒绝或未核实投递要显式报告，不能自动批准、kill 或重放。实现、合成契约测试、打包、安装和真实原会话消费分别举证；下方旧能力矩阵不自动升级为新增模块已经支持的证据。
+指令应用必须报告真实的官方通道和角色：Codex 的 developer 注入不代表其他后端也支持。若具体 harness 的正式扩展以 user-role 指令消息提供上下文，应明确其能力、更新／清空语义和限制，不冒充 system/developer，也不以普通聊天静默替代声明的会话指令能力。缺失能力、审批拒绝或未核实投递要显式报告，不能自动批准、kill 或重放。实现、合成契约测试、打包、安装和真实原会话消费分别举证；能力矩阵不自动升级为新增模块已经支持的证据。
 
 ## 通用会话契约
 
@@ -57,16 +59,16 @@ Swarmboard 的协作内核（共享目标/上下文、事件投递、稳定身�
 
 ## 能力矩阵
 
-| 能力 | codex（官方 App Server） | echo（参考后端） | DSH（规划中，见下文） |
-| --- | --- | --- | --- |
-| 真实模型执行 | ✅ CLI 登录的官方会话 | ❌ 确定性替身，`deterministic: true` | 目标；本任务未实现 |
-| `inspection` 核查 | ✅ `thread/read` 按 turnId/投递标记 | ✅ sidecar 台账按 turnId/投递标记 | `session.history`（`beforeSeq` 分页）可承载，待实测 |
-| `approvalSignals` 审批信号 | ✅ 上报请求→持久暂停，传输层拒绝自动批准 | ❌ 无模型故无审批请求 | `approval/requested` + `POST /api/respond` 存在；策略映射待定 |
-| 沙箱/权限模式 | `workspace-write` + `on-request`，随官方 CLI | 不适用 | profile/patch 组合拥有，需逐版本核实 |
-| 会话身份恢复 | `thread/resume`（排除历史，独立启动预算） | `echo-thread-<workerId>` 稳定派生 | `session.create` 预分配 `sessionId` 幂等 |
-| MCP 工具注入 | `mcp_servers.swarmboard_worker`（required） | 不注入（无模型回合） | MCP client 插件机制存在，注入面待核实 |
+| 能力 | codex（官方 App Server） | echo（参考后端） |
+| --- | --- | --- |
+| 真实模型执行 | CLI 登录的官方会话 | 无真实模型，`deterministic: true` |
+| `inspection` 核查 | `thread/read` 按 turnId/投递标记 | sidecar 台账按 turnId/投递标记 |
+| `approvalSignals` 审批信号 | 上报请求并持久暂停，传输层拒绝自动批准 | 无模型故无审批请求 |
+| 沙箱/权限模式 | `workspace-write` + `on-request`，随官方 CLI | 不适用 |
+| 会话身份恢复 | `thread/resume` | `echo-thread-<workerId>` 稳定派生 |
+| MCP 工具注入 | `mcp_servers.swarmboard_worker`（required） | 不注入（无模型回合） |
 
-矩阵表达的是“本仓库代码实际实现并测试的能力”；DSH 一列是目标映射与证据等级，不表示已支持。
+矩阵只列当前内置后端。百智办公 ohmyagent、DSH 和 Zcode 的 CLI 能力必须以实际版本的官方入口和有限真实验收为准；旧 SDK 或 Web API 探针不能作为当前 CLI 已支持的证据。
 
 ## 如何新增一个后端
 
@@ -109,186 +111,36 @@ export const myBackend: HarnessBackend = {
 - `SWARMBOARD_ECHO_TURN_MS`（0–60000 整数，默认 25）控制回合时长，仅用于测试节奏。
 - 它用于：共享契约回归、打包/装配冒烟、扩展演示。不得把 echo 回合输出当作真实模型验收，也不得将其称为“已运行的 DSH/其他 harness”。
 
-## DSH 接入准备：映射、最小样例与缺口
+## CLI 接入与旧 SDK 路线退役
 
-本节基于**本机可读的实际材料**：全局安装的 `@deepseek-ai/dsh@0.1.1-rc.2`、一份对已安装真实 Host 的独立实测兼容记录（2026-09-12 于本机测得），以及上游 master 的 SDK 文档。本任务**未实现** DSH 后端，以下“最小样例”是映射设计，不是已运行驱动；当前可执行的真实 DSH 接入缝是[外部协作者直接 MCP 路径](external-collaborators.md)，由 DSH 自己的 MCP client 使用同一看板，UI iframe 嵌入（参考项目 dashi-taskboard 的 `integrations/deepseek-harness`）不证明会话执行、唤醒或恢复。
+本轮使用官方 CLI 原会话接续，退出自建 DSH SDK 通知／生命周期组合和 Web API 消费桥路线；这不限制 CLI 自身的内部实现。旧 SDK create/resume、会话发送、逐提醒完成判定、journal、host runner/plugin 不再作为当前接入接口交付。正常任务、共享上下文、MCP 和普通事件通知仍保留。
 
-### 能力映射（含证据等级）
+适配层必须明确原 session ID、非交互入口、实际模型与费用来源、工具／MCP、权限、工作目录及定时启停方式。每个原会话至多一个在途续接；忙碌时不并发写入，停止后不再准入新的定时唤醒。发送结果未知时先核查，不重复提交具体操作；额度、权限和恢复错误如实报告。不得按静默时长强杀，也不要求每次提醒产生贡献或建立逐提醒业务完成回执系统。
 
-| Swarmboard 需要 | DSH 0.1.1-rc.2 实际面 | 证据 | 缺口/判定 |
-| --- | --- | --- | --- |
-| 会话开启与恢复 | `session.create` 支持预分配 `sessionId`：同 id + 同 cwd 重试返回同一会话，不同 cwd 报 `session-conflict` | 实测（真实 Host） | 恢复 = 重开事件流 + 重读历史（`since` 未实现）；不恢复外部进程 |
-| 回合提交回执 | `session.prompt`（`mode: queue/steer`）返回 `{accepted:true}` = 持久入队回执，非模型结果 | 实测 | 入队 ≠ 完成；`finalResponse` 非逐 prompt 因果；Slash 命令由宿主执行，转发任意文本前需策略过滤 |
-| 完成判定 | 事件流 `turn/start → … → turn/end` 为权威结束 | 实测（真实回合） | 需绑定本 delivery 的 turn/end，不能拿旧最终文本或一次 idle 冒充 |
-| 断连后核查（`inspect`） | `session.history` 按 `beforeSeq/maxMessages` 整消息分页，含在途部分 | 契约读取 + 实测 | 未取得本 delivery 的耐久完成证据时必须返回 `unknown`；无任意历史查询 RPC |
-| 未知投递去重 | 无宿主侧 prompt 幂等键（`rpcId` 之外） | 实测 | 适配器必须**先记后发**并在重启后核查，绝不盲发第二遍——与现有内核语义一致 |
-| 审批（`approvalSignals`） | `approval/requested` 帧在重连时以原 `rpcId` 重放；`POST /api/respond` 回 `{accepted}` 回执，结果异步 `approval/resolved` | 实测（早期探针）+ 契约 | 可以实现“上报→持久暂停→人工决断”；Swarmboard 侧需要一条人工回答通道（当前缺失，见缺口） |
-| 取消 | `session.cancel` 为回合级回执，保留待处理队列；无进程级证据（`processEvidence.observed === false`） | 实测 | 不能宣称“取消即工具子进程已停”；队列取消是另一操作（`updateQueue`） |
-| 工具/提示注入 | MCP client 插件以 `mcp__<server>__<tool>` 暴露子 MCP；bundle 的 profile/patch 组合拥有工具与策略 | 实测（桥接项目） | `swarmboard_worker` 等效注入面需逐版本核实，工具名存在 ≠ 沙箱已建立 |
-| 版本稳定性 | `host.describe.version` 恒为 `0.0.1`；`/api` 面跨版本有增删（如 `command.execute` 移除） | 实测 | 兼容判定必须用运行时能力协商 + 固定依赖树 pin，不能用版本号比较 |
+原会话、共享历史、数据库迁移及 unknown 证据保留。删除代码不是清理现场运行数据的授权；既有执行先在安全边界交接，不能删除账本或用新身份替代未知会话。一次有限真实验收须分别证明自然到期后原会话实际读取面板并完成一次有用贡献、忙时不重叠、停止后不再唤醒。合成测试、进程存活和注册成功均不替代这些行为。
 
-### 最小样例（映射设计，未运行）
+### 保留的 DSH 指令文件适配器
 
-```ts
-// src/harness/dsh-backend.ts —— 规划骨架，映射到现有契约；不是已交付驱动
-export const dshBackend: HarnessBackend = {
-  id: 'dsh',
-  displayName: 'DeepSeek Harness (planned; requires a pinned version and live acceptance)',
-  capabilities: { inspection: true, approvalSignals: true }, // 以逐版本探测为准
-  sessionIntro: worker => `You are ${worker.id}, a persistent Swarmboard worker in your DeepSeek Harness session…`,
-  createSession: context => new DshSession(context),
-};
-class DshSession implements SessionAdapter {
-  // open: session.create 预分配 sessionId = 稳定身份（幂等重试安全）
-  // run: 先写 sidecar 发送意图 → session.prompt(queue) → 订阅 events.mux，
-  //      以本 delivery 绑定的 turn/end 为完成；断连/未确认抛 UncertainDelivery
-  // inspect: session.history(beforeSeq) 只读查找本 delivery 的 turn/end；
-  //         找不到任何权威证据 → 'unknown'
-  // 审批: approval/requested → context.onApproval()（持久暂停），
-  //      由人工通道经 POST /api/respond 决断；适配器不得代批
-}
-```
+`src/harness/dsh/instructions.ts` 有独立的指令文件用途，仍通过 `src/harness/dsh/index.ts` 导出 `INSTRUCTION_SCHEMA`、`renderInstructions`、`planWrite`、`assertFresh`、`assertNotStale` 和 `createDshInstructionBoundary`。它只把调用者提供的共享协议和双 prompt 快照写成受保护的工作区 `AGENTS.md`；不启动或恢复会话、不提交模型回合、不建立定时器或通知消费桥。该模块不是 DSH CLI 定时或 resume 已支持的证明，也不恢复暂停会话。
 
-接入判据（实施时逐项验证，不允许沿用文档假设）：
-
-1. 锁定安装版本与依赖树 pin，启动时能力协商，缺能力显式报错；
-2. 原 `sessionId`/cwd 匹配才允许恢复，缺失或冲突不得另建同名会话冒充恢复；
-3. 每个投递绑定自己的 `turn/end` 证据；`accepted`、旧最终文本、一次 idle 都不是完成；
-4. 未取得耐久完成证据的断连投递保持 `uncertain`，重启后先核查；
-5. 审批只上报不代批；人工回答通道落地前 `approvalSignals` 如实标 `false` 或拒绝该权限模式；
-6. 取消只按回合级回执上报，不宣称子进程停止。
-
-### 具体缺口（实施前必须解决）
-
-- **人工审批回答通道**：Codex 路径的审批由人类在原宿主 UI 决断；DSH 的 `respond` 需要一条 Swarmboard 侧人工操作面（工具或 UI），否则只能选择“暂停并等待外部决断”的降级模式。
-- **`swarmboard_worker` 等效 MCP 注入面**：Codex 用宿主配置注入 required 子 MCP；DSH 的 MCP client 插件机制需验证同等注入与所需配置面。
-- **唤醒语义**：Swarmboard 靠事件 + sidecar 唤醒 runtime；DSH 侧重连 = 重开 mux + 重读 history，适配器要把重连映射为一次核查而非新回合。
-- **版本漂移**：`/api` 面跨 rc 版本有增删；无版本号可用（`host.describe.version` 是占位常量），必须实现运行时探测。
+受信调用者提供规范化的目录、原会话 cwd、当前 prompt 读取函数和协议摘要。写入前核对目录及快照版本；既有文件不是该适配器拥有的基线，或包含更高版本／不同协议时，拒绝覆盖。指令的 user-role 语义不等于真实 CLI 已读取：实际通道和生效仍须按工具版本核实。合成覆盖位于 `test/unit/dsh-instructions.test.ts`。
 
 ## 测试与证据边界
 
 ### 独立模块的可移植交付
 
-源码中的独立模块必须显式提供 `src/harness/<module>/index.ts` 公共入口；桌面构建将这些受信仓库入口分别打包为 `server/harness/<module>/index.mjs`，不把它们导入主服务。辅助目录没有入口则不导出。公共入口导入时不得注册、启动或执行真实会话，具体启用由受信宿主显式调用。构建拒绝模块中的绝对路径 import，以及 realpath 解析后逃出源码根的输入；宿主的个人 SDK 和配置在运行组合时传入，不以本机路径打进便携包。模块自己的依赖许可与主服务一起进入 `THIRD_PARTY_NOTICES.txt`；个人 SDK 安装、认证、运行目录和配置不随包复制。
+源码中的独立模块必须显式提供 `src/harness/<module>/index.ts` 公共入口；桌面构建将这些受信仓库入口分别打包为 `server/harness/<module>/index.mjs`，不把它们导入主服务。辅助目录没有入口则不导出。公共入口导入时不得注册、启动或执行真实会话，具体启用由受信宿主显式调用。构建拒绝模块中的绝对路径 import，以及 realpath 解析后逃出源码根的输入；个人 SDK 和配置不以本机路径打进便携包。模块自己的依赖许可与主服务一起进入 `THIRD_PARTY_NOTICES.txt`。
 
-DSH 的入口导出指令、生命周期、SDK 组合、会话发送、整批通知驱动和耐久 journal 边界，供已经授权的宿主显式 import 后组合。导出不等于注册、启用或启动，不提供任务文本加载本地模块的接口，也不恢复暂停的 harness。第三方可按相同目录入口约定交付独立模块，无需在构建脚本增加厂商分支。源码构建仍通过 TypeScript 输出对应模块；桌面 ZIP 的独立 bundle 可从与源码无关的目录加载。
+通用构建扫描器保留，不添加厂商排除分支。`server/harness/protocol/index.mjs` 继续导出与原生成员相同的 `workerProtocol()`；DSH 模块只交付上述指令文件适配器，不再导出旧 SDK／通知组合入口。
 
-`test/unit/desktop-harness-modules.test.ts` 验证任意名合成模块打包后脱离源码加载、不执行构建期模块代码；`test/mcp/desktop-harness.test.ts` 对实际 ZIP 解包后加载 DSH 导出，并确认主服务没有嵌入这些实现。上述检查不连接官方宿主或模型，不能当作真实启用与迁移验收。
-
-### DSH 会话生命周期边界模块
-
-`src/harness/dsh/lifecycle.ts` 提供独立的 `DshLifecycle`，由受信组合入口注入 registry 和耐久 journal。它是具体适配层的一个切片，尚不是完整的 `HarnessBackend`，不由核心默认加载。官方接口依据为本机公开安装的 `@deepseek-ai/dsh-agent@0.1.1-rc.2` 的 `AgentRegistry.get/create/resume`、`AgentHandle`，以及同版本 `dsh-session` 的 `Session.header`。实现为原创代码，不复制 SDK 源码，也不添加全局安装路径或个人运行配置依赖。
-
-- `connect('start')` 仅显式创建指定 session，绝不启动宿主进程；已有同 id 会话时拒绝创建。`connect('attach')` 只读取已有 agent，缺失即报错，不降级创建。`connect('resume')` 对存量会话调用官方 resume；已活跃时直接核验并复用。
-- 每次绑定同时核对 agent id、session id、持久 header.cwd 和当前 registry 中的对象。cwd 必须由宿主传入绝对路径，不能从任务正文取得。不会因恢复失败生成替代身份。
-- 宿主 facade 调用官方 create/resume 后保留返回的 `AgentHandle`，只将 `handle.agent` 交给本模块；模型、权限、setup、指令边界和 disposer 均归宿主明确组合。模块不发送消息、不创建 timer、不作审批、不清通知 unknown。
-- 变更前先提交独立的 lifecycle intent。journal 的同步 write 必须在返回前耐久提交；变更异常后仅允许 attach 核查原 registry，不能再次 create/resume。核实原 agent 存在只证明生命周期绑定，不能当作通知消费或某次模型回合完成。宿主保持原有跨进程单写租约；模块内的同 registry/session 单飞保护不能替代它。
-- `pause()` 只停止本模块的新连接，不打断在途工作：暂停前已受理的异步连接允许完成绑定及生命周期对账，返回 agent 后状态仍为 paused；绑定返回不授权发送消息，宿主在提交前仍须核正式启用状态。正式暂停／撤销还需宿主耐久禁用通知和逐席检查。`detach()` 在忙碌或连接未决时拒绝，空闲时只丢弃模块引用。官方 `AgentHandle.dispose()` 会停止 agent 并移除活跃 session，因此模块不会把 dispose 冒作暂停或分离，也没有实现宿主进程安全关闭。
-- `status()` 在 registry 替换或移除原对象后返回 disconnected；若同一对象的身份／cwd 等元数据失去一致性则抛出 `DSH_SESSION_CONFLICT`，调用方按冲突处理，不能默认为可继续发送。
-
-`test/unit/dsh-lifecycle.test.ts` 使用合成 registry/journal 验证身份、恢复、并发及异常围栏，不执行真实模型，不证明四席迁移、官方事件消费、进程启动或耐久宿主组合已经完成。指令更新和通知驱动分别沿既有模块接线，不能把本模块单测称为完整 DSH 适配验收。Zcode 保持暂停，本模块不包含其启动路径。
-
-### DSH 官方 SDK 组合层
-
-`createDshSdkFacade({ sdk, sdkSessionId, createOptions, resumeOptions })` 将受信宿主持有的官方 `ctx.agents` 组合为上述 `DshRegistryPort`。宿主同时传入官方 `SessionId` 构造函数，保持其 branded 类型；组合层核对转换后字符串与原身份完全一致，不能借转换替换会话。`sdk.get` 返回原 agent；`create/resume` 返回的完整 `AgentHandle` 先由组合层保留，再把 `handle.agent` 交给生命周期验证。`ownedHandles()` 返回只读快照，供原宿主保留销毁能力和对账；即使生命周期因身份冲突拒绝绑定，也不丢弃已返回的 handle，更不自动 dispose。借用 attach 的 agent 不伪造为本组合层拥有的 handle。
-
-两份 options 必须显式传入，模型、权限、setup 和 signal 等 SDK 配置保持调用方选择；模块不提供个人策略默认值。会话身份与创建 metadata 由生命周期独占，options 中出现 `sessionId`、`resumeSessionId` 或 `meta` 会在调用 SDK 前被拒绝。配置在组合时浅快照，受信 setup 等对象仍由宿主负责；这些接口不是不可信任务文本的执行入口。官方 SDK 自身类型、安装和当前上下文由宿主核对，不从个人全局路径 import 或复制依赖。
-
-组合时不调用 SDK；只有显式 `lifecycle.connect(mode)` 才可能 create/resume。每个 SDK 宿主共享同一 facade，并在连接前取得其既有跨进程单写租约、注入耐久 journal。pause/detach 不销毁 handle，安全退出须由原宿主在回合结算与账本对账后处理。`test/unit/dsh-sdk-facade.test.ts` 用合成官方返回形状与真实生命周期联接验证配置、所有权及异常不重试；通知回合驱动、跨进程租约实现和真实四席迁移仍须单独交付，不能用这些合成测试代替。
-
-### DSH 官方会话发送与完成证据
-
-`createDshSdkSessionPort` 给整批通知驱动提供结构兼容的 `isCurrent/isBusy/submit/settlement`。它只借用组合时已经存在的原 agent，不 create/resume 或启动宿主。调用方显式提供稳定成员／适配器／原 session／cwd、官方 `MessageId` 构造、当前 registry 查询、同步 `isAuthorized(batch, agent)` 和 `flush(agent)`。授权函数必须在调用时核对当前准入、范围和宿主跨进程租约 token；宿主从发送前到 checkpoint 完成期间持有原租约。仅检查进程存活或一个旧布尔快照不满足这一合同。
-
-批次的全部 entryIds 必须与 entries 一一对应。消息 ID 由适配器、成员、原 session、delivery sequence 和完整条目快照的摘要生成；内容摘要另绑定在返回的 `detail` 证据 token 中。`submit` 在官方 `Agent.send(message, 'next-turn', true)` 前同步重核绑定与授权，中间没有 await，消息保持 `role:'user'`、`source.kind:'plugin'` 和 `form:'relay'`，不冒充人类或系统角色。文本由通知驱动渲染完整批次，条目仍是不可信参考数据。既有同 ID 的入队／消费记录只允许核查与 checkpoint，不再次发送；同 ID 不同内容判为 unknown。
-
-`flush` 必须组合官方 `SessionStore.flush(agent.session)`，不能绕过 store 直接调用原始 `ctx.parallel('session/flush', …)`。官方 bool 返回值为 true 才表示有持久化监听器参与；false、抛错或发送异常一律保持 unknown，不自动重试。成功 checkpoint 只返回 `enqueued`，`detail` 是随后传给 `settlement` 的不透明证据 token，不是已完成或已产生贡献的证明。
-
-`settlement` 核对同批次、同消息 ID／输入摘要的 `user/message` 位于某个已打开 turn，且该 turn 的 `turn/end.reason.kind === 'completed'`，并再次 checkpoint 和复核绑定。旧 turn、其他消息、排队记录、一次 idle、`whenIdle()`、取消／错误／中断／blocked／max-tokens 均不计成功完成。宿主重建 helper 可从保留的原 session 日志恢复证据；driver 的 submitting/unknown 仍必须先对账，不能因 helper 有稳定 ID 擅自重发。回执与未知投递处理仍由原通知服务和耐久 driver journal 负责。
-
-合成测试覆盖官方发送参数、消息与 turn 的因果关联、撤销窗口、checkpoint 故障、重建与防重；本机公开 SDK 类型另行核对兼容性。它们不启动模型，不证明当前个人宿主已经装配、租约实现已经验证、四席已迁移或产生了真实有用贡献。
-
-### 整批通知驱动与耐久 journal 组合
-
-`driveOnce({ pending, session, journal })` 只处理通知服务提供的完整 delivery 快照。受信宿主提供 PendingPort，保留 adapter、成员、原 session、sequence、全部 entryIds 及对应条目；普通更新和周期检查共用该批次，不能逐条检查却确认整个批次。默认文本包含每个条目的摘要和正文，截断时明确标记并给出完整条目的读取 ID；条目始终是参考数据，不升级为指令。
-
-驱动在提交前写耐久意图，再次核当前绑定；忙碌则保留批次而不提交。`enqueued` 只表示入队，必须保存 SDK 返回的不透明证据 token，随后通过 `settlement` 验证本批次对应的权威完成。完成后回执失败，已权威完成的条目记入独立的 covered 集合；批次未增长时只重试回执，不再提交模型。批次增长时保持实际提交快照及证据 token 不变，按当前 entryIds 与 covered 的差集提交并渲染未消费条目；差量权威完成且持久保存后，才能用当前完整快照确认整批。不能因 STALE_DELIVERY_VIEW 清除证据或释放未处理条目。未知发送和中断的 submitting 保留对账，不自动重放或清空。
-
-`createDshJournals<DeliveryBatch>({ db, sessionId })` 将同一宿主 SQLite sidecar 适配为生命周期 journal 和通知 journal。调用方使用持久文件，保留原数据库的生命周期、同步持久配置和跨进程单写租约；模块不另建 timer 或进程。写意图在返回前必须提交，不能借调用方尚未提交的事务冒充耐久成功。已存在而无法解码的意图必须抛错并保留证据；只有确实无记录时才返回缺失，避免把 unknown 当新请求重放。
-
-受信宿主显式组合 SDK facade、生命周期、SDK SessionPort、耐久 journal 与整批 driver，同时提供当前 NotificationService 的读取／精确回执端口和当前授权／租约检查。真实 SDK 的 SessionStore、身份、认证、模型、权限、启停、DB 路径及原会话迁移都留在宿主配置。导入这些模块不创建会话、不触发模型、不注册通知，也不恢复暂停的 harness。
+`test/unit/desktop-harness-modules.test.ts` 验证任意名合成模块的独立打包、源码根边界和许可；`test/mcp/desktop-harness.test.ts` 解包实际 ZIP，脱离源码加载协议与指令导出，并检查已退役的 SDK 出口未进入产物。这些检查不连接真实模型，也不证明用户环境已安装或原会话已消费提醒。
 
 | 证据 | 位置 | 证明/不证明 |
 | --- | --- | --- |
-| 共享契约套件 | `test/harness/adapter-contract.ts`（echo 于 `test/unit/echo-backend.test.ts`，codex 于 `test/unit/codex-adapter-contract.test.ts`） | 两后端满足同一契约：稳定身份、回执、重启核查、unknown、uncertain、能力一致性；不证明真实模型行为 |
-| 装配/注册 | `test/unit/harness-registry.test.ts`、`test/integration/harness-assembly.test.ts`（真实守护进程） | 默认兼容 codex、显式选择、未知后端启动报错、echo 守护进程干净启停 |
-| 运行时边界 | `test/integration/harness-backend.test.ts`（真实 SQLite） | 后端身份持久化、跨后端拒绝与排队、暂停保留、未绑定改绑、台账核查恢复 |
-| 打包产物 | `test/mcp/desktop.test.ts` | 参考后端进入便携包并在真实子进程中选择生效；不等于真实宿主已安装 |
-| 真实 Codex 闭环 | 隔离看板实测记录（见 verification.md） | 官方登录下最小真实回合；不覆盖 DSH 或其他 harness |
+| 共享契约套件 | `test/harness/adapter-contract.ts`（echo 于 `test/unit/echo-backend.test.ts`，codex 于 `test/unit/codex-adapter-contract.test.ts`） | 两后端满足同一契约；不证明真实模型行为 |
+| 装配/注册 | `test/unit/harness-registry.test.ts`、`test/integration/harness-assembly.test.ts` | 默认 codex、显式选择及未知后端启动报错 |
+| 运行时边界 | `test/integration/harness-backend.test.ts` | 后端身份持久化、跨后端拒绝与排队、暂停保留、台账核查恢复 |
+| 打包产物 | `test/mcp/desktop.test.ts`、`test/mcp/desktop-harness.test.ts` | 便携包与独立导出；不等于真实宿主已安装 |
+| 真实 Codex 闭环 | 隔离看板实测记录（见 [历史验证](verification.md)） | 官方登录下最小真实回合；不覆盖其他 CLI |
 
-参考实现（echo）的一切证据都是确定性的；真实模型、真实 DSH Host、真实桌面宿主的行为必须另行实测并在 [verification.md](verification.md) 记录，不得用替身证据代替。
-
-通知意图键使用 JSON 四元组 `[adapterId ?? null, memberId, sessionRef, sequence]`，缺省通道与字面名称 `native` 明确区分，字段含分隔符也不会产生碰撞。发现旧拼接键意图时停止该投递并要求保留证据对账，不将它视为缺失而重新提交，也不提示清空 unknown。
-
-### 事件驱动宿主与单写所有权
-
-`createDshHostLease` 在宿主自己的 SQLite sidecar 中按实际 `sessionRef` 保持唯一所有者；不同成员或通道别名不能绕过同一会话锁。锁不按经过时间过期、不自动接管崩溃所有者。发现旧锁时须由现场操作者先核原进程、SDK 会话及未决意图，再安全恢复；禁止删锁后重放 unknown。各进程必须使用同一 sidecar，官方 SDK 自身的会话写锁仍保留。
-
-`createDshHostRunner` 把已有通知和 SDK 回合事件串到 `driveOnce`，不新增轮询定时器。并发事件合并为下一趟 pass，所有 pass 共用已持有的租约；异步读取后重新核所有权，SDK `isAuthorized` 仍须在实际发送点同步检查 `lease.owns()`。`stop()` 停止准入并等待在途 pass，只有宿主提供的 `canRelease()` 确认原 agent 空闲、inbox 无待执行消息且没有在途连接变更时才释放；忙碌时返回 `DSH_HOST_NOT_QUIESCENT` 并保留所有权。停止不 dispose 原 agent、不删除 journal，也不确认尚未完成的 delivery。
-
-受信宿主可从 `server/harness/protocol/index.mjs` 导入 `workerProtocol()`，取得与原生 worker 逐字相同的协议文本，再计算 SHA-256 注入指令 boundary；无需加载核心服务、依赖源码目录或手工复制旧协议。此通用入口只导出既有函数，不包含个人配置或具体厂商实现。
-### 官方 SDK 插件入口
-
-`src/harness/dsh/sdk-plugin.ts` 的 `createDshSdkPlugin` 把既有模块装配为官方 Cordis object plugin。受信宿主注入稳定成员／原 session／cwd、显式 `mode`、官方 `SessionId`／`MessageId` 构造、SDK create/resume options、持久 sidecar DB、单写 lease、整批 PendingPort、同步当前授权函数、指令准备函数、既有唤醒订阅及 runner factory。没有默认模型、权限、身份、目录、定时器或启动模式；任务文本不参与选择模块或配置。
-
-宿主自己的受信插件文件可使用官方加载器导出以下形状（`privateOptions` 来自宿主配置，不能从任务内容构造）：
-
-```ts
-import { SessionId } from '@deepseek-ai/dsh-session';
-import { MessageId } from '@deepseek-ai/dsh-llm';
-
-const entry = createDshSdkPlugin({
-  ...privateOptions,
-  sdkSessionId: SessionId,
-  messageId: MessageId,
-  createRunner: createDshHostRunner,
-});
-export const { name, inject, apply } = entry.plugin;
-```
-
-`createDshSdkPlugin` 与 `createDshHostRunner` 由受信宿主从已核验的适配模块导入。保留原官方 overlay、指令插件、setup、模型和权限配置，不用一个最小 `plugins` 对象替换原宿主配置。`prepareInstructions` 显式接入既有 `createDshInstructionBoundary(...).prepare()`，返回后原官方指令插件按既有工作区加载；入口不伪造 system/developer 消息，不在包内保存个人路径或内容。
-
-`apply(ctx)` 是唯一启动边界：先取得 lease，再准备指令并重核 lease，然后以显式模式连接原 session，组合 `ctx.agents`、`ctx.sessions.flush(agent.session)`、SDK SessionPort、耐久 journal 和 runner。PendingPort 必须额外实现异步 `isCurrent(batch)`，每次 driver 检查时都重读正式通知服务及绑定／范围，再核 SDK 本地原对象与同步授权；因此写入意图后的检查也会看到服务侧撤销。真正 `submit` 前仍保留同步 SDK 授权与 lease 围栏，异步查询不冒充原子提交。缺失的 attach 目标不会降级 create/resume；连接异常保留生命周期意图及返回的完整 handle，不自动重试。`ready()` 让宿主观察初始化及首个 pass 的错误；`ownedHandles()` 保留所有权供人工对账，不自动 dispose。
-
-入口订阅官方 `agent/status` 的原对象 idle 转换、同 session 的 `turn/end`，以及宿主显式提供的既有 `subscribeWake`。这些事件只触发本地合并后的 runner pass；`turn/end` 不是直接确认依据，确认仍由 SDK SessionPort 验证本 delivery 的消息、回合和耐久 checkpoint。其他 session 的事件不触发 pass，忙时突发通知合并为一次后续检查。没有新增轮询、五分钟计时链、守护进程或 session。
-
-Cordis 正式插件的 `apply` 返回异步 cleanup effect，不依赖不存在的 ready/dispose 事件。卸载先同步关闭发送授权，再取消本地订阅并等待初始化和 pass；runner 的 `canRelease` 只有在原 registry 对象仍一致、idle 且 inbox 为空时才允许释放 lease。忙碌、初始化未决或失败时保留 lease／意图／handle，要求对账；不能通过卸载强杀原会话或清 unknown。忙碌退出拒绝后，可由宿主在明确的安全空闲边界再次调用 cleanup，不自动等待定时器或重放连接。
-
-定向测试使用合成 SDK 服务和 SQLite 验证该装配；本机公开 SDK 类型及 Cordis 插件加载另作无模型兼容检查。它们不证明个人配置已安装、宿主已安全迁移或真实四席已经消费通知并继续贡献。
-### 受信 MCP 通知端口
-
-`createDshNotificationPort({ callTool, getCurrentBinding, pageSize? })` 将已经绑定调用者的正式 MCP 客户端接为 `PendingPort`，不打开看板数据库、不注册通道、不创建模型或 timer。`callTool({ name, arguments })` 只调用 `notification_pending`、`context_read`、`notification_receipt`；`getCurrentBinding` 由受信宿主提供当前启用状态、adapter/member/session、注册代次与任务范围，不能从事件正文推断，也不能仅返回失去撤销感知的启动缓存。
-
-端口逐页读取 pending，并逐个 ID 用完整 `context_read` 精确读取正文；缺失、不可见、截断、重复 ID、异常分页和过期检查信封均停止该批。MCP 的第一段 JSON／`structuredContent` 才是返回值，后附同伴消息不参与解析。所有周期检查都核对当前绑定与目标交集；批次携带可序列化的 `notificationBinding`，异步读取前后均检查绑定。`isCurrent(batch)` 在提交前重新读取当前 pending 和引用事件，允许 driver 已完成覆盖后的合法差量子集；它不提供跨网络 await 与 SDK send 的原子保证，宿主仍必须在实际 send 前同步核对授权并持续持有单写租约。
-
-服务端 `unknown` 直接冻结该 pass，不能因宿主 journal 缺失而当成新工作。`confirm` 仅发送 `consumed: true` 及本批精确完整 ID 集合，保留服务端 `STALE_DELIVERY_VIEW` 等拒绝；已成功回执的响应丢失仍可精确重试。`release` 仅本地延后，不发送负回执、不弃用、不删除未知证据。当前回执 API 的序号不带通道，读到非绑定通道时拒绝，服务端多通道歧义仍须对账，不能猜通道或绕开正式接口。测试 `test/mcp/dsh-notification-port.test.ts` 使用真实 MCP Client/Server 和隔离服务；单独合成分页探针不代表当前服务允许同通道多个未结算序号，亦不代替真实 SDK／宿主安装验收。
-
-### 单一受信宿主组合
-
-`createDshHostPlugin(options)` 是实际交接入口：自动组合正式 `createDshNotificationPort`、事件驱动 runner、SDK plugin，以及宿主 sidecar 中的 session 级 lease（可显式传入已有等价 lease）。它返回可交给官方宿主的 `plugin`、`ready()`、`drain()` 和 `ownedHandles()`。个人配置不再需要自己重写三端口组装代码。
-
-最小外部插件文件由现场操作者放在原受信宿主的插件位置，使用**该次已验收构建**的导出。`privateOptions` 只能由原宿主配置提供，包含原身份／session／cwd、持久 sidecar `db`、官方类型构造、原 model/permission/setup、绑定成员的 `callTool`、当前准入 `getCurrentBinding`、最终同步授权 `isAuthorized`、指令准备、既有通知订阅和错误报告；不能从共享任务文本反序列化这些能力。
-
-```js
-// Mount the reviewed adapter in the existing trusted DSH host without a second scheduler.
-import { createDshHostPlugin } from './verified-plugin/server/harness/dsh/index.mjs';
-import { privateOptions } from './existing-private-host-options.mjs';
-
-const entry = createDshHostPlugin(privateOptions);
-export const { name, inject, apply } = entry.plugin;
-export { entry };
-```
-
-这里只声明挂载入口，不替换原官方 overlay 或 setup。原宿主按既有正式插件加载机制挂载此文件；初始化以 `entry.ready()` 结果为准，不能仅凭进程存活判断成功。停用先停止新通知准入，保留原 SDK、历史和 journal，调用官方卸载或保留的 cleanup；`DSH_HOST_NOT_QUIESCENT` 必须保锁等待安全边界，不能删锁强推迁移。崩溃遗留 owner 必须先对账原 SDK 和 journal，由操作方明确恢复，适配器不会超时抢占。
-
-安装交接顺序为：核精确包及逐文件收据；再核旧宿主在途／unknown 与原会话；保留旧配置及账本备份；在安全边界关闭旧通知准入并挂载新入口；核注册版本、能力及原 session 不变；最后分别观察自然到期、SDK 消费、本回合完成、精确回执和有用贡献。安装、未知对账、注册配置更新和四席实际迁移仍属于现场操作，合成全链测试不会代替这些步骤。
+历史 SDK、Web API 和旧安装的验证记录保留为历史，不自动转化为当前 CLI 能力或本轮验收通过。参考实现 echo 的证据始终是确定性测试；真实模型、实际安装、自然定时和原会话消费须分别报告。

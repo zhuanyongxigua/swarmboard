@@ -30,7 +30,7 @@
 `resolveNotificationTargets(entry, adapters, {capability?})` 返回 `{targets, skipped}`：
 
 1. 是否"可唤醒"**直接复用** `src/wake-policy.ts` 的 `actionableWake`。因此 FACT/CLAIM/PATCH_SUMMARY 等同伴证据保持为**参考上下文**，只有 MESSAGE、FAIL、人类/宿主控制类 OBSERVED 才投递——"可见/扫描到"不等于"已通知"。
-2. 适配器需 `enabled`，并具备本次要求的 `capability`。**默认要求 `durableDelivery`**（不能跨重启保活就不该静默接普通投递）；调用方确需豁免时显式传 `capability: null`，定时提醒则传 `timedReminder`。
+2. 适配器需 `enabled`，并具备本次要求的 `capability`。**默认要求 `durableDelivery`**（不能跨重启保活就不该静默接普通投递）；调用方确需豁免时显式传 `capability: null`。`timedReminder` 保留作旧检查载荷的兼容能力，不会启用核心计时器。
 3. 成员的 `taskIds` 决定任务范围；**没有 taskId 也没有 `recipientId` 的板级可唤醒条目只投给显式声明 `boardWide: true` 的成员**，默认不投，避免广播泄漏到所有空闲通道。
 4. 跳过自己发布的事件（`self-authored`）。
 5. 每个不投递的组合都给出原因码：`invalid-registration`、`disabled`、`reference-only`、`out-of-scope`、`self-authored`、`no-capability`。
@@ -39,7 +39,7 @@
 
 ## 与内核的最小接线
 
-`src/notification-dispatch.ts` 把登记通道接到发布路径：普通任务／共享事件与逐会话定时检查共用持久意图、范围和回执体系。每席检查使用其稳定 member/session 身份，不借旧全局提醒广播唤醒其他席。
+`src/notification-dispatch.ts` 把登记通道接到普通任务／共享事件发布路径，保留持久意图、范围和回执。核心不再生成逐会话五分钟检查或全局空闲周期消息；CLI 定时与原会话续接由[会话适配层](harness-adapters.md#cli-接入与旧-sdk-路线退役)管理。已有旧检查载荷及未决记录仍按历史围栏识别和对账，不因代码退役删除或重放。
 
 - 内核只写看板数据库：**不投递、不拉起任何 harness、不启动模型回合**；已注册适配器自己消费意图并回执。
 - 未注册、停用、范围不符、参考型证据一律不产生意图（原因码同投递决策）。
@@ -64,9 +64,7 @@
 
 受信宿主可以把该查询作为当前绑定回调，替代启动时缓存；必须另外核实际所需能力和当前执行授权。异步读不是与远端状态变更原子提交的许可，最终同步发送围栏仍需核宿主当前状态和单写租约，不能把一次成功查询当永久授权。
 
-**逐会话检查具有真正的定向语义**：检查只送到其稳定 member/session 对应的当前启用通道，且目标必须在该席正式授权范围内。旧全局 `IDLE_RECOVERY` 轮换并向全部外部成员广播的周期路径由逐席机制替换，不能同时运行。`boardWide` 不绕过定向隔离或目标范围；历史注册、旧 session 或失效能力不代表实际接入。忙碌／已排队合并一次检查，unknown 保持待核而不重放。
-
-逐席检查 MESSAGE 的 `detail.kind` 为 `SESSION_TASK_CHECK`，携带 `memberId`、`sessionRef`、`dueAt` 与 `goalIds`；外部目标还携带 `adapterId` 和 `registrationVersion`。`dueAt` 表示计划到期点，而非临时派发时刻；稳定成员、session 和到期点共同标识一次检查。外部解析必须精确匹配当前适配器与注册代次，并在记录意图前再次核对正式准入和任务范围。原生检查不带外部适配器身份，不能因此被当作外部广播。范围、会话或注册代次变化须拒绝旧快照，不能为继续投递放宽授权。
+历史 `SESSION_TASK_CHECK` 消息保留原定向解析：只匹配稳定 member/session 和当前有效范围，外部载荷还须匹配 adapter 与注册代次。`boardWide` 不绕过这些围栏；旧 session 或失效能力不代表实际接入。unknown 保持待核而不重放。这是旧消息兼容处理，不是当前核心调度入口。
 
 四条都在服务层再次校验身份与范围（`NotificationService`），不信任入参：`memberId`/`sessionRef`/`taskIds` 一律与正式准入记录比对。注册不等于启动、通知到达不等于执行或完成。
 
@@ -106,12 +104,8 @@
 
 ## 逐会话任务检查的定向协议
 
-逐会话调度发布 `MESSAGE`，使用 `runtime-` 身份、明确的 `recipientId` 和结构化 `detail.kind: SESSION_TASK_CHECK`。载荷包含 `memberId`、`sessionRef`、计划到期时间 `dueAt`、`goalIds`；外部通道还必须包含 `adapterId` 与 `registrationVersion`。原生检查不带外部通道标识，因此不会顺带广播到外部成员。该路由独立于历史 `IDLE_RECOVERY` 广播兼容路径；缺字段或无效载荷拒绝回退为普通定向消息。
+本节仅说明保留的历史兼容格式；核心已退出周期消息生成和逐席到期队列，不能据这些表或能力声明恢复旧计时器。新的 CLI 周期检查不要求复用该逐提醒回执系统。
 
-外部检查精确匹配适配器、注册代次、成员与 session，并在记录意图前重核启用状态、当前正式准入及声明任务范围。至少一个交集目标须仍为 `todo`、`in_progress` 或 `in_review`；`boardWide` 与 `recipientId` 不能单独扩大周期检查范围，`blocked` 与终态不作为检查目标。组织范围准入还须使用当前 worker/pool 快照验证。
+旧 `MESSAGE` 使用 `runtime-` 身份、明确的 `recipientId` 和 `detail.kind: SESSION_TASK_CHECK`，包含 `memberId`、`sessionRef`、`dueAt`、`goalIds`；外部载荷还包含 `adapterId` 与 `registrationVersion`。保留的解析拒绝缺字段、错误 session／注册代次、失效授权或不适用目标，不能降级为普通广播。`durableDelivery` 与 `timedReminder` 的兼容检查不会启动模型或定时任务。
 
-`notification_session_checks` 按 `(memberId, sessionRef, dueAt)` 持久防重；周期声明与意图写入同一事务，记录失败一起回滚，所以重复扫描、重复发布同周期条目或重开连接不会再次发起同周期意图。未知序列仍冻结，不延长、不删除、不自动重放。此层只记录意图，不证明模型执行；每席到期持久化、忙时合并与旧全局计时替换由调度器负责。
-
-周期意图额外保存 `sessionRef` 和 `registrationVersion`。读取 `notification_pending` 与确认未决回执时共用同一围栏，再次核对当前 session、注册代次、启用状态与适用目标，避免替换会话直接确认旧序号。失效的正、负回执均被拒绝且不改账本；已成功回执的精确消费条目重试仍幂等返回原结果。失效意图与未知证据保留供对账，不因过滤就宣称已消费或已成功。普通事件与原回执协议保持原有语义。
-
-外部通道只有同时声明 `durableDelivery` 与 `timedReminder` 才参与逐会话定时检查；仅接收普通耐久更新的通道不自动启用周期模型唤醒。调度和 `SESSION_TASK_CHECK` 解析后的投递分别核对这两项能力，普通消息保留原投递契约。
+已有 `notification_session_checks`、投递意图及 `sessionRef`／`registrationVersion` 绑定保留。读取 `notification_pending` 与确认未决回执继续核当前 session、注册代次、启用状态和适用目标；失效回执不改账本，原成功条目的精确回执重试仍幂等。未知序列不延长、不删除、不自动重放。普通事件及其回执语义不变，历史记录不冒当前 CLI 真实执行证据。

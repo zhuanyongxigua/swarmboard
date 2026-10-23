@@ -73,7 +73,7 @@ const english: Record<string, string> = {
   '个正在退出': 'draining',
   '正在等待成员安全收尾或核清，实际人数尚未减少。': 'Waiting for safe completion or reconciliation; the actual count has not decreased yet.',
   '参与者': 'Participants', '增加成员': 'Add member', '等待 CI 结果，完成后通知全体成员': 'Waiting for CI; all members will receive the result',
-  '个成员': 'members', '个正在执行': 'running', '有未完成目标，当前空闲': 'Goals remain, currently idle', '等待前置或验收': 'Waiting for prerequisites or acceptance', '仅内部协作': 'Internal collaboration only', '下次空闲检查': 'Next idle check', '两次空闲检查后目标仍未推进，请检查阻塞原因。': 'Goals remain idle after two recovery checks. Inspect the blockers.', '重新检查': 'Check again',
+  '个成员': 'members', '个正在执行': 'running', '有未完成目标，当前空闲': 'Goals remain, currently idle', '等待前置或验收': 'Waiting for prerequisites or acceptance', '仅内部协作': 'Internal collaboration only',
   '最多': 'Up to', '自协作池': 'Self-organizing pool', '个平等 worker': 'equal peers', '等待任务': 'Waiting for tasks', '协作中': 'Working', '等待事件': 'Waiting for events', '任务完成，已停止': 'Goals complete, stopped', '正在安全停止': 'Stopping safely', '已停止': 'Stopped', '需要处理': 'Needs attention',
   '任务 ID': 'Task ID',
   '事件协作': 'Event collaboration', '个工作会话': 'worker sessions',
