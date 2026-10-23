@@ -23,7 +23,8 @@ describe('event worker MCP management', () => {
     const shutdown = workerProtocol().split('\n\n').find(section => section.startsWith('Session shutdown:'));
     expect(shutdown).toBeDefined();
     expect(shutdown).toContain('stop-after-safe-boundary');
-    expect(shutdown).toContain('only schedules owned by this session');
+    expect(shutdown).toContain('only schedules owned by this session for periodic collaboration in this organization');
+    expect(shutdown).toContain('Leave unrelated schedules intact');
     expect(shutdown).toContain('not a successful cancellation');
     const prompt = await client.getPrompt({ name: 'shared_worker', arguments: { agentId: 'synthetic-peer' } });
     const text = prompt.messages.map(message => message.content.type === 'text' ? message.content.text : '').join('\n');
