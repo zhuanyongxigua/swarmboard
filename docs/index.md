@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 了解系统或跨模块改动 | [架构](architecture.md) | 对应源码、Schema 和测试 |
 | 修改界面与统一设置 | [界面契约](collaboration-environment-ui.md) | [看板提示词](board-prompt-settings.md)、[编码规则](rules/coding.md)、[测试说明](testing.md) |
-| 修改协作、通知与接续 | [事件工作会话](event-workers.md) | [通知适配层](notification-adapters.md)、[通知消费桥](notification-consumer.md)、[会话后端](harness-adapters.md) |
+| 修改协作、通知与接续 | [事件工作会话](event-workers.md) | [通知适配层](notification-adapters.md)、[会话后端](harness-adapters.md) |
 | 接入外部成员 | [外部协作者](external-collaborators.md) | [会话后端](harness-adapters.md)、[通知适配层](notification-adapters.md)、对应授权与接口测试 |
 | 安装、升级与恢复 | [中文安装指南](setup.zh-CN.md)／[English setup](setup.md) | [发布规则](rules/release.md)、[事件工作会话](event-workers.md) |
 | 编码或评审 PR | [编码规则](rules/coding.md) | 相关主题契约、[测试规则](rules/testing.md) |
