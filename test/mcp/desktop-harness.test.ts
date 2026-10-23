@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { expect, it } from 'vitest';
 import { workerProtocol } from '../../src/worker-prompt.js';
 
-it('loads the shipped DSH module independently of the core and source checkout', () => {
+it('ships only the retained instruction adapter and shared protocol outside the core', () => {
   const version = (JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as {version: string}).version;
   const archive = resolve(`dist/swarmboard-desktop-${version}.zip`);
   const root = mkdtempSync(join(tmpdir(), 'shipped-harness-'));
@@ -18,7 +18,7 @@ it('loads the shipped DSH module independently of the core and source checkout',
     const names = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e',
       'console.log(JSON.stringify(Object.keys(await import(process.argv[1]))))', moduleUrl],
     { cwd: root, encoding: 'utf8' })) as string[];
-    expect(names).toEqual(expect.arrayContaining(['DshLifecycle', 'renderInstructions', 'createDshInstructionBoundary', 'createDshSdkFacade', 'createDshSdkSessionPort', 'driveOnce', 'createDshJournals', 'createDshHostLease', 'createDshHostRunner', 'createDshHostPlugin', 'createDshSdkPlugin', 'createDshNotificationPort']));
+    expect(names.sort()).toEqual(['INSTRUCTION_SCHEMA', 'assertFresh', 'assertNotStale', 'createDshInstructionBoundary', 'planWrite', 'renderInstructions'].sort());
     const protocolUrl = pathToFileURL(join(unpacked, 'server/harness/protocol/index.mjs')).href;
     const protocol = execFileSync(process.execPath, ['--input-type=module', '-e',
       'process.stdout.write((await import(process.argv[1])).workerProtocol())', protocolUrl],
@@ -31,5 +31,9 @@ it('loads the shipped DSH module independently of the core and source checkout',
     const contents = execFileSync('unzip', ['-Z1', archive], { encoding: 'utf8' });
     expect(contents).toContain('server/harness/dsh/index.mjs');
     expect(contents).not.toContain('node_modules/');
+    const adapter = readFileSync(join(unpacked, 'server/harness/dsh/index.mjs'), 'utf8');
+    expect(adapter).not.toContain('DSH_RECONCILIATION_REQUIRED');
+    expect(adapter).not.toContain('DSH_INVALID_SDK_CONFIG');
+    expect(adapter).not.toContain('createDshHostPlugin');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
