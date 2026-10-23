@@ -184,7 +184,20 @@ export class EventRuntime {
       catch { return false; }
     });
   }
+  private currentGoalEvent(entry: Entry): boolean {
+    if (!entry.taskId) return true;
+    const task = this.board.db.prepare('SELECT status,version FROM tasks WHERE id=?').get(entry.taskId);
+    if (!task || !['done', 'canceled'].includes(String(task.status))) return true;
+    // Retain the latest terminal control observation for handoff/dependencies,
+    // but do not spend model turns replaying that goal's historical backlog.
+    if (entry.kind !== 'OBSERVED') return false;
+    try {
+      const detail = JSON.parse(entry.detail);
+      return detail.status === task.status && detail.version === task.version;
+    } catch { return false; }
+  }
   private relevant(worker: Worker, entry: Entry) {
+    if (!this.currentGoalEvent(entry)) return false;
     if (isSessionTaskCheck(entry) && !this.nativeCheckRelevant(worker, entry)) return false;
     if (worker.poolId) {
       if (entry.agentId === worker.id) return false;
@@ -414,9 +427,10 @@ export class EventRuntime {
           (!pool.taskIds.length || pool.taskIds.includes(t.id)) && !['done', 'canceled'].includes(t.status)));
         if (!current.enabled || poolStopped) { this.workers.save({ ...current, threadId, status: 'idle', deliveryId: null, deliveryCursor: null, turnId: null, deliveryPhase: undefined }); return; }
         // Session preparation awaited vendor work: a queued check may have lost
-        // its session binding or last actionable goal in that gap. Discard only
-        // the stale checks, retaining ordinary messages from the same batch.
-        events = events.filter(entry => !isSessionTaskCheck(entry) || this.nativeCheckRelevant(current, entry, threadId!));
+        // its session binding or last actionable goal in that gap. A goal can
+        // also finish while open awaits; omit its old work before submission.
+        events = events.filter(entry => this.currentGoalEvent(entry)
+          && (!isSessionTaskCheck(entry) || this.nativeCheckRelevant(current, entry, threadId!)));
         if (!events.length) {
           this.workers.save({ ...current, status: 'idle', cursor: worker.deliveryCursor!,
             deliveryId: null, deliveryCursor: null, turnId: null, deliveryPhase: undefined });
