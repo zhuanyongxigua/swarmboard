@@ -177,13 +177,6 @@ function Workspace() {
     : eventRuntime?.pool && eventRuntime.pool.size <= minimumMembers
       ? t('至少保留 {limit} 名成员').replace('{limit}', String(minimumMembers))
       : !eventRuntime?.pool?.enabled ? t('协作已停止，暂不可调整成员。') : '';
-  async function controlPool(enabled?: boolean) {
-    const pool = eventRuntime?.pool; if (!pool || poolOperation.current) return;
-    poolOperation.current = true; setPoolBusy(true); setPoolFeedback(''); setPoolError('');
-    try { await operation('pool_control', { expectedVersion: pool.version, enabled: enabled ?? !pool.enabled }); await readRuntimeAndOverview(); }
-    catch (error) { setError(message(error)); }
-    finally { poolOperation.current = false; setPoolBusy(false); }
-  }
   async function addPeer() {
     const pool = eventRuntime?.pool; if (!pool?.workspacePath || poolOperation.current) return;
     poolOperation.current = true; setPoolBusy(true); setPoolFeedback(''); setPoolError('');
@@ -454,8 +447,6 @@ function Workspace() {
       {poolError ? <p role="alert">{poolError}</p> : null}
       {eventRuntime.ciWatches?.some(w => w.state === 'watching') ? <p className="subtle">{t('等待 CI 结果，完成后通知全体成员')}</p> : null}
       {eventRuntime.ciWatches?.filter(w => w.state === 'error').map(w => <p role="alert" key={w.id}>CI #{w.pipelineId}: {w.error}</p>)}
-      {eventRuntime.activity?.watchdog.nextWakeAt ? <p className="subtle">{t('下次空闲检查')} {time(eventRuntime.activity.watchdog.nextWakeAt, true)}</p> : null}
-      {eventRuntime.pool?.enabled && eventRuntime.activity?.watchdog.state === 'attention' ? <p role="alert">{t('两次空闲检查后目标仍未推进，请检查阻塞原因。')}{' '}<button type="button" className="secondary" disabled={poolBusy} onClick={() => void controlPool(true)}>{t('重新检查')}</button></p> : null}
       {eventRuntime.pool?.error ? <p role="alert">{eventRuntime.pool.error}</p> : null}
       {eventRuntime.workers.filter(w => w.error).map(w => <p role="alert" key={w.id}>{w.name}: {w.error}</p>)}
       {eventRuntime.error ? <p role="alert">{eventRuntime.error}</p> : null}
