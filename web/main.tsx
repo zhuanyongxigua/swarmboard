@@ -32,7 +32,7 @@ type Usage = {
 type Board = { tasks: Task[]; resources: Resource[]; agents: Agent[]; usages: Usage[]; entries: Entry[]; cursor: number };
 type Editor = { type: 'task'; item: Task };
 type UiOperation = 'board_read' | 'runtime_read' | 'overview_read' | 'automation_read'
-  | 'pool_capacity' | 'pool_configure' | 'pool_control' | 'pool_reduce'
+  | 'pool_capacity' | 'pool_configure' | 'pool_reduce'
   | 'user_prompt_read' | 'user_prompt_write' | 'preferences_read' | 'preferences_write'
   | 'task_update';
 type Tab = 'tasks' | 'shared';
@@ -85,7 +85,6 @@ async function operation<T>(name: UiOperation, args: Record<string, unknown> = {
   if (name === 'runtime_read') url = '/api/runtime';
   if (name === 'pool_capacity') { url = '/api/pool/capacity'; method = 'POST'; body = args; }
   if (name === 'pool_configure') { url = '/api/pool/configure'; method = 'POST'; body = args; }
-  if (name === 'pool_control') { url = '/api/pool/control'; method = 'POST'; body = args; }
   if (name === 'user_prompt_read') url = '/api/user-prompt';
   if (name === 'user_prompt_write') { url = '/api/user-prompt'; method = 'PATCH'; body = args; }
   if (name === 'preferences_read') url = '/api/preferences';
