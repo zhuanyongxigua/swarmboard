@@ -126,7 +126,7 @@ ohmyagent **不是**已注册的会话后端：[后端注册表](harness-adapter
 
 - `<已安装插件>` 指本机安装目录中的 `swarmboard/<version>`；其 `server/launch.sh` 会自行解析 Node 24+，无需在 `env` 里另配 `PATH`。
 - 使用非默认看板库时在 `env` 加 `SWARMBOARD_DB_PATH`；默认库可省略，与 App 侧一致。
-- `transport` 取 `stdio`、`streamable-http` 或 `http`；仅 stdio 使用 `command`/`args`/`env`，远程 server 使用 `url`/`headers`。配置较长时用 `@<file>` 传入，避免 shell 引号问题。
+- `transport` 只支持 `stdio` 和 `streamable-http`；写 `http` 会报 `unknown transport`。仅 stdio 使用 `command`/`args`/`env`，远程 server 使用 `url`/`headers`。配置较长时用 `@<file>` 传入，避免 shell 引号问题。
 - 只读实测（2026-10-23，build `0508ae4b48e1`）：以该 `command`/`args`/`env` 启动已安装 0.8.5 服务，外部协作者工具面 29 项（`board_read`、`task_list`、`context_read`、`context_publish`、`agent_heartbeat` 在列，管理／配置工具不在列）。这只证明子进程可由该配置启动，不证明 CLI 已解析该 JSON 或完成模型回合；后者须有实际 headless 运行证据。
 
 ### 定时与续接
