@@ -6,6 +6,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Store } from '../../src/store.js';
 import { createMcpServer } from '../../src/mcp.js';
 import { EventRuntime } from '../../src/event-runtime.js';
+import { workerProtocol } from '../../src/worker-prompt.js';
 let store: Store, runtime: EventRuntime, client: Client, server: ReturnType<typeof createMcpServer>;
 beforeEach(async () => {
   store = new Store();
@@ -18,6 +19,18 @@ afterEach(async () => { await client.close(); await runtime.close(); await serve
 const call = (name: string, args: Record<string, unknown> = {}) => client.callTool({ name, arguments: args });
 const data = (r: Awaited<ReturnType<typeof call>>) => r.structuredContent as Record<string, any>;
 describe('event worker MCP management', () => {
+  it('delivers the same session shutdown contract through native and MCP worker instructions', async () => {
+    const shutdown = workerProtocol().split('\n\n').find(section => section.startsWith('Session shutdown:'));
+    expect(shutdown).toBeDefined();
+    expect(shutdown).toContain('stop-after-safe-boundary');
+    expect(shutdown).toContain('only schedules owned by this session for periodic collaboration in this organization');
+    expect(shutdown).toContain('Leave unrelated schedules intact');
+    expect(shutdown).toContain('not a successful cancellation');
+    const prompt = await client.getPrompt({ name: 'shared_worker', arguments: { agentId: 'synthetic-peer' } });
+    const text = prompt.messages.map(message => message.content.type === 'text' ? message.content.text : '').join('\n');
+    expect(text).toContain(shutdown!);
+  });
+
   it('configures host-owned execution grants without changing task or pool state and exposes only reads to peers', async () => {
     const goal = store.createTask({ title: 'Independent host-authorized project' });
     const pool = runtime.configurePool({ workspacePath: tmpdir(), size: 1 });
